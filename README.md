@@ -323,6 +323,139 @@ scripts/install_nx_cam_service.sh
 - 詳細・トラブルシュート: `docs/platforms/humanoid/g1/index_orboh_make.md`
 - 任意（SSH快適化）: `ssh-copy-id -i ~/.ssh/id_ed25519_g1.pub unitree@192.168.123.164`
 
+## JetsonをWiFi AP化する手順（Orboh — 現場で無線直結したい時）
+
+**目的**: JetsonにノートPCを直接無線接続してSSHしたい場合、Jetson自身をWiFiアクセスポイント(AP)にする。
+社内WiFi / DHCPに依存せず、APモード時のJetsonは常に固定IP `192.168.12.1`。
+再起動後も自動でAPが立つよう常駐化する。OSSの [`oblique/create_ap`](https://github.com/oblique/create_ap) を使用。
+
+> [!WARNING]
+> **APと通常WiFi（STA）は同時使用不可。** WiFiチップは1個なので、AP化するとそのJetsonは
+> **インターネットに繋がらなくなる**（社内WiFi経由のネットを失う）。
+
+> [!WARNING]
+> **作業中のロックアウトに注意。** WiFi経由でSSH中にWiFiをAPに切り替えると接続が切れる。
+> **WiFi以外の入口（有線 or モニタ直結）を必ず確保してから作業すること。**
+> AGX Orinには有線LANポートがあるので、下記「有線直結」を先に済ませるのが最も安全。
+
+### 1. インストール（Jetson上）
+
+```bash
+git clone https://github.com/oblique/create_ap && cd create_ap
+sudo make install
+sudo apt install -y hostapd dnsmasq network-manager
+```
+
+> [!NOTE]
+> `apt install` 時に `hostapd.service failed to start` と出るのは**無害**。
+> create_ap は独自のプロセスとして hostapd を起動するため、systemd サービスとして上がる必要はない。
+
+### 2. WiFiインターフェース名とAPモード対応を確認
+
+```bash
+iw dev | grep Interface                          # AGX Orin: wlP1p1s0 / NX: wlan0
+iw list | grep -A8 "Supported interface modes"   # "* AP" があればOK
+```
+
+### 3. `/etc/create_ap.conf` を編集
+
+以下は SSID `agx` / パスワード `agx12345` の例（AGX Orin, IF名 `wlP1p1s0`）。
+IF名は手順2で確認した値に合わせること。
+
+```bash
+sudo sed -i \
+  -e 's/^WIFI_IFACE=.*/WIFI_IFACE=wlP1p1s0/' \
+  -e 's/^SSID=.*/SSID=agx/' \
+  -e 's/^PASSPHRASE=.*/PASSPHRASE=agx12345/' \
+  -e 's/^GATEWAY=.*/GATEWAY=192.168.12.1/' \
+  -e 's/^SHARE_METHOD=.*/SHARE_METHOD=none/' \
+  -e 's/^NO_VIRT=.*/NO_VIRT=1/' \
+  -e 's/^INTERNET_IFACE=.*/INTERNET_IFACE=/' \
+  /etc/create_ap.conf
+```
+
+- `SHARE_METHOD=none` — インターネット共有なし
+- `NO_VIRT=1` — AP仮想IF非対応アダプタ向け（安全側）
+- `INTERNET_IFACE=` — 空のまま
+
+### 4. WiFiを切断（STA/AP同時不可）
+
+```bash
+sudo nmcli device disconnect wlP1p1s0   # NXの場合は wlan0
+```
+
+STAのまま create_ap を起動しようとすると `can not be a station and an AP at the same time` エラーが出る。
+
+### 5. NMが起動時にWiFiを先取りしないよう全wifiプロファイルの自動接続をOFF
+
+```bash
+for c in $(nmcli -t -f NAME,TYPE connection show | grep ":802-11-wireless$" | cut -d: -f1); do
+  sudo nmcli connection modify "$c" connection.autoconnect no
+done
+```
+
+### 6. create_ap を有効化・起動
+
+```bash
+sudo systemctl enable --now create_ap
+```
+
+再起動後も自動でAPが立ち上がる。
+
+### 接続方法
+
+ノートPCのWiFiを `agx`（パスワード `agx12345`）に繋ぎ、SSHする。
+
+```bash
+ssh tbr@192.168.12.1    # AGX Orin の例。ユーザー名は各機体に合わせる
+```
+
+### 有線直結（強く推奨 — ロックアウト防止・救出用）
+
+AGX Orinの有線 `eno1` には NetworkManager プロファイル「Wired connection 1」で
+**静的 `192.168.123.222`** が設定済み（再起動後も維持）。
+
+```bash
+# ノートPC側NICを 192.168.123.50/24 に設定してから:
+ssh tbr@192.168.123.222    # WiFiの状態に関わらず常に到達できる
+```
+
+- AP化作業中はこの有線でSSHしながら作業すると安全
+- AP切り替え失敗時の救出にも使える
+
+### インターネットが必要になったとき（AP ⇄ 通常WiFi切替）
+
+```bash
+# 一時的に社内WiFiに戻す（ネット復活。DHCPでIPは変わる）
+sudo systemctl stop create_ap
+sudo nmcli connection up <wifi-profile-name>
+
+# APに戻す
+sudo systemctl start create_ap
+```
+
+完全にAPをやめる場合:
+
+```bash
+sudo systemctl disable create_ap
+# wifiプロファイルの autoconnect を yes に戻す
+for c in $(nmcli -t -f NAME,TYPE connection show | grep ":802-11-wireless$" | cut -d: -f1); do
+  sudo nmcli connection modify "$c" connection.autoconnect yes
+done
+```
+
+### 動作確認（実機検証済み 2026-06-10）
+
+AGX Orinを電源OFF→ONしても `create_ap` が自動起動することを確認済み。
+
+```bash
+systemctl is-active create_ap    # → active
+systemctl is-enabled create_ap   # → enabled
+ip addr show wlP1p1s0            # → inet 192.168.12.1/24 が割り当て済み
+```
+
+`agx` SSID が信号強度100で発信されていること、ノートPCから `ssh tbr@192.168.12.1` で到達できることを確認済み。
+
 ## Seat-Finder Demo (Hackathon — Go2)
 
 Continuously detects empty seats (chair / couch / bench) with YOLO and navigates the Go2 to one.
