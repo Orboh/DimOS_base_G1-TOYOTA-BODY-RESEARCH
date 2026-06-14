@@ -61,8 +61,9 @@ detect ─▶ select ─┬─ in-reach target ──▶ grasp ─▶ verify ─
                                                │ empty ≥ N
                                                ├─ pending left behind ─▶ revisit ─▶ detect
                                                ▼ nothing pending
-                                              finish ─▶ END
-record ─(basket full / cap)─▶ finish ─▶ END    record ─(else)─▶ detect
+                                       next_station ─(more)─▶ detect
+                                                    └─(none)─▶ finish ─▶ END
+record ─(basket full)─▶ swap_basket ─▶ detect      record ─(else)─▶ detect
 ```
 
 Figure (regenerate locally, no network): `~/Pictures/okra_langgraph.{png,dot,mmd}`.
@@ -72,8 +73,9 @@ Figure (regenerate locally, no network): `~/Pictures/okra_langgraph.{png,dot,mmd
 When the agent makes a decision or the world state changes, it speaks a fixed
 Japanese line (handbook §6 HMI). The phrasing is templated, not LLM-generated —
 status must be predictable and free. Announced events: start, grasp decision,
-height skip, approach direction (前/後ろ/左/右), re-grasp, each pick + basket
-count, "searching" sweep, "going back" revisit, give-up, and the final summary.
+height skip, approach direction (前/後ろ/左/右), re-grasp, each pick + count,
+"searching" sweep, "going back" revisit, moving to the next station, basket
+swap, give-up, and the final summary.
 
 The speaker is injected, so it is silent and testable by default:
 
@@ -97,12 +99,12 @@ Wiring `speak` to the **G1's onboard speaker** (`unitree_sdk2py.g1.audio.AudioCl
 
 ## Current scope and known limitations
 
-Implemented: handbook **Phases 2→8 + the §5 approach/sweep/revisit movement**
-(odometry-tracked, so left-behind fruit is collected) for a single row, fully
-verified in the mock.
+Implemented: handbook **Phases 1→8** — per-station detect→pick with the §5
+approach/sweep/revisit movement (odometry-tracked, so left-behind fruit is
+collected), **navigation between stations** (`go_to_next_station`), and **basket
+transport/swap** when full (`swap_basket`). Fully verified in the mock.
 
 Deferred / not yet done:
-- Navigation between stations, basket transport / swap.
 - Pedicel cutting — **the cutter is not yet on the robot**; the MVP assumes
   grasp-and-pull with the Dex1 gripper only.
 - §6 background safety monitor / interrupt (`look_out_for` → preempt).
@@ -115,6 +117,8 @@ Provide a concrete `HarvestSkills` implementation; the graph is unchanged.
 |---|---|
 | `detect_okra()` | VLM detection (`ask_vlm` / `nav_vlm` in `dimos/perception/detection/module3D.py`) + depth → fills `Okra.pos_3d` (relative x/y/z), `ripeness`, `reachable`. |
 | `relative_move(lateral, forward)` | DimOS navigation skill (`relative_move` / `move`). |
+| `go_to_next_station()` | DimOS nav route planning (`navigate_to` next work pose); False when the field is done. |
+| `swap_basket()` | Navigate to the collection point, swap an empty basket, return. |
 | `grasp_okra(okra, force)` | The okra-ACT manipulation stack (`unitree-g1-act-arm`, branch `feat/g1-act-stage-b`); `force` → Dex1 (`set_gripper`). |
 | `verify_harvest()` | Dex1 hold state + a VLM "is it picked?" check. |
 | `record_harvest(rec)` | `dimos/memory2` (handbook §9 record). |

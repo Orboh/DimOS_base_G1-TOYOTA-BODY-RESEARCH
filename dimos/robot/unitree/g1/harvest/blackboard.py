@@ -165,6 +165,8 @@ class HarvestState(TypedDict, total=False):
     # Left-behind okra: id -> odometry-frame position {x,y,z}. Ripe okra we've
     # seen but not yet picked/excluded, so we can revisit them after sweeping.
     pending: dict[str, dict[str, float]]
+    station_id: int  # which work station (row position) we are harvesting
+    more_stations: bool  # set by next_station: is there another station to visit?
     mode: Mode
     last_verify_ok: bool  # result of the most recent verify_harvest()
     log: list[str]  # human-readable phase trace (demo / tests / slide figure)
@@ -188,6 +190,8 @@ def initial_state() -> HarvestState:
         revisit_attempts=0,
         robot_offset={"x": 0.0, "y": 0.0},
         pending={},
+        station_id=0,
+        more_stations=True,
         mode="harvest",
         last_verify_ok=False,
         log=[],

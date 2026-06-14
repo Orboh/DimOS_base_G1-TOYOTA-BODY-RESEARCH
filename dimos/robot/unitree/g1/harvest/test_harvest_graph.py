@@ -194,6 +194,39 @@ def test_left_behind_okra_is_revisited() -> None:
     assert final["pending"] == {}  # nothing left behind at the end
 
 
+def test_visits_multiple_stations() -> None:
+    """When a station is exhausted, the robot drives to the next and continues."""
+    s0 = [FieldOkra("a0", x=0.30, y=0.45, z=0.80, ripeness=0.9)]
+    s1 = [FieldOkra("a1", x=0.30, y=0.45, z=0.80, ripeness=0.9)]
+    skills = MockHarvestSkills(reach=_CFG.reach, fov=_CFG.fov, stations=[s0, s1])
+    voice = RecordingAnnouncer()
+    app = build_harvest_graph(skills, _CFG, announcer=voice)
+    final = app.invoke(initial_state(), {"recursion_limit": _RECURSION_LIMIT})
+
+    assert final["picks"] == 2  # one okra from each station
+    assert skills.station_moves == [1]  # moved to station 1 exactly once
+    assert final["station_id"] == 1
+    assert announce.next_station() in voice.said
+
+
+def test_basket_full_swaps_then_continues() -> None:
+    """Hitting basket capacity triggers a swap, then harvesting resumes."""
+    config = HarvestConfig(basket_capacity=2)
+    field = [
+        FieldOkra("a", x=0.20, y=0.45, z=0.80, ripeness=0.95),
+        FieldOkra("b", x=0.30, y=0.45, z=0.80, ripeness=0.90),
+        FieldOkra("c", x=0.40, y=0.45, z=0.80, ripeness=0.85),
+    ]
+    skills = _mock(field)
+    voice = RecordingAnnouncer()
+    app = build_harvest_graph(skills, config, announcer=voice)
+    final = app.invoke(initial_state(), {"recursion_limit": _RECURSION_LIMIT})
+
+    assert final["picks"] == 3  # all picked despite the basket filling mid-run
+    assert skills.basket_swaps == 1  # swapped once when it hit capacity (2)
+    assert announce.basket_swap() in voice.said
+
+
 def test_silent_by_default() -> None:
     """With no announcer the graph runs silently (NullAnnouncer), no crash."""
     field = [FieldOkra("a", x=0.30, y=0.45, z=0.80, ripeness=0.9)]

@@ -28,30 +28,35 @@ from dimos.robot.unitree.g1.harvest.skills import FieldOkra, MockHarvestSkills
 _RECURSION_LIMIT = 400
 
 
-def _demo_field() -> list[FieldOkra]:
-    """Reach box centre is (x=0.30, y=0.45). Robot starts at the origin.
+def _demo_stations() -> list[list[FieldOkra]]:
+    """Two work stations. Reach box centre is (x=0.30, y=0.45); robot starts at
+    each station's origin. Harvest progresses RIGHT→LEFT.
 
-    Harvest progresses RIGHT→LEFT. This field showcases the recovery path: the
-    robot approaches the nearest fruit (a LEFT strafe), which pushes the right
-    fruit out of view; the leftward discovery sweep moves away from it, so the
-    robot REVISITS its remembered position to come back for it — nothing is
-    abandoned. One fruit is above arm height (skipped) and one is unripe
-    (ignored). (Depth moves — too-far→forward, too-close→back — are exercised in
-    the tests.)
+    Station 0 showcases the recovery path: approach the nearest fruit (a LEFT
+    strafe), which pushes the right fruit out of view; the leftward sweep moves
+    away from it, so the robot REVISITS its remembered position. One fruit is too
+    high (skipped), one unripe (ignored). Station 1 is a simple pair in reach.
+    With basket_capacity=3 the basket fills mid-run and is swapped. (Depth
+    moves — too-far→forward, too-close→back — are exercised in the tests.)
     """
-    return [
-        FieldOkra("okra_high", x=0.30, y=0.45, z=1.50, ripeness=0.95),  # too high -> skip
-        FieldOkra("okra_left", x=-0.05, y=0.45, z=0.80, ripeness=0.90),  # nearest -> approach left
-        FieldOkra("okra_right", x=0.70, y=0.45, z=0.80, ripeness=0.88),  # pushed out -> revisited
-        FieldOkra("okra_unripe", x=0.30, y=0.45, z=0.80, ripeness=0.20),  # unripe -> ignore
+    station0 = [
+        FieldOkra("s0_high", x=0.30, y=0.45, z=1.50, ripeness=0.95),  # too high -> skip
+        FieldOkra("s0_left", x=-0.05, y=0.45, z=0.80, ripeness=0.90),  # nearest -> approach left
+        FieldOkra("s0_right", x=0.70, y=0.45, z=0.80, ripeness=0.88),  # pushed out -> revisited
+        FieldOkra("s0_unripe", x=0.30, y=0.45, z=0.80, ripeness=0.20),  # unripe -> ignore
     ]
+    station1 = [
+        FieldOkra("s1_a", x=0.25, y=0.45, z=0.80, ripeness=0.92),  # in reach -> pick
+        FieldOkra("s1_b", x=0.40, y=0.45, z=0.80, ripeness=0.90),  # in reach -> pick
+    ]
+    return [station0, station1]
 
 
 def main() -> None:
-    cfg = HarvestConfig()
-    # okra_a fails its first verify once, to show the §7 re-grasp recovery.
+    cfg = HarvestConfig(basket_capacity=3)  # small basket so a swap happens in the demo
+    # s0_left fails its first verify once, to show the §7 re-grasp recovery.
     skills = MockHarvestSkills(
-        _demo_field(), reach=cfg.reach, fov=cfg.fov, flaky_verifies={"okra_left": 1}
+        reach=cfg.reach, fov=cfg.fov, stations=_demo_stations(), flaky_verifies={"s0_left": 1}
     )
     # Record what the robot WOULD say (no audio hardware needed for the dry run).
     voice = RecordingAnnouncer()
@@ -69,10 +74,10 @@ def main() -> None:
 
     print("\n=== result ===")
     print(f"  picks         : {final['picks']}")
-    print(f"  basket_count  : {final['basket_count']}")
-    print(f"  base moves    : {skills.move_calls}")
+    print(f"  stations moved: {skills.station_moves}  (final station_id={final['station_id']})")
+    print(f"  basket swaps  : {skills.basket_swaps}")
     print(f"  grasp calls   : {skills.grasp_calls}")
-    print(f"  records       : {final['records']}")
+    print(f"  records       : {len(final['records'])}")
 
 
 if __name__ == "__main__":

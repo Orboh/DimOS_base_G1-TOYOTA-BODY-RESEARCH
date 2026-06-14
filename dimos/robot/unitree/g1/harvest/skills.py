@@ -52,6 +52,19 @@ class HarvestSkills(Protocol):
         """Move the base: ``lateral`` (+right) and ``forward`` (+forward), metres."""
         ...
 
+    def go_to_next_station(self) -> bool:
+        """Drive to the next work station (native route planning).
+
+        Returns True if the robot moved to a new, unharvested station, or False
+        if the whole field is done. The route/order is the robot's concern.
+        """
+        ...
+
+    def swap_basket(self) -> None:
+        """Transport a full basket to the collection point and return with an
+        empty one (handbook ``transport_and_swap_basket``)."""
+        ...
+
     def grasp_okra(self, okra: Okra, force: float) -> None:
         """Reach and grasp ``okra`` with a normalized ``force`` in [0, 1].
 
@@ -93,24 +106,33 @@ class MockHarvestSkills:
 
     def __init__(
         self,
-        field: list[FieldOkra],
-        reach: Box3D,
-        fov: Box3D,
+        field: list[FieldOkra] | None = None,
+        reach: Box3D = None,  # type: ignore[assignment]
+        fov: Box3D = None,  # type: ignore[assignment]
         flaky_verifies: dict[str, int] | None = None,
         robot_x: float = 0.0,
         robot_y: float = 0.0,
+        stations: list[list[FieldOkra]] | None = None,
     ) -> None:
-        self._field = list(field)
+        # One station by default; pass `stations` for a multi-station field.
+        self._stations: list[list[FieldOkra]] = (
+            stations if stations is not None else [list(field or [])]
+        )
+        self._station_idx = 0
+        self._field = list(self._stations[0])
         self._reach = reach
         self._fov = fov
         self._flaky = dict(flaky_verifies or {})
         self._picked: set[str] = set()
+        self._start = (robot_x, robot_y)
         self._rx = robot_x
         self._ry = robot_y
         self._last_grasped: str | None = None
         # Observable side effects, handy for assertions in tests.
         self.grasp_calls: list[tuple[str, float]] = []
         self.move_calls: list[tuple[float, float]] = []
+        self.station_moves: list[int] = []
+        self.basket_swaps: int = 0
         self.records: list[dict[str, Any]] = []
 
     def _relative(self, f: FieldOkra) -> dict[str, float]:
@@ -140,6 +162,19 @@ class MockHarvestSkills:
         self._rx += lateral
         self._ry += forward
         self.move_calls.append((round(lateral, 3), round(forward, 3)))
+
+    def go_to_next_station(self) -> bool:
+        if self._station_idx + 1 >= len(self._stations):
+            return False
+        self._station_idx += 1
+        self._field = list(self._stations[self._station_idx])
+        self._picked = set()
+        self._rx, self._ry = self._start  # arrive at the new station's start pose
+        self.station_moves.append(self._station_idx)
+        return True
+
+    def swap_basket(self) -> None:
+        self.basket_swaps += 1
 
     def grasp_okra(self, okra: Okra, force: float) -> None:
         self._last_grasped = okra.id

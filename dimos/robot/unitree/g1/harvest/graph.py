@@ -69,6 +69,8 @@ GIVE_UP = "give_up"
 REPOSITION = "reposition"
 ADVANCE_LEFT = "advance_left"
 REVISIT = "revisit"
+NEXT_STATION = "next_station"
+SWAP_BASKET = "swap_basket"
 FINISH = "finish"
 
 
@@ -258,7 +260,7 @@ def build_harvest_graph(
             "retries": state.get("grasp_attempts", 1) - 1,
         }
         skills.record_harvest(rec)
-        voice.say(announce.picked(basket_count))
+        voice.say(announce.picked(picks))  # cumulative count (clear across basket swaps)
         return HarvestState(
             basket_count=basket_count,
             basket_full=basket_count >= cfg.basket_capacity,
@@ -381,6 +383,46 @@ def build_harvest_graph(
             + [f"revisit: return to {pid} (lat {lateral:+.2f}, fwd {forward:+.2f})"],
         )
 
+    def next_station(state: HarvestState) -> HarvestState:
+        """§Phase 1: this station is exhausted — drive to the next one.
+
+        If a new station is reached, reset the per-station memory (odometry,
+        pending, exclusions, sweep counters) and resume detecting there. If the
+        whole field is done, flag it so routing ends the run.
+        """
+        moved = skills.go_to_next_station()
+        if not moved:
+            return HarvestState(
+                more_stations=False,
+                log=state.get("log", []) + ["next_station: no more stations"],
+            )
+        sid = state.get("station_id", 0) + 1
+        voice.say(announce.next_station())
+        return HarvestState(
+            more_stations=True,
+            station_id=sid,
+            robot_offset={"x": 0.0, "y": 0.0},
+            pending={},
+            excluded_ids=[],
+            target_id=None,
+            approach_id=None,
+            empty_advances=0,
+            reposition_attempts=0,
+            revisit_attempts=0,
+            mode="harvest",
+            log=state.get("log", []) + [f"next_station: arrived at station {sid}"],
+        )
+
+    def swap_basket(state: HarvestState) -> HarvestState:
+        """§7: basket full — transport it and swap in an empty one, then resume."""
+        skills.swap_basket()
+        voice.say(announce.basket_swap())
+        return HarvestState(
+            basket_count=0,
+            basket_full=False,
+            log=state.get("log", []) + ["swap_basket: emptied, resuming"],
+        )
+
     def finish(state: HarvestState) -> HarvestState:
         """Terminal node: announce the harvest summary, then end."""
         voice.say(announce.done(state.get("picks", 0)))
@@ -394,8 +436,6 @@ def build_harvest_graph(
     def route_after_select(state: HarvestState) -> str:
         if state.get("iterations", 0) >= cfg.max_harvest_iterations:
             return FINISH
-        if state.get("basket_full"):
-            return FINISH
         if state.get("target_id"):
             return GRASP
         if state.get("approach_id"):
@@ -404,7 +444,7 @@ def build_harvest_graph(
             return ADVANCE_LEFT  # §5: sweep left (right→left harvest) to look for more
         if state.get("pending"):
             return REVISIT  # §5: swept enough — go back for okra we passed
-        return FINISH  # §8: swept enough and nothing left behind → done
+        return NEXT_STATION  # §Phase 1: station done → move to the next one
 
     def route_after_verify(state: HarvestState) -> str:
         if state.get("last_verify_ok"):
@@ -415,10 +455,13 @@ def build_harvest_graph(
 
     def route_after_record(state: HarvestState) -> str:
         if state.get("basket_full"):
-            return FINISH
+            return SWAP_BASKET  # §7: full → swap an empty basket, then continue
         if state.get("iterations", 0) >= cfg.max_harvest_iterations:
             return FINISH
         return DETECT  # loop: re-detect (occlusion/pose changes after a pick)
+
+    def route_after_next_station(state: HarvestState) -> str:
+        return DETECT if state.get("more_stations") else FINISH
 
     # ---- Wire the graph -------------------------------------------------------
 
@@ -433,6 +476,8 @@ def build_harvest_graph(
         (REPOSITION, reposition),
         (ADVANCE_LEFT, advance_left),
         (REVISIT, revisit),
+        (NEXT_STATION, next_station),
+        (SWAP_BASKET, swap_basket),
         (FINISH, finish),
     ):
         g.add_node(name, fn)
@@ -447,6 +492,7 @@ def build_harvest_graph(
             REPOSITION: REPOSITION,
             ADVANCE_LEFT: ADVANCE_LEFT,
             REVISIT: REVISIT,
+            NEXT_STATION: NEXT_STATION,
             FINISH: FINISH,
         },
     )
@@ -454,11 +500,17 @@ def build_harvest_graph(
     g.add_conditional_edges(
         VERIFY, route_after_verify, {RECORD: RECORD, GRASP: GRASP, GIVE_UP: GIVE_UP}
     )
-    g.add_conditional_edges(RECORD, route_after_record, {DETECT: DETECT, FINISH: FINISH})
+    g.add_conditional_edges(
+        RECORD, route_after_record, {DETECT: DETECT, SWAP_BASKET: SWAP_BASKET, FINISH: FINISH}
+    )
+    g.add_conditional_edges(
+        NEXT_STATION, route_after_next_station, {DETECT: DETECT, FINISH: FINISH}
+    )
     g.add_edge(GIVE_UP, DETECT)
     g.add_edge(REPOSITION, DETECT)
     g.add_edge(ADVANCE_LEFT, DETECT)
     g.add_edge(REVISIT, DETECT)
+    g.add_edge(SWAP_BASKET, DETECT)
     g.add_edge(FINISH, END)
 
     return g.compile()
@@ -475,5 +527,7 @@ __all__ = [
     "REPOSITION",
     "ADVANCE_LEFT",
     "REVISIT",
+    "NEXT_STATION",
+    "SWAP_BASKET",
     "FINISH",
 ]

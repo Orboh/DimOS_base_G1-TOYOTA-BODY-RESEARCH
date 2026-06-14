@@ -127,6 +127,14 @@ def revisiting() -> str:
     return "取り残したオクラを採りに戻ります。"
 
 
+def next_station() -> str:
+    return "この場所は採り終わりました。次の収穫場所に移動します。"
+
+
+def basket_swap() -> str:
+    return "カゴがいっぱいになりました。空のカゴに交換してきます。"
+
+
 def give_up() -> str:
     return "このオクラは収穫できませんでした。次に進みます。"
 
@@ -148,6 +156,8 @@ __all__ = [
     "picked",
     "searching",
     "revisiting",
+    "next_station",
+    "basket_swap",
     "give_up",
     "done",
 ]
