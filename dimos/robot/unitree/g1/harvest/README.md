@@ -16,6 +16,7 @@ so this adds no new dependency.
 | `blackboard.py` | World state (handbook §3) as a LangGraph `State`; `Box3D` reach/FOV volumes; `HarvestConfig` holds all tunable thresholds + geometry (no magic numbers in nodes). |
 | `skills.py` | `HarvestSkills` protocol = the robot/perception capabilities the graph drives; `MockHarvestSkills` = a **spatial 3D** field for dry runs / tests. |
 | `announce.py` | Spoken **Japanese** status (handbook §6 HMI): `Announcer` interface + `NullAnnouncer`/`RecordingAnnouncer`/`CallableAnnouncer` and the fixed phrase templates. |
+| `real_skills.py` | Real-robot wiring: `DimosHarvestSkills` (adapts the protocol to live DimOS calls; `relative_move` implemented) + `make_g1_speaker_announcer` (G1 onboard TTS). Not runtime-verified. |
 | `graph.py` | `build_harvest_graph(skills, config, announcer)` — the `StateGraph`: nodes = phases, edges = the fixed sequence; conditional edges = the Verify gate, the §7 retry, and the §5 grasp/approach/sweep decision. |
 | `run_demo.py` | Dry-run against a mock okra row; prints the phase + base-move trace. |
 | `test_harvest_graph.py` | In-reach pick, depth approach (too far / too close), left strafe, height skip, sweep-discovery, termination, retry recovery, give-up. |
@@ -109,9 +110,33 @@ Deferred / not yet done:
   grasp-and-pull with the Dex1 gripper only.
 - §6 background safety monitor / interrupt (`look_out_for` → preempt).
 
-## Wiring the real robot (next milestone)
+## Wiring the real robot
 
-Provide a concrete `HarvestSkills` implementation; the graph is unchanged.
+`real_skills.py` is the wiring harness — the graph is unchanged. ⚠️ It is not
+runtime-verified (needs the G1 + live DimOS modules); the operator launches
+robot motion, this only assembles the wiring.
+
+```python
+from dimos.robot.unitree.g1.harvest import (
+    build_harvest_graph, build_dimos_harvest_skills, make_g1_speaker_announcer,
+    initial_state,
+)
+
+skills = build_dimos_harvest_skills(
+    move_cmd=g1.move,           # G1 velocity move (vx, vy, vyaw, duration)
+    detect_fn=detect_okra,      # head-cam VLM + depth -> list[Okra] (rel pos_3d, ripeness, reachable)
+    grasp_fn=run_act_grasp,     # one okra-ACT episode (unitree-g1-act-arm) + Dex1 force
+    verify_fn=check_harvest,    # Dex1 hold + VLM "picked?"
+    next_station_fn=go_next,    # nav route planning; False when field done
+    swap_fn=swap_basket,        # nav to collection point, swap, return
+)
+voice = make_g1_speaker_announcer(network_interface="<nic>")  # G1 onboard TTS (Japanese: confirm speaker_id)
+app = build_harvest_graph(skills, announcer=voice)
+final = app.invoke(initial_state(), {"recursion_limit": 400})
+```
+
+`relative_move` is implemented (velocity move). The injected callables each need
+a real subsystem — contracts below:
 
 | Skill | Real backing |
 |---|---|
