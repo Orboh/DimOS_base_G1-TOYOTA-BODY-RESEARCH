@@ -134,6 +134,7 @@ class HarvestConfig:
     standoff_min: float = 0.25  # never let an okra come closer than this (ridge safety)
     max_empty_advances: int = 2  # consecutive empty left-sweeps before done (§8 N)
     max_reposition_attempts: int = 3  # base moves toward one okra before skipping it
+    max_revisits: int = 5  # times to go back for left-behind okra before giving up
 
 
 class HarvestState(TypedDict, total=False):
@@ -156,7 +157,14 @@ class HarvestState(TypedDict, total=False):
     iterations: int  # main-loop counter, guarded by max_harvest_iterations
     grasp_attempts: int  # re-grasp counter for the current target (reset on select)
     reposition_attempts: int  # base moves toward the current approach target
-    empty_advances: int  # consecutive right-sweeps that found nothing (§8)
+    empty_advances: int  # consecutive left-sweeps that found nothing (§8)
+    revisit_attempts: int  # times we've gone back for left-behind okra (capped)
+    # Odometry: cumulative base displacement {x,y} [m] in a frame fixed at start.
+    # Lets the agent remember where okra were so it can return for ones it passed.
+    robot_offset: dict[str, float]
+    # Left-behind okra: id -> odometry-frame position {x,y,z}. Ripe okra we've
+    # seen but not yet picked/excluded, so we can revisit them after sweeping.
+    pending: dict[str, dict[str, float]]
     mode: Mode
     last_verify_ok: bool  # result of the most recent verify_harvest()
     log: list[str]  # human-readable phase trace (demo / tests / slide figure)
@@ -177,6 +185,9 @@ def initial_state() -> HarvestState:
         grasp_attempts=0,
         reposition_attempts=0,
         empty_advances=0,
+        revisit_attempts=0,
+        robot_offset={"x": 0.0, "y": 0.0},
+        pending={},
         mode="harvest",
         last_verify_ok=False,
         log=[],

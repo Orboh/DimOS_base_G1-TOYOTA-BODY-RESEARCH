@@ -29,18 +29,21 @@ _RECURSION_LIMIT = 400
 
 
 def _demo_field() -> list[FieldOkra]:
-    """A row of okra at depth y=0.85 (the reach box centre is y=0.45).
+    """Reach box centre is (x=0.30, y=0.45). Robot starts at the origin.
 
-    Harvest progresses RIGHT→LEFT. The robot starts at the origin: it approaches
-    the row (steps FORWARD), picks the okra in front, then — finding nothing else
-    in view — sweeps LEFT, discovers the next fruit, repositions LEFT, and picks
-    it. One fruit is above arm height (skipped) and one is unripe (ignored).
+    Harvest progresses RIGHT→LEFT. This field showcases the recovery path: the
+    robot approaches the nearest fruit (a LEFT strafe), which pushes the right
+    fruit out of view; the leftward discovery sweep moves away from it, so the
+    robot REVISITS its remembered position to come back for it — nothing is
+    abandoned. One fruit is above arm height (skipped) and one is unripe
+    (ignored). (Depth moves — too-far→forward, too-close→back — are exercised in
+    the tests.)
     """
     return [
-        FieldOkra("okra_a", x=0.30, y=0.85, z=0.80, ripeness=0.92),  # far -> forward, then pick
-        FieldOkra("okra_high", x=0.30, y=0.85, z=1.50, ripeness=0.95),  # too high -> skip
-        FieldOkra("okra_left", x=-1.00, y=0.85, z=0.80, ripeness=0.88),  # out of view -> sweep left
-        FieldOkra("okra_unripe", x=0.30, y=0.85, z=0.80, ripeness=0.20),  # unripe -> ignore
+        FieldOkra("okra_high", x=0.30, y=0.45, z=1.50, ripeness=0.95),  # too high -> skip
+        FieldOkra("okra_left", x=-0.05, y=0.45, z=0.80, ripeness=0.90),  # nearest -> approach left
+        FieldOkra("okra_right", x=0.70, y=0.45, z=0.80, ripeness=0.88),  # pushed out -> revisited
+        FieldOkra("okra_unripe", x=0.30, y=0.45, z=0.80, ripeness=0.20),  # unripe -> ignore
     ]
 
 
@@ -48,7 +51,7 @@ def main() -> None:
     cfg = HarvestConfig()
     # okra_a fails its first verify once, to show the §7 re-grasp recovery.
     skills = MockHarvestSkills(
-        _demo_field(), reach=cfg.reach, fov=cfg.fov, flaky_verifies={"okra_a": 1}
+        _demo_field(), reach=cfg.reach, fov=cfg.fov, flaky_verifies={"okra_left": 1}
     )
     # Record what the robot WOULD say (no audio hardware needed for the dry run).
     voice = RecordingAnnouncer()

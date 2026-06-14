@@ -123,6 +123,10 @@ def searching() -> str:
     return "この場所にオクラはありません。次を探しに移動します。"
 
 
+def revisiting() -> str:
+    return "取り残したオクラを採りに戻ります。"
+
+
 def give_up() -> str:
     return "このオクラは収穫できませんでした。次に進みます。"
 
@@ -143,6 +147,7 @@ __all__ = [
     "regrasp",
     "picked",
     "searching",
+    "revisiting",
     "give_up",
     "done",
 ]

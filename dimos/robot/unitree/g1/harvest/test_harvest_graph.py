@@ -172,6 +172,28 @@ def test_announces_approach_direction() -> None:
     assert announce.approaching("forward") in voice.said
 
 
+def test_left_behind_okra_is_revisited() -> None:
+    """An okra pushed out of view (to the right, where the left-sweep won't go)
+    is remembered and revisited, so nothing is abandoned.
+
+    okra 'a' (slightly left) is approached first (a left strafe), which pushes
+    okra 'b' (far right) out of the FOV. The leftward discovery sweep moves away
+    from b, so only the revisit (return to remembered position) recovers it.
+    """
+    field = [
+        FieldOkra("a", x=-0.05, y=0.45, z=0.80, ripeness=0.90),  # nearest -> approached first
+        FieldOkra("b", x=0.70, y=0.45, z=0.80, ripeness=0.88),  # seen, then pushed out right
+    ]
+    skills = _mock(field)
+    voice = RecordingAnnouncer()
+    app = build_harvest_graph(skills, _CFG, announcer=voice)
+    final = app.invoke(initial_state(), {"recursion_limit": _RECURSION_LIMIT})
+
+    assert final["picks"] == 2  # both picked, including the left-behind one
+    assert announce.revisiting() in voice.said  # a revisit actually happened
+    assert final["pending"] == {}  # nothing left behind at the end
+
+
 def test_silent_by_default() -> None:
     """With no announcer the graph runs silently (NullAnnouncer), no crash."""
     field = [FieldOkra("a", x=0.30, y=0.45, z=0.80, ripeness=0.9)]

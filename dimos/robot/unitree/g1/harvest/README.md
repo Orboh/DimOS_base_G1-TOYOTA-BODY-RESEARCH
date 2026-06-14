@@ -38,9 +38,15 @@ reach:
   too-close → −forward (backs off the ridge, clamped by `standoff_min`), left/right → strafe.
   Re-detect after moving to correct the estimate ("compute once, then verify").
 - **advance_left** (no fruit in view): harvest progresses RIGHT→LEFT, so sweep
-  left to discover more; after `max_empty_advances` empty sweeps with nothing
-  pending → done. (Reach stays on the right — the okra-ACT arm/Dex1 is the right
-  one — so moving left brings unpicked left-side okra into the right-side reach.)
+  left to discover more. (Reach stays on the right — the okra-ACT arm/Dex1 is the
+  right one — so moving left brings unpicked left-side okra into the right-side
+  reach.)
+- **revisit** (swept enough, but okra were left behind): the agent tracks its own
+  base displacement (odometry) and remembers every ripe okra it has seen
+  (`pending`, in the odometry frame). If a fruit was pushed out of view before
+  being picked, it returns to that remembered position to collect it — so the
+  one-way sweep never abandons fruit. Bounded by `max_revisits`. Done only when
+  swept enough AND nothing is pending.
 - **height**: the G1 cannot squat in this build, so an okra whose `z` is outside
   the reach box is skipped (`skipped_height`), not chased.
 
@@ -52,10 +58,11 @@ detect ─▶ select ─┬─ in-reach target ──▶ grasp ─▶ verify ─
                   │                                        └ exhausted ─▶ give_up ─▶ detect
                   ├─ out of reach (z ok) ─▶ reposition ───────────────────────────▶ detect
                   └─ nothing in view ─────▶ advance_left (right→left) ─────────────▶ detect
-                                               │ empty ≥ N, nothing pending
-                                               ▼
-                                              END
-record ─(basket full / cap)─▶ END    record ─(else)─▶ detect
+                                               │ empty ≥ N
+                                               ├─ pending left behind ─▶ revisit ─▶ detect
+                                               ▼ nothing pending
+                                              finish ─▶ END
+record ─(basket full / cap)─▶ finish ─▶ END    record ─(else)─▶ detect
 ```
 
 Figure (regenerate locally, no network): `~/Pictures/okra_langgraph.{png,dot,mmd}`.
@@ -66,7 +73,7 @@ When the agent makes a decision or the world state changes, it speaks a fixed
 Japanese line (handbook §6 HMI). The phrasing is templated, not LLM-generated —
 status must be predictable and free. Announced events: start, grasp decision,
 height skip, approach direction (前/後ろ/左/右), re-grasp, each pick + basket
-count, "searching" sweep, give-up, and the final summary.
+count, "searching" sweep, "going back" revisit, give-up, and the final summary.
 
 The speaker is injected, so it is silent and testable by default:
 
@@ -90,14 +97,11 @@ Wiring `speak` to the **G1's onboard speaker** (`unitree_sdk2py.g1.audio.AudioCl
 
 ## Current scope and known limitations
 
-Implemented: handbook **Phases 2→8 + the §5 approach/sweep movement** for a
-single row, fully verified in the mock.
+Implemented: handbook **Phases 2→8 + the §5 approach/sweep/revisit movement**
+(odometry-tracked, so left-behind fruit is collected) for a single row, fully
+verified in the mock.
 
 Deferred / not yet done:
-- **pending revisit**: the §5 rule "go back for okra left behind before
-  advancing" is not fully tracked — the sweep only goes one way (left). If
-  approaching one fruit pushes another out of view, the abandoned one is not yet
-  revisited.
 - Navigation between stations, basket transport / swap.
 - Pedicel cutting — **the cutter is not yet on the robot**; the MVP assumes
   grasp-and-pull with the Dex1 gripper only.
