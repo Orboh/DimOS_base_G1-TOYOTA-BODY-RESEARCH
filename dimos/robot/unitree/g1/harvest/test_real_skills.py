@@ -21,6 +21,7 @@ from dimos.robot.unitree.g1.harvest.graph import build_harvest_graph
 from dimos.robot.unitree.g1.harvest.real_skills import (
     DimosHarvestSkills,
     build_dimos_harvest_skills,
+    build_live_harvest_skills,
 )
 from dimos.robot.unitree.g1.harvest.skills import HarvestSkills
 
@@ -86,3 +87,54 @@ def test_graph_runs_with_real_adapter() -> None:
 
     assert final["picks"] == 1
     assert grasps == [("a", cfg.grasp_force)]
+
+
+# --- LIVE assembly (real detect wiring) -------------------------------------
+
+from dataclasses import dataclass  # noqa: E402
+
+from dimos.robot.unitree.g1.harvest.graph import build_harvest_graph  # noqa: E402
+
+
+@dataclass
+class _FakeDet:
+    name: str
+    bbox: tuple
+    confidence: float = 0.9
+    track_id: int = 1
+
+
+class _StubYolo:
+    """Stands in for Yolo2DDetector: returns one in-reach 'okra' once, then none."""
+
+    def __init__(self):
+        self._seen = False
+
+    def process_image(self, _frame):
+        if self._seen:
+            return []
+        self._seen = True
+        return [_FakeDet("okra", (300, 220, 340, 260), track_id=7)]
+
+
+def test_build_live_harvest_skills_drives_graph() -> None:
+    """LIVE assembly (real YOLO path, here with a stub detector) runs the graph."""
+    cfg = HarvestConfig()
+    skills, grasp = build_live_harvest_skills(
+        frame_getter=lambda: object(),  # opaque frame; the stub detector ignores it
+        target_classes={"okra"},
+        detector=_StubYolo(),
+        pixel_to_base=lambda u, v, det: {"x": 0.30, "y": 0.45, "z": 0.80},  # in reach box
+    )
+    assert isinstance(skills, DimosHarvestSkills)
+    final = build_harvest_graph(skills, cfg).invoke(initial_state(), {"recursion_limit": 400})
+    assert final["picks"] == 1  # detected (stub) + grasped (dummy grasp module)
+    assert grasp is not None
+
+
+def test_live_blueprint_imports_and_builds() -> None:
+    from dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_okra_harvest_live import (
+        unitree_g1_okra_harvest_live as bp,
+    )
+
+    assert bp is not None

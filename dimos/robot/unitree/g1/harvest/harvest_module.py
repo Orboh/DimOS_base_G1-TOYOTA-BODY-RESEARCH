@@ -20,15 +20,21 @@ real grasp = a stoppable okra-ACT GraspModule, detect = YOLO+depth, etc. — see
 
 from __future__ import annotations
 
+import threading
 from threading import Thread
 from typing import Any
 
+from reactivex.disposable import Disposable
+
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
+from dimos.core.stream import In
+from dimos.msgs.sensor_msgs.Image import Image
 from dimos.robot.unitree.g1.harvest.announce import CallableAnnouncer
 from dimos.robot.unitree.g1.harvest.blackboard import HarvestConfig, initial_state
 from dimos.robot.unitree.g1.harvest.dummy_skills import DummyHarvestSkills
 from dimos.robot.unitree.g1.harvest.graph import build_harvest_graph
+from dimos.robot.unitree.g1.harvest.real_skills import build_live_harvest_skills
 from dimos.robot.unitree.g1.harvest.safety import SafetyCheck, SafetyMonitor
 from dimos.utils.logging_config import setup_logger
 
@@ -36,40 +42,68 @@ logger = setup_logger()
 
 
 class HarvestModuleConfig(ModuleConfig):
-    use_dummy: bool = True  # DUMMY skills, no robot (the only mode wired today)
-    num_okra: int = 3  # size of the dummy field
-    stations: int = 1  # number of dummy work stations
+    use_dummy: bool = True  # True = DUMMY (no robot); False = LIVE (real YOLO detect on camera)
+    num_okra: int = 3  # size of the dummy field (dummy mode only)
+    stations: int = 1  # number of dummy work stations (dummy mode only)
+    # LIVE detect target class(es). Stock yolo11n is COCO ("okra" needs a fine-tuned
+    # weight) — "banana" is a proxy to exercise the real camera→detect→select path.
+    target_classes: str = "banana"
     recursion_limit: int = 400  # LangGraph step budget (the loop revisits nodes)
 
 
 class HarvestModule(Module):
-    """Runs the okra-harvest LangGraph flow in a worker thread when deployed."""
+    """Runs the okra-harvest LangGraph flow in a worker thread when deployed.
+
+    ``use_dummy=True`` (default): fully self-contained DUMMY flow, no robot.
+    ``use_dummy=False`` (LIVE): real YOLO detection on the head-camera
+    ``color_image`` stream; verify/move/grasp/nav are still ``[LIVE-TODO]``
+    placeholders (VLM verify, okra-ACT GraspModule, base motion and nav are
+    follow-ups), so it runs real perception without real motion.
+    """
 
     config: HarvestModuleConfig
+    color_image: In[Image]  # head camera (LIVE mode); unused in dummy mode
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._thread: Thread | None = None
         self._monitor: SafetyMonitor | None = None
         self._app: Any = None
+        self._lock = threading.Lock()
+        self._latest_image: Image | None = None
+
+    def _on_image(self, image: Image) -> None:
+        with self._lock:
+            self._latest_image = image
 
     @rpc
     def start(self) -> None:
         super().start()
-        if not self.config.use_dummy:
-            raise NotImplementedError(
-                "HarvestModule: real skills are not wired yet — run with use_dummy=True. "
-                "Real grasp = stoppable okra-ACT GraspModule, detect = YOLO+depth, "
-                "verify = VLM, nav = DimOS nav. See dimos/robot/unitree/g1/harvest/README.md."
-            )
-
-        skills = DummyHarvestSkills(num_okra=self.config.num_okra, stations=self.config.stations)
         # Print the Japanese announcements to the console (no audio hardware here).
         voice = CallableAnnouncer(lambda text: logger.info(f"🔊 {text}"))
-        # DUMMY always-safe check so the supervisor structure is live (never trips).
+
+        if self.config.use_dummy:
+            skills: Any = DummyHarvestSkills(
+                num_okra=self.config.num_okra, stations=self.config.stations
+            )
+            grasp_module = skills.grasp_module
+            mode = "DUMMY (no robot)"
+        else:
+            self.register_disposable(Disposable(self.color_image.subscribe(self._on_image)))
+            targets = {c.strip() for c in self.config.target_classes.split(",") if c.strip()}
+            skills, grasp_module = build_live_harvest_skills(
+                frame_getter=lambda: self._latest_image, target_classes=targets
+            )
+            mode = (
+                "LIVE — real YOLO detect on head camera; "
+                "verify/move/grasp/nav are [LIVE-TODO] placeholders"
+            )
+
+        # DUMMY always-safe check (placeholder). ⚠️ Wire REAL safety checks before
+        # any real motion (contact/force, person, human e-stop) — follow-up.
         self._monitor = SafetyMonitor(
             [SafetyCheck("dummy_person_clear", lambda: True)],
-            on_pause=lambda reason: skills.grasp_module.stop(),
+            on_pause=lambda reason: grasp_module.stop(),
             announcer=voice,
         )
         self._monitor.start()
@@ -78,7 +112,7 @@ class HarvestModule(Module):
         )
         self._thread = Thread(target=self._run, daemon=True, name="okra-harvest")
         self._thread.start()
-        logger.info("HarvestModule started — running the DUMMY okra-harvest flow (no real robot)")
+        logger.info(f"HarvestModule started — {mode}")
 
     def _run(self) -> None:
         try:

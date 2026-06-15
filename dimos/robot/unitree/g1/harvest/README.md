@@ -28,10 +28,15 @@ so this adds no new dependency.
 ## Run
 
 ```bash
-# Whole flow as a DimOS blueprint (DUMMY skills, no robot — logs [DUMMY] + 🔊):
+# Whole flow, DUMMY skills, no robot (logs [DUMMY] + 🔊):
 dimos run unitree-g1-okra-harvest
 
-# Or the standalone dry-run script + tests:
+# LIVE first cut: REAL YOLO detection on the head camera; verify/move/grasp/nav
+# are still [LIVE-TODO] placeholders (no real motion yet). Needs the robot +
+# NX teleimager + ROBOT_INTERFACE (same prereqs as unitree-g1-act-arm):
+dimos run unitree-g1-okra-harvest-live
+
+# Standalone dry-run script + tests:
 .venv/bin/python -m dimos.robot.unitree.g1.harvest.run_demo
 .venv/bin/python -m pytest dimos/robot/unitree/g1/harvest/ -q
 ```

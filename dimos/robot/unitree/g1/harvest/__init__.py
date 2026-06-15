@@ -41,6 +41,7 @@ from dimos.robot.unitree.g1.harvest.graph import build_harvest_graph
 from dimos.robot.unitree.g1.harvest.real_skills import (
     DimosHarvestSkills,
     build_dimos_harvest_skills,
+    build_live_harvest_skills,
     make_g1_speaker_announcer,
 )
 from dimos.robot.unitree.g1.harvest.safety import (
@@ -68,6 +69,7 @@ __all__ = [
     "MockHarvestSkills",
     "DimosHarvestSkills",
     "build_dimos_harvest_skills",
+    "build_live_harvest_skills",
     "make_g1_speaker_announcer",
     "YoloOkraDetector",
     "make_yolo_detect_okra",

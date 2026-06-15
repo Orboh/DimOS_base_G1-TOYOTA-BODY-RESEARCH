@@ -37,6 +37,9 @@ from typing import Any
 
 from dimos.robot.unitree.g1.harvest.announce import CallableAnnouncer
 from dimos.robot.unitree.g1.harvest.blackboard import Okra
+from dimos.utils.logging_config import setup_logger
+
+logger = setup_logger()
 
 # Default base translation speed for converting a displacement [m] into a timed
 # velocity command. Keep conservative near the crop. [m/s]
@@ -161,6 +164,92 @@ def build_dimos_harvest_skills(
     )
 
 
+def build_live_harvest_skills(
+    *,
+    frame_getter: Callable[[], Any],
+    target_classes: set[str] | None = None,
+    detector: Any = None,
+    ask_vlm: Callable[[str], str] | None = None,
+    move_cmd: Callable[[float, float, float, float], Any] | None = None,
+    grasp_module: Any = None,
+    pixel_to_base: Callable[[float, float, Any], dict[str, float]] | None = None,
+    depth_getter: Callable[[float, float], float] | None = None,
+) -> tuple[DimosHarvestSkills, Any]:
+    """Assemble a :class:`DimosHarvestSkills` for the LIVE robot (first cut).
+
+    REAL now: ``detect_okra`` via the YOLO detector on the head-camera
+    ``frame_getter`` (and ``verify_harvest`` via a VLM if ``ask_vlm`` is given).
+    PLACEHOLDER (logged ``[LIVE-TODO]``) until wired:
+      * ``relative_move`` / ``go_to_next_station`` / ``swap_basket`` — base motion
+        is a real architecture decision (walk vs ``rt/arm_sdk`` mode) — pass
+        ``move_cmd`` to enable;
+      * ``grasp_okra`` — defaults to the stoppable :class:`DummyGraspModule`;
+        replace with the real okra-ACT ``GraspModule`` (the cancellable reach).
+
+    Returns ``(skills, grasp_module)`` — the module is exposed so a SafetyMonitor
+    can stop a running grasp (``on_pause = grasp_module.stop``).
+    """
+    from dimos.robot.unitree.g1.harvest.detect_yolo import (
+        YoloOkraDetector,
+        make_yolo_detect_okra,
+    )
+    from dimos.robot.unitree.g1.harvest.dummy_skills import (
+        DummyGraspModule,
+        make_vlm_verify_harvest,
+    )
+
+    if detector is not None:
+        detect_fn = YoloOkraDetector(
+            detector=detector,
+            frame_getter=frame_getter,
+            target_classes=target_classes or {"banana"},
+            pixel_to_base=pixel_to_base,
+            depth_getter=depth_getter,
+        ).detect
+    else:
+        detect_fn = make_yolo_detect_okra(
+            frame_getter,
+            target_classes=target_classes,
+            pixel_to_base=pixel_to_base,
+            depth_getter=depth_getter,
+        )
+
+    if ask_vlm is not None:
+        verify_fn = make_vlm_verify_harvest(ask_vlm)
+    else:
+        def verify_fn() -> bool:
+            logger.info("[LIVE-TODO] verify_harvest placeholder (wire a VLM) -> True")
+            return True
+
+    grasp = grasp_module or DummyGraspModule()  # replace with the real okra-ACT GraspModule
+
+    def _placeholder_move(vx: float, vy: float, vyaw: float, dur: float) -> None:
+        logger.info(
+            f"[LIVE-TODO] base move ({vx:.2f},{vy:.2f},{vyaw:.2f}) {dur:.2f}s not wired "
+            "(walk vs rt/arm_sdk mode is a real decision)"
+        )
+
+    def _placeholder_next_station() -> bool:
+        logger.info("[LIVE-TODO] go_to_next_station placeholder -> False (nav not wired)")
+        return False
+
+    def _placeholder_swap() -> None:
+        logger.info("[LIVE-TODO] swap_basket placeholder (nav not wired)")
+
+    # While base move is a placeholder, use a high base_speed so DimosHarvestSkills'
+    # distance->timed-velocity sleeps are negligible (no real motion happens anyway).
+    skills = build_dimos_harvest_skills(
+        move_cmd=move_cmd or _placeholder_move,
+        detect_fn=detect_fn,
+        grasp_fn=grasp.run_episode,
+        verify_fn=verify_fn,
+        next_station_fn=_placeholder_next_station,
+        swap_fn=_placeholder_swap,
+        base_speed=1000.0 if move_cmd is None else _BASE_SPEED,
+    )
+    return skills, grasp
+
+
 def make_g1_speaker_announcer(
     network_interface: str,
     speaker_id: int = 0,
@@ -202,4 +291,9 @@ def make_g1_speaker_announcer(
     return CallableAnnouncer(speak)
 
 
-__all__ = ["DimosHarvestSkills", "build_dimos_harvest_skills", "make_g1_speaker_announcer"]
+__all__ = [
+    "DimosHarvestSkills",
+    "build_dimos_harvest_skills",
+    "build_live_harvest_skills",
+    "make_g1_speaker_announcer",
+]
