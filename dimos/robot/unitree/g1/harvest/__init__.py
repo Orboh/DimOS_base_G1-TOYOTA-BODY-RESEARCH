@@ -28,6 +28,10 @@ from dimos.robot.unitree.g1.harvest.blackboard import (
     Okra,
     initial_state,
 )
+from dimos.robot.unitree.g1.harvest.detect_yolo import (
+    YoloOkraDetector,
+    make_yolo_detect_okra,
+)
 from dimos.robot.unitree.g1.harvest.graph import build_harvest_graph
 from dimos.robot.unitree.g1.harvest.real_skills import (
     DimosHarvestSkills,
@@ -53,6 +57,8 @@ __all__ = [
     "DimosHarvestSkills",
     "build_dimos_harvest_skills",
     "make_g1_speaker_announcer",
+    "YoloOkraDetector",
+    "make_yolo_detect_okra",
     "Announcer",
     "NullAnnouncer",
     "RecordingAnnouncer",

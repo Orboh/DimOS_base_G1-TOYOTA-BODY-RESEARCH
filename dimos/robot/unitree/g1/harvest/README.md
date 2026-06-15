@@ -17,6 +17,7 @@ so this adds no new dependency.
 | `skills.py` | `HarvestSkills` protocol = the robot/perception capabilities the graph drives; `MockHarvestSkills` = a **spatial 3D** field for dry runs / tests. |
 | `announce.py` | Spoken **Japanese** status (handbook §6 HMI): `Announcer` interface + `NullAnnouncer`/`RecordingAnnouncer`/`CallableAnnouncer` and the fixed phrase templates. |
 | `real_skills.py` | Real-robot wiring: `DimosHarvestSkills` (adapts the protocol to live DimOS calls; `relative_move` implemented) + `make_g1_speaker_announcer` (G1 onboard TTS). Not runtime-verified. |
+| `detect_yolo.py` | Interim `detect_okra` via the DimOS YOLO detector (head camera). `make_yolo_detect_okra(...)`. ⚠️ Stock `yolo11n.pt` has no "okra" class — use a proxy class now / okra-fine-tuned weight later; 3D + ripeness are placeholders pending calibration. |
 | `graph.py` | `build_harvest_graph(skills, config, announcer)` — the `StateGraph`: nodes = phases, edges = the fixed sequence; conditional edges = the Verify gate, the §7 retry, and the §5 grasp/approach/sweep decision. |
 | `run_demo.py` | Dry-run against a mock okra row; prints the phase + base-move trace. |
 | `test_harvest_graph.py` | In-reach pick, depth approach (too far / too close), left strafe, height skip, sweep-discovery, termination, retry recovery, give-up. |
@@ -140,7 +141,7 @@ a real subsystem — contracts below:
 
 | Skill | Real backing |
 |---|---|
-| `detect_okra()` | VLM detection (`ask_vlm` / `nav_vlm` in `dimos/perception/detection/module3D.py`) + depth → fills `Okra.pos_3d` (relative x/y/z), `ripeness`, `reachable`. |
+| `detect_okra()` | **Interim wired** via `make_yolo_detect_okra` (head-cam YOLO, `detect_yolo.py`). The graph uses `pos_3d` only (not `reachable`), so calibration drives grasping. Stock weights = proxy class; swap in okra-fine-tuned weight + real intrinsics/depth + ripeness classifier for production. |
 | `relative_move(lateral, forward)` | DimOS navigation skill (`relative_move` / `move`). |
 | `go_to_next_station()` | DimOS nav route planning (`navigate_to` next work pose); False when the field is done. |
 | `swap_basket()` | Navigate to the collection point, swap an empty basket, return. |
