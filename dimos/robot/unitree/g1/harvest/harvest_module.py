@@ -54,6 +54,10 @@ class HarvestModuleConfig(ModuleConfig):
     # False = log the lines to the console (no robot / no audio deps).
     use_g1_speaker: bool = False
     network_interface: str = ""  # NIC for the G1 audio DDS (defaults to ROBOT_INTERFACE)
+    # LIVE verify_harvest via a local Ollama vision model (e.g. "moondream",
+    # "qwen2.5vl"). Empty = placeholder verify (always True). See ollama_vlm.py.
+    vlm_model: str = ""
+    ollama_host: str = ""  # Ollama base URL (empty = ChatOllama default localhost:11434)
 
 
 class HarvestModule(Module):
@@ -113,12 +117,25 @@ class HarvestModule(Module):
         else:
             self.register_disposable(Disposable(self.color_image.subscribe(self._on_image)))
             targets = {c.strip() for c in self.config.target_classes.split(",") if c.strip()}
+            verify_fn = None
+            verify_note = "verify=[LIVE-TODO] placeholder"
+            if self.config.vlm_model:
+                from dimos.robot.unitree.g1.harvest.ollama_vlm import make_ollama_verify
+
+                verify_fn = make_ollama_verify(
+                    lambda: self._latest_image,
+                    model=self.config.vlm_model,
+                    host=self.config.ollama_host or None,
+                )
+                verify_note = f"verify=Ollama:{self.config.vlm_model}"
             skills, grasp_module = build_live_harvest_skills(
-                frame_getter=lambda: self._latest_image, target_classes=targets
+                frame_getter=lambda: self._latest_image,
+                target_classes=targets,
+                verify_fn=verify_fn,
             )
             mode = (
-                "LIVE — real YOLO detect on head camera; "
-                "verify/move/grasp/nav are [LIVE-TODO] placeholders"
+                f"LIVE — real YOLO detect on head camera; {verify_note}; "
+                "move/grasp/nav are [LIVE-TODO] placeholders"
             )
 
         # DUMMY always-safe check (placeholder). ⚠️ Wire REAL safety checks before

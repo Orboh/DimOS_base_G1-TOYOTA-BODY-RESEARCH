@@ -43,6 +43,7 @@ from dimos.robot.unitree.g1.harvest.g1_speaker import (
     synth_pcm_jp,
 )
 from dimos.robot.unitree.g1.harvest.graph import build_harvest_graph
+from dimos.robot.unitree.g1.harvest.ollama_vlm import make_ollama_verify
 from dimos.robot.unitree.g1.harvest.real_skills import (
     DimosHarvestSkills,
     build_dimos_harvest_skills,
@@ -75,6 +76,7 @@ __all__ = [
     "DimosHarvestSkills",
     "build_dimos_harvest_skills",
     "build_live_harvest_skills",
+    "make_ollama_verify",
     "make_g1_speaker_announcer",
     "YoloOkraDetector",
     "make_yolo_detect_okra",

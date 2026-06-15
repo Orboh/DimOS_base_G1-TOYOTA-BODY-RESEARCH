@@ -174,6 +174,7 @@ def build_live_harvest_skills(
     grasp_module: Any = None,
     pixel_to_base: Callable[[float, float, Any], dict[str, float]] | None = None,
     depth_getter: Callable[[float, float], float] | None = None,
+    verify_fn: Callable[[], bool] | None = None,
 ) -> tuple[DimosHarvestSkills, Any]:
     """Assemble a :class:`DimosHarvestSkills` for the LIVE robot (first cut).
 
@@ -217,12 +218,13 @@ def build_live_harvest_skills(
             depth_getter=depth_getter,
         )
 
-    if ask_vlm is not None:
-        verify_fn = make_vlm_verify_harvest(ask_vlm)
-    else:
-        def verify_fn() -> bool:
-            logger.info("[LIVE-TODO] verify_harvest placeholder (wire a VLM) -> True")
-            return True
+    if verify_fn is None:
+        if ask_vlm is not None:
+            verify_fn = make_vlm_verify_harvest(ask_vlm)
+        else:
+            def verify_fn() -> bool:  # noqa: E306
+                logger.info("[LIVE-TODO] verify_harvest placeholder (wire a VLM) -> True")
+                return True
 
     grasp = grasp_module or DummyGraspModule()  # replace with the real okra-ACT GraspModule
 
