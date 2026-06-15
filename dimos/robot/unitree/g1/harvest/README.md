@@ -20,15 +20,20 @@ so this adds no new dependency.
 | `detect_yolo.py` | Interim `detect_okra` via the DimOS YOLO detector (head camera). `make_yolo_detect_okra(...)`. ⚠️ Stock `yolo11n.pt` has no "okra" class — use a proxy class now / okra-fine-tuned weight later; 3D + ripeness are placeholders pending calibration. |
 | `safety.py` | Background `SafetyMonitor` (§6) + `PauseGate`: parallel supervisor of `SafetyCheck`s that trips a gate (and stops the running action) on a hazard and clears it when safe. The graph consults the gate at each motion node. |
 | `dummy_skills.py` | ⚠️ **DUMMY** full `HarvestSkills` (no robot) for end-to-end bring-up. `DummyGraspModule` is **stoppable** so the SafetyMonitor can cancel a reach mid-action; everything logs `[DUMMY]`. `make_vlm_verify_harvest` wires verify to a VLM. |
+| `harvest_module.py` | `HarvestModule` — a deployable DimOS Module that runs the whole flow on `start()`. Backs the `unitree-g1-okra-harvest` blueprint (`dimos run`). Defaults to DUMMY skills. |
 | `graph.py` | `build_harvest_graph(skills, config, announcer)` — the `StateGraph`: nodes = phases, edges = the fixed sequence; conditional edges = the Verify gate, the §7 retry, and the §5 grasp/approach/sweep decision. |
 | `run_demo.py` | Dry-run against a mock okra row; prints the phase + base-move trace. |
 | `test_harvest_graph.py` | In-reach pick, depth approach (too far / too close), left strafe, height skip, sweep-discovery, termination, retry recovery, give-up. |
 
-## Run the dry-run (no robot)
+## Run
 
 ```bash
+# Whole flow as a DimOS blueprint (DUMMY skills, no robot — logs [DUMMY] + 🔊):
+dimos run unitree-g1-okra-harvest
+
+# Or the standalone dry-run script + tests:
 .venv/bin/python -m dimos.robot.unitree.g1.harvest.run_demo
-.venv/bin/python -m pytest dimos/robot/unitree/g1/harvest/test_harvest_graph.py -q
+.venv/bin/python -m pytest dimos/robot/unitree/g1/harvest/ -q
 ```
 
 ## Spatial model (3D)
