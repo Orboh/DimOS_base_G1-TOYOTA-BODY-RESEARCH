@@ -19,6 +19,7 @@ so this adds no new dependency.
 | `real_skills.py` | Real-robot wiring: `DimosHarvestSkills` (adapts the protocol to live DimOS calls; `relative_move` implemented) + `make_g1_speaker_announcer` (G1 onboard TTS). Not runtime-verified. |
 | `detect_yolo.py` | Interim `detect_okra` via the DimOS YOLO detector (head camera). `make_yolo_detect_okra(...)`. ⚠️ Stock `yolo11n.pt` has no "okra" class — use a proxy class now / okra-fine-tuned weight later; 3D + ripeness are placeholders pending calibration. |
 | `safety.py` | Background `SafetyMonitor` (§6) + `PauseGate`: parallel supervisor of `SafetyCheck`s that trips a gate (and stops the running action) on a hazard and clears it when safe. The graph consults the gate at each motion node. |
+| `safety_checks.py` | Real checks for the monitor when real motion is on: `FileEStop` (`touch /tmp/okra_estop` to pause, `rm` to resume), `HumanEStop` (programmatic), `make_torque_check` (arm-torque contact guard). |
 | `dummy_skills.py` | ⚠️ **DUMMY** full `HarvestSkills` (no robot) for end-to-end bring-up. `DummyGraspModule` is **stoppable** so the SafetyMonitor can cancel a reach mid-action; everything logs `[DUMMY]`. `make_vlm_verify_harvest` wires verify to a VLM. |
 | `harvest_module.py` | `HarvestModule` — a deployable DimOS Module that runs the whole flow on `start()`. Backs the `unitree-g1-okra-harvest` blueprint (`dimos run`). Defaults to DUMMY skills. |
 | `g1_speaker.py` | Japanese speech via the G1 speaker: `synth_pcm_jp` (pyopenjtalk, **local**) → `AudioClient.PlayStream`. `G1SpeakerAnnouncer` (non-blocking queue, cached). Onboard TTS can't do Japanese; this synthesises off-board and streams the PCM. Needs `pyopenjtalk` + `scipy`. |
@@ -152,9 +153,11 @@ next_station/swap) and the `on_pause` hook stops whatever is running. When all
 checks are safe again the gate clears and the workflow resumes (re-observing from
 `detect`). Failing/raising checks are treated as unsafe (fail-safe).
 
-> ⚠️ For `on_pause` to actually stop a grasp, the real `grasp_okra` must run the
-> okra-ACT as a **stoppable Module** (start/stop + `_stop_event`), not a blocking
-> call — a DimOS `@skill` cannot be interrupted mid-run (design v0.7 / IO design v1).
+When real motion is on (`use_act_grasp` / `use_base_move`), `HarvestModule` swaps
+the dummy check for real ones (`safety_checks.py`): a **file e-stop** (`touch
+/tmp/okra_estop` to pause the arm mid-reach, `rm` to resume) and an optional
+arm-torque contact guard (`torque_limit`). `on_pause` calls `ActGraspModule.stop()`
+— the stoppable okra-ACT reach is cancelled mid-motion.
 
 ## Current scope and known limitations
 

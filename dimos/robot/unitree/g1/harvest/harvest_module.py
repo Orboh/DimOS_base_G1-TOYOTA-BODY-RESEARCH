@@ -68,6 +68,9 @@ class HarvestModuleConfig(ModuleConfig):
     use_act_grasp: bool = False
     act_endpoint: str = "tcp://127.0.0.1:5701"  # okra-ACT inference service (ZMQ REP)
     grasp_max_steps: int = 120  # ACT reach episode length cap
+    # §6 real safety (used when real motion is on). File e-stop: `touch` to pause.
+    safety_estop_file: str = "/tmp/okra_estop"
+    torque_limit: float = 0.0  # [N·m] arm-torque contact guard; 0 = off (needs tuning)
 
 
 class HarvestModule(Module):
@@ -125,6 +128,22 @@ class HarvestModule(Module):
                 except Exception as exc2:  # noqa: BLE001
                     logger.warning("G1 speaker unavailable; using console voice", error=str(exc2))
         return CallableAnnouncer(lambda text: logger.info(f"🔊 {text}"))
+
+    def _build_safety_checks(self) -> list[SafetyCheck]:
+        """Real §6 checks when real motion is on; else a dummy always-safe check."""
+        real_motion = self.config.use_act_grasp or self.config.use_base_move
+        if not real_motion:
+            return [SafetyCheck("dummy_person_clear", lambda: True)]
+        from dimos.robot.unitree.g1.harvest.safety_checks import FileEStop, make_torque_check
+
+        checks = [FileEStop(self.config.safety_estop_file).as_check()]
+        if self.config.torque_limit > 0:
+            checks.append(make_torque_check(lambda: self._latest_state, limit=self.config.torque_limit))
+        logger.info(
+            f"SafetyMonitor real checks: file e-stop={self.config.safety_estop_file!r} "
+            f"(touch to pause), torque_limit={self.config.torque_limit}"
+        )
+        return checks
 
     def _on_image(self, image: Image) -> None:
         with self._lock:
@@ -193,10 +212,9 @@ class HarvestModule(Module):
             )
             mode = f"LIVE — real YOLO detect; {verify_note}; {move_note}; {grasp_note}"
 
-        # DUMMY always-safe check (placeholder). ⚠️ Wire REAL safety checks before
-        # any real motion (contact/force, person, human e-stop) — follow-up.
+        # Real §6 checks when real motion is on (file e-stop + torque), else dummy.
         self._monitor = SafetyMonitor(
-            [SafetyCheck("dummy_person_clear", lambda: True)],
+            self._build_safety_checks(),
             on_pause=lambda reason: grasp_module.stop(),
             announcer=voice,
         )
