@@ -180,9 +180,12 @@ def build_live_harvest_skills(
     REAL now: ``detect_okra`` via the YOLO detector on the head-camera
     ``frame_getter`` (and ``verify_harvest`` via a VLM if ``ask_vlm`` is given).
     PLACEHOLDER (logged ``[LIVE-TODO]``) until wired:
-      * ``relative_move`` / ``go_to_next_station`` / ``swap_basket`` — base motion
-        is a real architecture decision (walk vs ``rt/arm_sdk`` mode) — pass
-        ``move_cmd`` to enable;
+      * ``relative_move`` / ``go_to_next_station`` / ``swap_basket`` — base motion.
+        In *motion control mode* the legs run on the locomotion policy (``cmd_vel``
+        walk) while the upper body is driven via ``rt/arm_sdk``, so walking and the
+        arm reach can run CONCURRENTLY — no mode switch. Wiring = a ``cmd_vel``
+        publisher (short reposition/sweep) + the DimOS nav stack (station-to-station).
+        Pass ``move_cmd`` to enable;
       * ``grasp_okra`` — defaults to the stoppable :class:`DummyGraspModule`;
         replace with the real okra-ACT ``GraspModule`` (the cancellable reach).
 
@@ -224,9 +227,12 @@ def build_live_harvest_skills(
     grasp = grasp_module or DummyGraspModule()  # replace with the real okra-ACT GraspModule
 
     def _placeholder_move(vx: float, vy: float, vyaw: float, dur: float) -> None:
+        # In motion control mode the legs walk (cmd_vel) while the arm runs on
+        # rt/arm_sdk — concurrent, no mode switch. To enable, pass move_cmd wired
+        # to a cmd_vel publisher (small moves) / the DimOS nav stack (big moves).
         logger.info(
-            f"[LIVE-TODO] base move ({vx:.2f},{vy:.2f},{vyaw:.2f}) {dur:.2f}s not wired "
-            "(walk vs rt/arm_sdk mode is a real decision)"
+            f"[LIVE-TODO] base move ({vx:.2f},{vy:.2f},{vyaw:.2f}) {dur:.2f}s "
+            "not wired — needs a cmd_vel publisher / nav stack"
         )
 
     def _placeholder_next_station() -> bool:
