@@ -91,6 +91,7 @@ all_blueprints = {
     "unitree-g1-mid360-fastlio": "dimos.robot.unitree.g1.blueprints.navigation.unitree_g1_mid360_fastlio:unitree_g1_mid360_fastlio",
     "unitree-g1-nav-laptop": "dimos.robot.unitree.g1.blueprints.navigation.unitree_g1_nav_laptop:unitree_g1_nav_laptop",
     "unitree-g1-nav-laptop-cam": "dimos.robot.unitree.g1.blueprints.navigation.unitree_g1_nav_laptop_cam:unitree_g1_nav_laptop_cam",
+    "unitree-g1-nav-dual-cam": "dimos.robot.unitree.g1.blueprints.navigation.unitree_g1_nav_dual_cam:unitree_g1_nav_dual_cam",
     "unitree-g1-nav-onboard": "dimos.robot.unitree.g1.blueprints.navigation.unitree_g1_nav_onboard:unitree_g1_nav_onboard",
     "unitree-g1-nav-sim": "dimos.robot.unitree.g1.blueprints.navigation.unitree_g1_nav_sim:unitree_g1_nav_sim",
     "unitree-g1-shm": "dimos.robot.unitree.g1.blueprints.perceptive.unitree_g1_shm:unitree_g1_shm",

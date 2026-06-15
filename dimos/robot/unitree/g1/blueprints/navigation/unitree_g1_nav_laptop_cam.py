@@ -32,6 +32,7 @@ camera module has no control path at all.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from dimos.core.coordination.blueprints import autoconnect
@@ -40,7 +41,22 @@ from dimos.msgs.sensor_msgs.Image import Image
 from dimos.robot.unitree.g1.blueprints.navigation.unitree_g1_nav_laptop import (
     build_nav_laptop,
 )
+from dimos.robot.unitree.g1.camera.teleimager_camera_module import TeleimagerCamera
 from dimos.robot.unitree.g1.camera.zmq_camera_module import ZmqCamera
+
+
+def _camera_blueprint() -> Any:
+    """Head-camera source, switchable via the ``DIMOS_CAMERA_SOURCE`` env var.
+
+    - ``"zmq"`` (default): GEAR-SONIC ``ego_view`` publisher (scripts/uvc_zmq_publisher.py)
+    - ``"teleimager"``:     teleimager ``image_server`` (``teleimager-server --rs``)
+
+    Both emit on ``color_image`` so downstream (nav viewer, ActBridge) is unchanged.
+    """
+    source = os.getenv("DIMOS_CAMERA_SOURCE", "zmq").strip().lower()
+    if source == "teleimager":
+        return TeleimagerCamera.blueprint()
+    return ZmqCamera.blueprint()
 
 
 def _nav_cam_rerun_blueprint() -> Any:
@@ -62,7 +78,7 @@ def _nav_cam_rerun_blueprint() -> Any:
 
 unitree_g1_nav_laptop_cam = autoconnect(
     build_nav_laptop(rerun_blueprint=_nav_cam_rerun_blueprint),
-    ZmqCamera.blueprint(),
+    _camera_blueprint(),
 ).transports(
     {
         # LCM (not pSHM) so the LCM-listening RerunBridge shows the feed,
