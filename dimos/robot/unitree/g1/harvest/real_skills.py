@@ -31,7 +31,6 @@ The G1 onboard speaker is wired concretely in :func:`make_g1_speaker_announcer`.
 
 from __future__ import annotations
 
-import time
 from collections.abc import Callable
 from typing import Any
 
@@ -104,22 +103,18 @@ class DimosHarvestSkills:
     def relative_move(self, lateral: float, forward: float = 0.0, yaw: float = 0.0) -> None:
         """Issue a relative base displacement [m] as timed velocity commands.
 
-        ``move_cmd(vx, vy, vyaw, duration)`` matches the G1 ``move`` skill
-        (vx=forward, vy=left/right). Forward then lateral are issued in turn so
-        the geometry stays simple; each blocks for its duration.
+        ``move_cmd(vx, vy, vyaw, duration)`` OWNS the timing: it drives the
+        velocity for ``duration`` and stops (so a real cmd_vel publisher and this
+        method don't double-sleep). vx=forward, vy=left/right. Forward then
+        lateral are issued in turn so the geometry stays simple.
         """
-        # forward axis -> vx
         if abs(forward) >= _MIN_MOVE_M:
             dur = abs(forward) / self._base_speed
-            vx = self._base_speed * (1.0 if forward > 0 else -1.0)
-            self._move_cmd(vx, 0.0, 0.0, dur)
-            time.sleep(dur)
-        # lateral axis -> vy (sign per robot convention)
+            self._move_cmd(self._base_speed * (1.0 if forward > 0 else -1.0), 0.0, 0.0, dur)
         if abs(lateral) >= _MIN_MOVE_M:
             dur = abs(lateral) / self._base_speed
             vy = self._lat_sign * self._base_speed * (1.0 if lateral > 0 else -1.0)
             self._move_cmd(0.0, vy, 0.0, dur)
-            time.sleep(dur)
 
 
 def build_dimos_harvest_skills(

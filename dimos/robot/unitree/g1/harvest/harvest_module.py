@@ -29,7 +29,8 @@ from reactivex.disposable import Disposable
 
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
-from dimos.core.stream import In
+from dimos.core.stream import In, Out
+from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.robot.unitree.g1.harvest.announce import CallableAnnouncer
 from dimos.robot.unitree.g1.harvest.blackboard import HarvestConfig, initial_state
@@ -58,6 +59,9 @@ class HarvestModuleConfig(ModuleConfig):
     # "qwen2.5vl"). Empty = placeholder verify (always True). See ollama_vlm.py.
     vlm_model: str = ""
     ollama_host: str = ""  # Ollama base URL (empty = ChatOllama default localhost:11434)
+    # LIVE: drive the real base for reposition/sweep via cmd_vel (SDK LocoClient).
+    # ⚠️ THE ROBOT WALKS — default off; enable only with real safety checks + operator.
+    use_base_move: bool = False
 
 
 class HarvestModule(Module):
@@ -72,6 +76,7 @@ class HarvestModule(Module):
 
     config: HarvestModuleConfig
     color_image: In[Image]  # head camera (LIVE mode); unused in dummy mode
+    cmd_vel: Out[Twist]  # base velocity (LIVE + use_base_move) -> G1Connection
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -128,14 +133,22 @@ class HarvestModule(Module):
                     host=self.config.ollama_host or None,
                 )
                 verify_note = f"verify=Ollama:{self.config.vlm_model}"
+            move_cmd = None
+            move_note = "move=[LIVE-TODO] placeholder"
+            if self.config.use_base_move:
+                from dimos.robot.unitree.g1.harvest.nav_skills import make_twist_move_cmd
+
+                move_cmd = make_twist_move_cmd(self.cmd_vel.publish)
+                move_note = "move=cmd_vel(SDK)"
             skills, grasp_module = build_live_harvest_skills(
                 frame_getter=lambda: self._latest_image,
                 target_classes=targets,
                 verify_fn=verify_fn,
+                move_cmd=move_cmd,
             )
             mode = (
-                f"LIVE — real YOLO detect on head camera; {verify_note}; "
-                "move/grasp/nav are [LIVE-TODO] placeholders"
+                f"LIVE — real YOLO detect; {verify_note}; {move_note}; "
+                "grasp/station-nav are [LIVE-TODO] placeholders"
             )
 
         # DUMMY always-safe check (placeholder). ⚠️ Wire REAL safety checks before
