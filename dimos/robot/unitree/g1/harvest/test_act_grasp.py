@@ -1,0 +1,98 @@
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+
+"""Offline tests for ActGraspModule (fake ACT service + stub I/O, no robot).
+
+Verifies the episode loop, the stop/cancel path (what the SafetyMonitor drives),
+reset-on-first-step, and that arm + gripper targets are published — all without
+ZMQ / act_service / a real arm.
+"""
+
+from __future__ import annotations
+
+import threading
+import time
+
+from dimos.robot.unitree.g1.harvest.act_grasp import ActGraspModule
+
+
+class _Okra:
+    id = "okra_1"
+
+
+class _State:
+    """Stand-in 29-DOF JointState (position only; name check is skipped when empty)."""
+
+    def __init__(self) -> None:
+        self.position = [0.0] * 29
+        self.name: list[str] = []
+
+
+def _module(act_call, **kw):
+    published = {"arm": [], "grip": []}
+    mod = ActGraspModule(
+        image_getter=lambda: object(),  # opaque; encode is stubbed below
+        state_getter=lambda: _State(),
+        gripper_getter=lambda: 0.0,
+        publish_arm=lambda js: published["arm"].append(js),
+        publish_gripper=lambda js: published["grip"].append(js),
+        act_call=act_call,
+        rate_hz=kw.pop("rate_hz", 1000.0),  # fast loop for tests (overridable)
+        **kw,
+    )
+    mod._encode = lambda image: b"JPEG"  # skip real cv2 jpeg encoding
+    return mod, published
+
+
+def test_episode_runs_and_publishes() -> None:
+    obs_seen: list = []
+
+    def act_call(obs):
+        obs_seen.append(obs)
+        return [0.0] * 16
+
+    mod, pub = _module(act_call, max_steps=5)
+    done = mod.run_episode(_Okra(), 0.3)
+
+    assert done is True
+    assert len(pub["arm"]) == 5 and len(pub["grip"]) == 5  # one per step
+    assert obs_seen[0]["reset"] is True and obs_seen[1]["reset"] is False  # reset only first
+    assert mod.episodes[-1] == ("okra_1", 5, False)
+
+
+def test_stop_cancels_mid_reach() -> None:
+    def act_call(obs):
+        return [0.0] * 16
+
+    mod, _pub = _module(act_call, max_steps=10_000, rate_hz=200.0)
+    result: dict = {}
+    t = threading.Thread(target=lambda: result.update(ok=mod.run_episode(_Okra(), 0.3)))
+    t.start()
+    time.sleep(0.05)
+    mod.stop()
+    t.join(timeout=2.0)
+
+    assert result["ok"] is False  # cancelled
+    okra_id, steps, cancelled = mod.episodes[-1]
+    assert cancelled is True and steps < 10_000
+
+
+def test_reached_fn_ends_episode_early() -> None:
+    mod, pub = _module(lambda obs: [0.0] * 16, max_steps=100, reached_fn=lambda a, step: step >= 3)
+    assert mod.run_episode(_Okra(), 0.3) is True
+    assert len(pub["arm"]) == 3  # stopped as soon as reached_fn fired
+
+
+def test_publishes_right_gripper_from_action() -> None:
+    # action[15] is the right Dex1 target.
+    action = [0.0] * 16
+    action[15] = 0.42
+    mod, pub = _module(lambda obs: action, max_steps=1)
+    mod.run_episode(_Okra(), 0.3)
+    assert pub["grip"][0].position[0] == 0.42
+    assert len(pub["arm"][0].position) == 14  # 14 arm targets

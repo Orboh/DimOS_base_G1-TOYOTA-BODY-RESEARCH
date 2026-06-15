@@ -32,6 +32,7 @@ from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.sensor_msgs.Image import Image
+from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.robot.unitree.g1.harvest.announce import CallableAnnouncer
 from dimos.robot.unitree.g1.harvest.blackboard import HarvestConfig, initial_state
 from dimos.robot.unitree.g1.harvest.dummy_skills import DummyHarvestSkills
@@ -62,6 +63,11 @@ class HarvestModuleConfig(ModuleConfig):
     # LIVE: drive the real base for reposition/sweep via cmd_vel (SDK LocoClient).
     # ⚠️ THE ROBOT WALKS — default off; enable only with real safety checks + operator.
     use_base_move: bool = False
+    # LIVE: real okra-ACT reach for grasp (stoppable ActGraspModule). ⚠️ THE ARM
+    # MOVES — default off; needs act_service + arm/gripper connections wired.
+    use_act_grasp: bool = False
+    act_endpoint: str = "tcp://127.0.0.1:5701"  # okra-ACT inference service (ZMQ REP)
+    grasp_max_steps: int = 120  # ACT reach episode length cap
 
 
 class HarvestModule(Module):
@@ -77,6 +83,11 @@ class HarvestModule(Module):
     config: HarvestModuleConfig
     color_image: In[Image]  # head camera (LIVE mode); unused in dummy mode
     cmd_vel: Out[Twist]  # base velocity (LIVE + use_base_move) -> G1Connection
+    # Arm streams (LIVE + use_act_grasp) -> G1ArmSdkConnection / G1GripperConnection.
+    motor_states: In[JointState]
+    right_gripper_state: In[JointState]
+    arm_target: Out[JointState]
+    gripper_target: Out[JointState]
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -86,6 +97,18 @@ class HarvestModule(Module):
         self._voice: Any = None
         self._lock = threading.Lock()
         self._latest_image: Image | None = None
+        self._latest_state: JointState | None = None
+        self._latest_gripper: float = 0.0
+
+    def _on_state(self, state: JointState) -> None:
+        with self._lock:
+            self._latest_state = state
+
+    def _on_gripper(self, state: JointState) -> None:
+        pos = list(state.position)
+        if pos:
+            with self._lock:
+                self._latest_gripper = float(pos[0])
 
     def _build_voice(self) -> Any:
         """Console-log announcer by default; the real G1 speaker if use_g1_speaker."""
@@ -140,16 +163,35 @@ class HarvestModule(Module):
 
                 move_cmd = make_twist_move_cmd(self.cmd_vel.publish)
                 move_note = "move=cmd_vel(SDK)"
+
+            grasp_override = None
+            grasp_note = "grasp=DUMMY"
+            if self.config.use_act_grasp:
+                from dimos.robot.unitree.g1.harvest.act_grasp import ActGraspModule
+
+                self.register_disposable(Disposable(self.motor_states.subscribe(self._on_state)))
+                self.register_disposable(
+                    Disposable(self.right_gripper_state.subscribe(self._on_gripper))
+                )
+                grasp_override = ActGraspModule(
+                    image_getter=lambda: self._latest_image,
+                    state_getter=lambda: self._latest_state,
+                    gripper_getter=lambda: self._latest_gripper,
+                    publish_arm=self.arm_target.publish,
+                    publish_gripper=self.gripper_target.publish,
+                    act_endpoint=self.config.act_endpoint,
+                    max_steps=self.config.grasp_max_steps,
+                )
+                grasp_note = "grasp=okra-ACT"
+
             skills, grasp_module = build_live_harvest_skills(
                 frame_getter=lambda: self._latest_image,
                 target_classes=targets,
                 verify_fn=verify_fn,
                 move_cmd=move_cmd,
+                grasp_module=grasp_override,
             )
-            mode = (
-                f"LIVE — real YOLO detect; {verify_note}; {move_note}; "
-                "grasp/station-nav are [LIVE-TODO] placeholders"
-            )
+            mode = f"LIVE — real YOLO detect; {verify_note}; {move_note}; {grasp_note}"
 
         # DUMMY always-safe check (placeholder). ⚠️ Wire REAL safety checks before
         # any real motion (contact/force, person, human e-stop) — follow-up.

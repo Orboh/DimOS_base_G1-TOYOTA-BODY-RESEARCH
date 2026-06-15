@@ -21,6 +21,7 @@ from dimos.robot.unitree.g1.harvest.announce import (
     NullAnnouncer,
     RecordingAnnouncer,
 )
+from dimos.robot.unitree.g1.harvest.act_grasp import ActGraspModule, make_zmq_act_call
 from dimos.robot.unitree.g1.harvest.blackboard import (
     Box3D,
     HarvestConfig,
@@ -88,6 +89,8 @@ __all__ = [
     "make_yolo_detect_okra",
     "DummyHarvestSkills",
     "DummyGraspModule",
+    "ActGraspModule",
+    "make_zmq_act_call",
     "make_vlm_verify_harvest",
     "G1SpeakerAnnouncer",
     "make_g1_playstream_announcer",
