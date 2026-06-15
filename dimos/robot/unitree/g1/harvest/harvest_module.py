@@ -20,6 +20,7 @@ real grasp = a stoppable okra-ACT GraspModule, detect = YOLO+depth, etc. — see
 
 from __future__ import annotations
 
+import os
 import threading
 from threading import Thread
 from typing import Any
@@ -49,6 +50,10 @@ class HarvestModuleConfig(ModuleConfig):
     # weight) — "banana" is a proxy to exercise the real camera→detect→select path.
     target_classes: str = "banana"
     recursion_limit: int = 400  # LangGraph step budget (the loop revisits nodes)
+    # LIVE: speak Japanese through the G1 speaker (pyopenjtalk + PlayStream).
+    # False = log the lines to the console (no robot / no audio deps).
+    use_g1_speaker: bool = False
+    network_interface: str = ""  # NIC for the G1 audio DDS (defaults to ROBOT_INTERFACE)
 
 
 class HarvestModule(Module):
@@ -69,8 +74,25 @@ class HarvestModule(Module):
         self._thread: Thread | None = None
         self._monitor: SafetyMonitor | None = None
         self._app: Any = None
+        self._voice: Any = None
         self._lock = threading.Lock()
         self._latest_image: Image | None = None
+
+    def _build_voice(self) -> Any:
+        """Console-log announcer by default; the real G1 speaker if use_g1_speaker."""
+        if self.config.use_g1_speaker:
+            from dimos.robot.unitree.g1.harvest.g1_speaker import make_g1_playstream_announcer
+
+            nic = self.config.network_interface or os.getenv("ROBOT_INTERFACE", "")
+            try:  # the deployment may or may not have initialised DDS already
+                return make_g1_playstream_announcer(nic, init_dds=True)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("G1 speaker init_dds=True failed; retry init_dds=False", error=str(exc))
+                try:
+                    return make_g1_playstream_announcer(init_dds=False)
+                except Exception as exc2:  # noqa: BLE001
+                    logger.warning("G1 speaker unavailable; using console voice", error=str(exc2))
+        return CallableAnnouncer(lambda text: logger.info(f"🔊 {text}"))
 
     def _on_image(self, image: Image) -> None:
         with self._lock:
@@ -79,8 +101,8 @@ class HarvestModule(Module):
     @rpc
     def start(self) -> None:
         super().start()
-        # Print the Japanese announcements to the console (no audio hardware here).
-        voice = CallableAnnouncer(lambda text: logger.info(f"🔊 {text}"))
+        voice = self._build_voice()
+        self._voice = voice
 
         if self.config.use_dummy:
             skills: Any = DummyHarvestSkills(
@@ -131,6 +153,9 @@ class HarvestModule(Module):
         if self._thread is not None:
             self._thread.join(timeout=3.0)  # dummy flow finishes quickly; daemon otherwise
             self._thread = None
+        if self._voice is not None and hasattr(self._voice, "stop"):
+            self._voice.stop()
+        self._voice = None
         super().stop()
 
 

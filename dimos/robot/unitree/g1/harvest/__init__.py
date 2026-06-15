@@ -37,6 +37,11 @@ from dimos.robot.unitree.g1.harvest.dummy_skills import (
     DummyHarvestSkills,
     make_vlm_verify_harvest,
 )
+from dimos.robot.unitree.g1.harvest.g1_speaker import (
+    G1SpeakerAnnouncer,
+    make_g1_playstream_announcer,
+    synth_pcm_jp,
+)
 from dimos.robot.unitree.g1.harvest.graph import build_harvest_graph
 from dimos.robot.unitree.g1.harvest.real_skills import (
     DimosHarvestSkills,
@@ -76,6 +81,9 @@ __all__ = [
     "DummyHarvestSkills",
     "DummyGraspModule",
     "make_vlm_verify_harvest",
+    "G1SpeakerAnnouncer",
+    "make_g1_playstream_announcer",
+    "synth_pcm_jp",
     "SafetyMonitor",
     "SafetyCheck",
     "SafetyGate",

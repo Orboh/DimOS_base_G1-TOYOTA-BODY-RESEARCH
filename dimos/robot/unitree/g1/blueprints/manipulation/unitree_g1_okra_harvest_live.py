@@ -45,7 +45,7 @@ def _camera_blueprint() -> Any:
 
 unitree_g1_okra_harvest_live = autoconnect(
     _camera_blueprint(),
-    HarvestModule.blueprint(use_dummy=False),
+    HarvestModule.blueprint(use_dummy=False, use_g1_speaker=True),
 ).transports(
     {
         ("color_image", Image): LCMTransport("/color_image", Image),

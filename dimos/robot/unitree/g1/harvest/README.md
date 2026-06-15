@@ -21,6 +21,7 @@ so this adds no new dependency.
 | `safety.py` | Background `SafetyMonitor` (§6) + `PauseGate`: parallel supervisor of `SafetyCheck`s that trips a gate (and stops the running action) on a hazard and clears it when safe. The graph consults the gate at each motion node. |
 | `dummy_skills.py` | ⚠️ **DUMMY** full `HarvestSkills` (no robot) for end-to-end bring-up. `DummyGraspModule` is **stoppable** so the SafetyMonitor can cancel a reach mid-action; everything logs `[DUMMY]`. `make_vlm_verify_harvest` wires verify to a VLM. |
 | `harvest_module.py` | `HarvestModule` — a deployable DimOS Module that runs the whole flow on `start()`. Backs the `unitree-g1-okra-harvest` blueprint (`dimos run`). Defaults to DUMMY skills. |
+| `g1_speaker.py` | Japanese speech via the G1 speaker: `synth_pcm_jp` (pyopenjtalk, **local**) → `AudioClient.PlayStream`. `G1SpeakerAnnouncer` (non-blocking queue, cached). Onboard TTS can't do Japanese; this synthesises off-board and streams the PCM. Needs `pyopenjtalk` + `scipy`. |
 | `graph.py` | `build_harvest_graph(skills, config, announcer)` — the `StateGraph`: nodes = phases, edges = the fixed sequence; conditional edges = the Verify gate, the §7 retry, and the §5 grasp/approach/sweep decision. |
 | `run_demo.py` | Dry-run against a mock okra row; prints the phase + base-move trace. |
 | `test_harvest_graph.py` | In-reach pick, depth approach (too far / too close), left strafe, height skip, sweep-discovery, termination, retry recovery, give-up. |
@@ -101,15 +102,15 @@ from dimos.robot.unitree.g1.harvest import build_harvest_graph, CallableAnnounce
 app = build_harvest_graph(skills, cfg, announcer=CallableAnnouncer(speak))
 ```
 
-Wiring `speak` to the **G1's onboard speaker** (`unitree_sdk2py.g1.audio.AudioClient`):
-- `AudioClient.TtsMaker(text, speaker_id)` — onboard TTS (simplest; Japanese
-  support depends on firmware/`speaker_id`).
-- If onboard TTS lacks Japanese: synthesise Japanese audio off-board (the DimOS
-  `OpenAITTSNode`, or `PyTTSNode`) and push the PCM with
-  `AudioClient.PlayStream(app_name, stream_id, pcm_data)`.
-- Or the DimOS `SpeakSkill` (OpenAI TTS, Japanese-capable) — but that plays on
-  the **host's** speaker, not the robot's. Use it only if robot-side audio is
-  not required. Always speak non-blocking so audio never stalls the loop.
+Japanese on the G1 speaker (verified on the real robot):
+- The onboard `AudioClient.TtsMaker(text, speaker_id)` does **not** speak Japanese
+  (it sounds English for all speaker_ids) — so we synthesise off-board.
+- `g1_speaker.py`: `pyopenjtalk` (local, no network) → 16 kHz mono PCM →
+  `AudioClient.PlayStream`. Use a UNIQUE `stream_id` per utterance (a reused id
+  plays silent). `make_g1_playstream_announcer(nic)` returns the announcer; the
+  live blueprint enables it via `HarvestModule(use_g1_speaker=True)`.
+- Quick checks: `scripts/verify_g1_speaker.py` (onboard TTS sweep) and
+  `scripts/verify_g1_playstream.py` (off-board synth → PlayStream).
 
 ## Safety monitor (§6)
 
