@@ -18,6 +18,7 @@ so this adds no new dependency.
 | `announce.py` | Spoken **Japanese** status (handbook §6 HMI): `Announcer` interface + `NullAnnouncer`/`RecordingAnnouncer`/`CallableAnnouncer` and the fixed phrase templates. |
 | `real_skills.py` | Real-robot wiring: `DimosHarvestSkills` (adapts the protocol to live DimOS calls; `relative_move` implemented) + `make_g1_speaker_announcer` (G1 onboard TTS). Not runtime-verified. |
 | `detect_yolo.py` | Interim `detect_okra` via the DimOS YOLO detector (head camera). `make_yolo_detect_okra(...)`. ⚠️ Stock `yolo11n.pt` has no "okra" class — use a proxy class now / okra-fine-tuned weight later; 3D + ripeness are placeholders pending calibration. |
+| `safety.py` | Background `SafetyMonitor` (§6) + `PauseGate`: parallel supervisor of `SafetyCheck`s that trips a gate (and stops the running action) on a hazard and clears it when safe. The graph consults the gate at each motion node. |
 | `graph.py` | `build_harvest_graph(skills, config, announcer)` — the `StateGraph`: nodes = phases, edges = the fixed sequence; conditional edges = the Verify gate, the §7 retry, and the §5 grasp/approach/sweep decision. |
 | `run_demo.py` | Dry-run against a mock okra row; prints the phase + base-move trace. |
 | `test_harvest_graph.py` | In-reach pick, depth approach (too far / too close), left strafe, height skip, sweep-discovery, termination, retry recovery, give-up. |
@@ -98,6 +99,40 @@ Wiring `speak` to the **G1's onboard speaker** (`unitree_sdk2py.g1.audio.AudioCl
 - Or the DimOS `SpeakSkill` (OpenAI TTS, Japanese-capable) — but that plays on
   the **host's** speaker, not the robot's. Use it only if robot-side audio is
   not required. Always speak non-blocking so audio never stalls the loop.
+
+## Safety monitor (§6)
+
+`safety.py` is a **parallel supervisor** that runs alongside the workflow and can
+preempt it (handbook §6). Cheap checks (person proximity, contact,
+self-diagnosis, balance) run every tick; expensive checks (a VLM "is the task
+still going right?" judgement) run on a slower cadence.
+
+```python
+from dimos.robot.unitree.g1.harvest import SafetyMonitor, SafetyCheck, build_harvest_graph
+
+monitor = SafetyMonitor(
+    checks=[
+        SafetyCheck("person",  person_is_clear),            # cheap, every tick
+        SafetyCheck("contact", no_unexpected_contact),      # cheap
+        SafetyCheck("vlm_task", task_looks_ok, expensive=True),  # throttled VLM
+    ],
+    on_pause=lambda reason: grasp_module.stop(),  # stop the running ACT/cut Module
+    on_resume=lambda: None,
+    announcer=voice,                              # speaks 危険を検知… / 安全を確認…
+)
+monitor.start()
+app = build_harvest_graph(skills, announcer=voice, safety=monitor.gate)
+```
+
+On a hazard the monitor trips `monitor.gate`; the graph **blocks at the next
+motion node** (`gate.checkpoint()` in detect/grasp/reposition/advance/revisit/
+next_station/swap) and the `on_pause` hook stops whatever is running. When all
+checks are safe again the gate clears and the workflow resumes (re-observing from
+`detect`). Failing/raising checks are treated as unsafe (fail-safe).
+
+> ⚠️ For `on_pause` to actually stop a grasp, the real `grasp_okra` must run the
+> okra-ACT as a **stoppable Module** (start/stop + `_stop_event`), not a blocking
+> call — a DimOS `@skill` cannot be interrupted mid-run (design v0.7 / IO design v1).
 
 ## Current scope and known limitations
 

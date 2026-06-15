@@ -57,6 +57,7 @@ from dimos.robot.unitree.g1.harvest.blackboard import (
     Okra,
     find_okra,
 )
+from dimos.robot.unitree.g1.harvest.safety import NullSafetyGate, SafetyGate
 from dimos.robot.unitree.g1.harvest.skills import HarvestSkills
 
 # Node names (also used as routing targets) — kept as constants to avoid typos.
@@ -78,6 +79,7 @@ def build_harvest_graph(
     skills: HarvestSkills,
     config: HarvestConfig | None = None,
     announcer: Announcer | None = None,
+    safety: SafetyGate | None = None,
 ):
     """Build and compile the harvest ``StateGraph``.
 
@@ -95,6 +97,7 @@ def build_harvest_graph(
     """
     cfg = config or HarvestConfig()
     voice: Announcer = announcer or NullAnnouncer()
+    gate: SafetyGate = safety or NullSafetyGate()
 
     def _ripe_visible(state: HarvestState) -> list[Okra]:
         """Visible, ripe, not-yet-excluded okra."""
@@ -124,6 +127,7 @@ def build_harvest_graph(
 
     def detect(state: HarvestState) -> HarvestState:
         """Phase 2: observe the current view; list every okra in it."""
+        gate.checkpoint()  # §6: block here while a safety hazard is active
         okra = skills.detect_okra()
         iterations = state.get("iterations", 0) + 1
         if iterations == 1:
@@ -228,6 +232,7 @@ def build_harvest_graph(
 
     def grasp(state: HarvestState) -> HarvestState:
         """Phase 5: reach + grasp the target (okra-ACT on the real robot)."""
+        gate.checkpoint()  # §6: do not start a grasp while paused for safety
         target = find_okra(state, state.get("target_id"))
         attempts = state.get("grasp_attempts", 0) + 1
         if attempts > 1:
@@ -290,6 +295,7 @@ def build_harvest_graph(
         clamped so the base never drives closer than ``standoff_min`` (ridge
         safety). Gives up on a fruit after ``max_reposition_attempts`` and skips it.
         """
+        gate.checkpoint()  # §6
         approach = find_okra(state, state.get("approach_id"))
         attempts = state.get("reposition_attempts", 0) + 1
         if approach is None:
@@ -331,6 +337,7 @@ def build_harvest_graph(
         Harvest progresses right→left across the row, so the discovery sweep
         moves in the -x (left) direction by ``advance_step``.
         """
+        gate.checkpoint()  # §6
         skills.relative_move(-cfg.advance_step, 0.0)
         empty = state.get("empty_advances", 0) + 1
         if empty == 1:  # announce once per dry spell, not every sweep step
@@ -351,6 +358,7 @@ def build_harvest_graph(
         then re-detects. Bounded by ``max_revisits``; if exceeded, the remaining
         pending okra are skipped so the run can finish.
         """
+        gate.checkpoint()  # §6
         pending = dict(state.get("pending", {}))
         offset = _offset(state)
         attempts = state.get("revisit_attempts", 0) + 1
@@ -390,6 +398,7 @@ def build_harvest_graph(
         pending, exclusions, sweep counters) and resume detecting there. If the
         whole field is done, flag it so routing ends the run.
         """
+        gate.checkpoint()  # §6
         moved = skills.go_to_next_station()
         if not moved:
             return HarvestState(
@@ -415,6 +424,7 @@ def build_harvest_graph(
 
     def swap_basket(state: HarvestState) -> HarvestState:
         """§7: basket full — transport it and swap in an empty one, then resume."""
+        gate.checkpoint()  # §6
         skills.swap_basket()
         voice.say(announce.basket_swap())
         return HarvestState(

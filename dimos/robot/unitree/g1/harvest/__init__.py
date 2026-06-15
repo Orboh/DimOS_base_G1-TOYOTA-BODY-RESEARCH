@@ -38,6 +38,13 @@ from dimos.robot.unitree.g1.harvest.real_skills import (
     build_dimos_harvest_skills,
     make_g1_speaker_announcer,
 )
+from dimos.robot.unitree.g1.harvest.safety import (
+    NullSafetyGate,
+    PauseGate,
+    SafetyCheck,
+    SafetyGate,
+    SafetyMonitor,
+)
 from dimos.robot.unitree.g1.harvest.skills import (
     FieldOkra,
     HarvestSkills,
@@ -59,6 +66,11 @@ __all__ = [
     "make_g1_speaker_announcer",
     "YoloOkraDetector",
     "make_yolo_detect_okra",
+    "SafetyMonitor",
+    "SafetyCheck",
+    "SafetyGate",
+    "PauseGate",
+    "NullSafetyGate",
     "Announcer",
     "NullAnnouncer",
     "RecordingAnnouncer",

@@ -127,6 +127,15 @@ def revisiting() -> str:
     return "取り残したオクラを採りに戻ります。"
 
 
+def safety_stop(reason: str = "") -> str:
+    tail = f"（{reason}）" if reason else ""
+    return f"危険を検知しました。安全のため一時停止します。{tail}"
+
+
+def safety_resume() -> str:
+    return "安全を確認しました。作業を再開します。"
+
+
 def next_station() -> str:
     return "この場所は採り終わりました。次の収穫場所に移動します。"
 
@@ -156,6 +165,8 @@ __all__ = [
     "picked",
     "searching",
     "revisiting",
+    "safety_stop",
+    "safety_resume",
     "next_station",
     "basket_swap",
     "give_up",
