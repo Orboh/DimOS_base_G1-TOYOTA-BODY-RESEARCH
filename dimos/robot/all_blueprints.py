@@ -80,6 +80,8 @@ all_blueprints = {
     "teleop-quest-xarm7": "dimos.teleop.quest.blueprints:teleop_quest_xarm7",
     "uintree-g1-primitive-no-nav": "dimos.robot.unitree.g1.blueprints.primitive.uintree_g1_primitive_no_nav:uintree_g1_primitive_no_nav",
     "unitree-g1": "dimos.robot.unitree.g1.blueprints.perceptive.unitree_g1:unitree_g1",
+    "unitree-g1-act-arm": "dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_act_arm:unitree_g1_act_arm",
+    "unitree-g1-act-dryrun": "dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_act_dryrun:unitree_g1_act_dryrun",
     "unitree-g1-agentic": "dimos.robot.unitree.g1.blueprints.agentic.unitree_g1_agentic:unitree_g1_agentic",
     "unitree-g1-agentic-sim": "dimos.robot.unitree.g1.blueprints.agentic.unitree_g1_agentic_sim:unitree_g1_agentic_sim",
     "unitree-g1-basic": "dimos.robot.unitree.g1.blueprints.basic.unitree_g1_basic:unitree_g1_basic",
@@ -131,6 +133,7 @@ all_blueprints = {
 
 
 all_modules = {
+    "act-bridge": "dimos.robot.unitree.g1.act.act_bridge.ActBridge",
     "alfred-high-level": "dimos.robot.diy.alfred.effector_high_level.AlfredHighLevel",
     "arm-teleop-module": "dimos.teleop.quest.quest_extensions.ArmTeleopModule",
     "b-box-navigation-module": "dimos.navigation.bbox_navigation.BBoxNavigationModule",
@@ -151,9 +154,11 @@ all_modules = {
     "emitter-module": "dimos.utils.demo_image_encoding.EmitterModule",
     "far-planner": "dimos.navigation.nav_stack.modules.far_planner.far_planner.FarPlanner",
     "fast-lio2": "dimos.hardware.sensors.lidar.fastlio2.module.FastLio2",
+    "g1-arm-sdk-connection": "dimos.robot.unitree.g1.act.g1_arm_sdk_connection.G1ArmSdkConnection",
     "g1-connection": "dimos.robot.unitree.g1.connection.G1Connection",
     "g1-connection-base": "dimos.robot.unitree.g1.connection.G1ConnectionBase",
     "g1-fast-lio-odometry-bridge": "dimos.robot.unitree.g1.odometry_bridge.G1FastLioOdometryBridge",
+    "g1-gripper-connection": "dimos.robot.unitree.g1.act.g1_gripper_connection.G1GripperConnection",
     "g1-high-level-dds-sdk": "dimos.robot.unitree.g1.effectors.high_level.dds_sdk.G1HighLevelDdsSdk",
     "g1-high-level-web-rtc": "dimos.robot.unitree.g1.effectors.high_level.webrtc.G1HighLevelWebRtc",
     "g1-sim-connection": "dimos.robot.unitree.g1.mujoco_sim.G1SimConnection",
