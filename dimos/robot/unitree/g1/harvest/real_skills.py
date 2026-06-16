@@ -279,11 +279,14 @@ def make_g1_speaker_announcer(
     ⚠️ Not runtime-verified (needs the robot). Speaks non-blocking-friendly:
     ``TtsMaker`` returns a status code quickly; the harvest loop is slow anyway.
     """
-    from unitree_sdk2py.core.channel import ChannelFactoryInitialize
     from unitree_sdk2py.g1.audio.g1_audio_client import AudioClient
 
+    from dimos.robot.unitree.g1.act.dds_init import ensure_channel_factory
+
     if init_dds:
-        ChannelFactoryInitialize(0, network_interface)
+        # Idempotent, process-wide DDS init (shared with arm_sdk / Dex1 / loco) so
+        # the speaker can coexist with other DDS modules without a double-init crash.
+        ensure_channel_factory(network_interface)
     client = AudioClient()
     client.SetTimeout(10.0)
     client.Init()

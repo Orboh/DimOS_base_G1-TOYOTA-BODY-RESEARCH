@@ -140,11 +140,13 @@ def make_g1_playstream_announcer(
     from unitree_sdk2py.g1.audio.g1_audio_client import AudioClient
 
     if init_dds:
-        from unitree_sdk2py.core.channel import ChannelFactoryInitialize
+        # Idempotent, process-wide DDS init (shared with arm_sdk / Dex1 / loco) so
+        # the speaker can coexist with other DDS modules without a double-init crash.
+        from dimos.robot.unitree.g1.act.dds_init import ensure_channel_factory
 
         if not network_interface:
             raise ValueError("network_interface is required when init_dds=True")
-        ChannelFactoryInitialize(0, network_interface)
+        ensure_channel_factory(network_interface)
     client = AudioClient()
     try:
         client.SetTimeout(10.0)

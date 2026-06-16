@@ -24,7 +24,6 @@ from reactivex.disposable import Disposable
 from unitree_sdk2py.comm.motion_switcher.motion_switcher_client import (  # type: ignore[import-not-found]
     MotionSwitcherClient,
 )
-from unitree_sdk2py.core.channel import ChannelFactoryInitialize  # type: ignore[import-not-found]
 from unitree_sdk2py.g1.loco.g1_loco_api import (  # type: ignore[import-not-found]
     ROBOT_API_ID_LOCO_GET_BALANCE_MODE,
     ROBOT_API_ID_LOCO_GET_FSM_ID,
@@ -39,6 +38,7 @@ from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
+from dimos.robot.unitree.g1.act.dds_init import ensure_channel_factory
 from dimos.robot.unitree.g1.effectors.high_level.commands import (
     ARM_API_ID,
     ARM_COMMANDS,
@@ -103,9 +103,13 @@ class G1HighLevelDdsSdk(Module, HighLevelG1Spec):
 
         network_interface = self.config.network_interface
 
-        # Initialise DDS channel factory
+        # Initialise the process-wide DDS channel factory. Route through the
+        # idempotent, thread-safe helper (NOT a raw ChannelFactoryInitialize) so
+        # this module can share one process with other DDS modules (arm_sdk /
+        # Dex1 / G1 speaker) without a double-init crash — the first start does
+        # the real init, the rest are no-ops.
         logger.info(f"Initializing DDS on interface: {network_interface}")
-        ChannelFactoryInitialize(0, network_interface)
+        ensure_channel_factory(network_interface)
 
         # Motion switcher (required before LocoClient commands work)
         self.motion_switcher = MotionSwitcherClient()
