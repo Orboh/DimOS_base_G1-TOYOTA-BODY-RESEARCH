@@ -152,16 +152,18 @@ class ActService:
         def _decode(buf: bytes) -> np.ndarray:
             return cv2.imdecode(np.frombuffer(buf, dtype=np.uint8), cv2.IMREAD_COLOR)
 
-        wire = req.get("images")
+        wire = req.get("images") or {}
         out: dict[str, np.ndarray] = {}
-        if wire:  # new multi-camera form: {short_name: jpeg}
-            by_short = {_short(k): k for k in self.image_keys}
-            for short, buf in wire.items():
-                key = by_short.get(short, _IMG_PREFIX + short)
-                if key in self.image_keys:
-                    out[key] = _decode(buf)
-        elif "image_jpeg" in req and len(self.image_keys) == 1:  # legacy single-cam
-            out[self.image_keys[0]] = _decode(req["image_jpeg"])
+        by_short = {_short(k): k for k in self.image_keys}
+        for short, buf in wire.items():  # new multi-camera form: {short_name: jpeg}
+            key = by_short.get(short, _IMG_PREFIX + short)
+            if key in self.image_keys:
+                out[key] = _decode(buf)
+        # Legacy single-image fallback: if exactly one model image is still missing
+        # and a bare image_jpeg was sent, use it (keeps old single-cam clients working).
+        still_missing = [k for k in self.image_keys if k not in out]
+        if len(still_missing) == 1 and "image_jpeg" in req:
+            out[still_missing[0]] = _decode(req["image_jpeg"])
         missing = [_short(k) for k in self.image_keys if k not in out]
         if missing:
             raise ValueError(f"request missing camera image(s): {missing}; model needs "
