@@ -24,7 +24,7 @@ check — wire REAL checks before relying on it). Base walking is OFF
 Prereqs (same as unitree-g1-act-arm, plus this pipeline's deps):
   # NX:      teleimager-server --rs
   # laptop:  ~/act-okura/.venv_act/bin/python scripts/act_service.py --serve
-  # laptop:  ollama serve  &&  ollama pull qwen3-vl:2b
+  # laptop:  ollama serve  &&  ollama pull moondream
   # laptop:  ROBOT_INTERFACE=<nic> dimos run unitree-g1-okra-harvest-live-arm
 """
 
@@ -65,7 +65,7 @@ unitree_g1_okra_harvest_live_arm = (
             use_dummy=False,
             use_act_grasp=True,      # ⚠️ real arm reach (2-camera tree model)
             use_g1_speaker=True,     # Japanese G1 speaker
-            vlm_model="qwen3-vl:2b",  # local Ollama vision verify (newest tiny VLM)
+            vlm_model="moondream",   # local Ollama vision verify (~1s caption+keyword)
             use_base_move=False,     # base walking off (safety)
         ),
     )

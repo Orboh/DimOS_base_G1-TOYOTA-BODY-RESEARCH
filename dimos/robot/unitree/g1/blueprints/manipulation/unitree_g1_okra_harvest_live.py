@@ -16,13 +16,13 @@ Wires the head camera (teleimager) into ``HarvestModule(use_dummy=False)``, so
 selects targets from real detections.
 
 REAL now: head-camera YOLO detection, Japanese G1-speaker announcements, and
-``verify_harvest`` via a local Ollama vision model (``qwen3-vl:2b``). Still
+``verify_harvest`` via a local Ollama vision model (``moondream``, ~1 s). Still
 ``[LIVE-TODO]``: base ``move`` / ``grasp`` (okra ACT) / nav — so the robot does
 NOT move yet (grasp = stoppable DummyGraspModule). Next: the okra-ACT GraspModule
 (arm reach), real safety checks, then base/nav.
 
 Prereqs: NX teleimager-server running; ``ROBOT_INTERFACE`` set (G1 audio);
-local **Ollama** running with the vision model (``ollama pull qwen3-vl:2b``).
+local **Ollama** running with the vision model (``ollama pull moondream``).
 See ``dimos/robot/unitree/g1/harvest/README.md``.
 """
 
@@ -47,7 +47,7 @@ def _camera_blueprint() -> Any:
 
 unitree_g1_okra_harvest_live = autoconnect(
     _camera_blueprint(),
-    HarvestModule.blueprint(use_dummy=False, use_g1_speaker=True, vlm_model="qwen3-vl:2b"),
+    HarvestModule.blueprint(use_dummy=False, use_g1_speaker=True, vlm_model="moondream"),
 ).transports(
     {
         ("color_image", Image): LCMTransport("/color_image", Image),
