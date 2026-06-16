@@ -40,23 +40,33 @@ logger = setup_logger()
 def make_twist_move_cmd(
     publish_twist: Callable[[Any], None],
     *,
+    publish_hz: float = 10.0,
     settle_s: float = 0.15,
 ) -> Callable[[float, float, float, float], None]:
     """Build a ``move_cmd(vx, vy, vyaw, dur)`` that drives the base via ``cmd_vel``.
 
-    Publishes a velocity Twist (vx=forward, vy=left/right, vyaw=turn), holds it for
-    ``dur`` seconds, then publishes a zero Twist to stop. ``publish_twist`` is the
-    harvest module's ``cmd_vel`` Out (→ ``G1Connection`` → ``LocoClient.SetVelocity``).
+    G1HighLevelDdsSdk uses a watchdog pattern: if no cmd_vel arrives within
+    ``cmd_vel_timeout`` (0.2 s), it auto-stops the robot. A single publish is
+    therefore not enough — we must stream at ``publish_hz`` (≥ 5 Hz) for the
+    full ``dur`` seconds to keep the robot moving, then publish a zero-velocity
+    to stop explicitly.
     """
     from dimos.msgs.geometry_msgs.Twist import Twist
     from dimos.msgs.geometry_msgs.Vector3 import Vector3
+
+    interval = 1.0 / publish_hz
 
     def _twist(vx: float, vy: float, vyaw: float) -> Any:
         return Twist(linear=Vector3(vx, vy, 0.0), angular=Vector3(0.0, 0.0, vyaw))
 
     def move_cmd(vx: float, vy: float, vyaw: float, dur: float) -> None:
-        publish_twist(_twist(vx, vy, vyaw))
-        time.sleep(max(0.0, dur))
+        if dur <= 0.0:
+            return
+        elapsed = 0.0
+        while elapsed < dur:
+            publish_twist(_twist(vx, vy, vyaw))
+            time.sleep(interval)
+            elapsed += interval
         publish_twist(_twist(0.0, 0.0, 0.0))  # stop
         time.sleep(settle_s)
 
