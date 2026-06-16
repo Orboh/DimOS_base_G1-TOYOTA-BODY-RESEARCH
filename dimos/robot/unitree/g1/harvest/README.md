@@ -171,6 +171,32 @@ Deferred / not yet done:
   grasp-and-pull with the Dex1 gripper only.
 - §6 background safety monitor / interrupt (`look_out_for` → preempt).
 
+## Hardware notes
+
+### G1 LocoClient.Move minimum speed threshold
+
+`LocoClient.Move(vx, vy, vyaw, continuous_move=True)` silently ignores commands
+below ~0.3 m/s — the robot stands still with no error returned. This applies to
+lateral (vy) movement in particular.
+
+`_BASE_SPEED` in `real_skills.py` must be **≥ 0.3 m/s** (currently 0.5 m/s). Do
+not lower it below this threshold. Confirmed on real G1 (2026-06-16):
+- 0.15 m/s → robot does not move
+- 0.50 m/s → robot walks correctly
+
+### MotionSwitcher mode initialization
+
+`SelectMode('ai')` when the robot is already in `ai` mode returns code=0 and is
+sufficient — no mode cycling required. Cycling through `normal→ai`
+programmatically returns code=7002 (requires controller button activation:
+L2+B → L2+UP → R2+A on the Chinese model) and should be avoided.
+
+### cmd_vel watchdog
+
+`G1HighLevelDdsSdk` uses a watchdog pattern: `Move(continuous_move=True)` +
+0.2 s auto-stop timer. `make_twist_move_cmd` in `nav_skills.py` publishes at
+10 Hz to keep the watchdog alive for the full move duration.
+
 ## Wiring the real robot
 
 `real_skills.py` is the wiring harness — the graph is unchanged. ⚠️ It is not
