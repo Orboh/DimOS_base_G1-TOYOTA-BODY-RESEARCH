@@ -84,7 +84,8 @@ class ActBridge(Module):
 
     config: ActBridgeConfig
 
-    color_image: In[Image]
+    color_image: In[Image]              # head camera -> cam_high
+    cam_right_wrist: In[Image]          # right-wrist camera -> cam_right_wrist (2-cam models)
     motor_states: In[JointState]
     right_gripper_state: In[JointState]  # measured right Dex1 q (position[0])
     arm_target: Out[JointState]          # 14 arm targets -> G1ArmSdkConnection
@@ -94,6 +95,7 @@ class ActBridge(Module):
         super().__init__(**kwargs)
         self._lock = threading.Lock()
         self._latest_image: Image | None = None
+        self._latest_wrist: Image | None = None
         self._latest_state: JointState | None = None
         self._latest_gripper: float = 0.0  # measured right gripper q
         self._stop_event = threading.Event()
@@ -103,6 +105,7 @@ class ActBridge(Module):
     def start(self) -> None:
         super().start()
         self.register_disposable(Disposable(self.color_image.subscribe(self._on_image)))
+        self.register_disposable(Disposable(self.cam_right_wrist.subscribe(self._on_wrist)))
         self.register_disposable(Disposable(self.motor_states.subscribe(self._on_state)))
         self.register_disposable(
             Disposable(self.right_gripper_state.subscribe(self._on_gripper_state))
@@ -128,6 +131,10 @@ class ActBridge(Module):
     def _on_image(self, image: Image) -> None:
         with self._lock:
             self._latest_image = image
+
+    def _on_wrist(self, image: Image) -> None:
+        with self._lock:
+            self._latest_wrist = image
 
     def _on_state(self, state: JointState) -> None:
         with self._lock:
@@ -190,27 +197,41 @@ class ActBridge(Module):
         while not self._stop_event.is_set():
             with self._lock:
                 image = self._latest_image
+                wrist = self._latest_wrist
                 state = self._latest_state
                 right_grip = self._latest_gripper
 
             if image is not None and state is not None:
                 state16 = self._build_state(state, right_grip)
                 if state16 is not None:
-                    bgr = image.to_opencv()
-                    ok, jpeg = cv2.imencode(".jpg", bgr)
-                    if ok:
+                    ok, jpeg = cv2.imencode(".jpg", image.to_opencv())
+                    # Multi-camera wire: head=cam_high (+ right wrist if available).
+                    # act_service picks the image(s) the loaded model actually needs.
+                    images = {"cam_high": jpeg.tobytes()} if ok else {}
+                    if wrist is not None:
+                        okw, wjpeg = cv2.imencode(".jpg", wrist.to_opencv())
+                        if okw:
+                            images["cam_right_wrist"] = wjpeg.tobytes()
+                    if images:
                         req = {
                             "state": state16,
-                            "image_jpeg": jpeg.tobytes(),
+                            "images": images,
+                            # legacy single-image key (head) — lets single-cam
+                            # models work via act_service's fallback.
+                            "image_jpeg": jpeg.tobytes() if ok else b"",
                             "reset": first,
                         }
                         try:
                             sock.send(msgpack.packb(req, use_bin_type=True))
                             resp = msgpack.unpackb(sock.recv(), raw=False)
-                            action = np.asarray(resp["action"], dtype=float)
-                            first = False
-                            count += 1
-                            self._handle_action(action, count)
+                            if "error" in resp:
+                                logger.warning(f"ACT service error: {resp['error']}")
+                                first = True  # re-reset next time
+                            else:
+                                action = np.asarray(resp["action"], dtype=float)
+                                first = False
+                                count += 1
+                                self._handle_action(action, count)
                         except zmq.error.Again:
                             logger.warning("ACT service timeout; is act_service.py --serve running?")
                             sock.close()

@@ -81,6 +81,7 @@ all_blueprints = {
     "uintree-g1-primitive-no-nav": "dimos.robot.unitree.g1.blueprints.primitive.uintree_g1_primitive_no_nav:uintree_g1_primitive_no_nav",
     "unitree-g1": "dimos.robot.unitree.g1.blueprints.perceptive.unitree_g1:unitree_g1",
     "unitree-g1-act-arm": "dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_act_arm:unitree_g1_act_arm",
+    "unitree-g1-act-arm-tree": "dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_act_arm_tree:unitree_g1_act_arm_tree",
     "unitree-g1-act-dryrun": "dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_act_dryrun:unitree_g1_act_dryrun",
     "unitree-g1-agentic": "dimos.robot.unitree.g1.blueprints.agentic.unitree_g1_agentic:unitree_g1_agentic",
     "unitree-g1-agentic-sim": "dimos.robot.unitree.g1.blueprints.agentic.unitree_g1_agentic_sim:unitree_g1_agentic_sim",
