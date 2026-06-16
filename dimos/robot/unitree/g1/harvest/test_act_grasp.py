@@ -49,6 +49,33 @@ def _module(act_call, **kw):
     return mod, published
 
 
+def test_two_camera_sends_both_images() -> None:
+    """With a wrist_getter, the request carries cam_high + cam_right_wrist."""
+    sent: list = []
+    mod, _pub = _module(
+        lambda obs: sent.append(obs) or [0.0] * 16,
+        max_steps=1,
+        wrist_getter=lambda: object(),
+    )
+    mod.run_episode(_Okra(), 0.3)
+    images = sent[0]["images"]
+    assert set(images) == {"cam_high", "cam_right_wrist"}
+
+
+def test_two_camera_waits_for_wrist_frame() -> None:
+    """If the wrist frame isn't there yet, no inference is sent (no startup error)."""
+    sent: list = []
+    mod, _pub = _module(
+        lambda obs: sent.append(obs) or [0.0] * 16,
+        max_steps=1,
+        rate_hz=1000.0,
+        wrist_getter=lambda: None,  # wrist never arrives
+    )
+    mod.run_episode(_Okra(), 0.3)
+    assert sent == []  # waited for the wrist; never inferred
+    assert mod.episodes[-1][1] == 0  # 0 steps
+
+
 def test_episode_runs_and_publishes() -> None:
     obs_seen: list = []
 

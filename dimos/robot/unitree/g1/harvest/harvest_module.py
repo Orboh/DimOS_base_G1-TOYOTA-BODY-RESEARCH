@@ -85,6 +85,7 @@ class HarvestModule(Module):
 
     config: HarvestModuleConfig
     color_image: In[Image]  # head camera (LIVE mode); unused in dummy mode
+    cam_right_wrist: In[Image]  # right-wrist camera (LIVE + use_act_grasp, 2-cam tree model)
     cmd_vel: Out[Twist]  # base velocity (LIVE + use_base_move) -> G1Connection
     # Arm streams (LIVE + use_act_grasp) -> G1ArmSdkConnection / G1GripperConnection.
     motor_states: In[JointState]
@@ -100,8 +101,13 @@ class HarvestModule(Module):
         self._voice: Any = None
         self._lock = threading.Lock()
         self._latest_image: Image | None = None
+        self._latest_wrist: Image | None = None
         self._latest_state: JointState | None = None
         self._latest_gripper: float = 0.0
+
+    def _on_wrist(self, image: Image) -> None:
+        with self._lock:
+            self._latest_wrist = image
 
     def _on_state(self, state: JointState) -> None:
         with self._lock:
@@ -188,12 +194,14 @@ class HarvestModule(Module):
             if self.config.use_act_grasp:
                 from dimos.robot.unitree.g1.harvest.act_grasp import ActGraspModule
 
+                self.register_disposable(Disposable(self.cam_right_wrist.subscribe(self._on_wrist)))
                 self.register_disposable(Disposable(self.motor_states.subscribe(self._on_state)))
                 self.register_disposable(
                     Disposable(self.right_gripper_state.subscribe(self._on_gripper))
                 )
                 grasp_override = ActGraspModule(
                     image_getter=lambda: self._latest_image,
+                    wrist_getter=lambda: self._latest_wrist,  # 2-camera tree model
                     state_getter=lambda: self._latest_state,
                     gripper_getter=lambda: self._latest_gripper,
                     publish_arm=self.arm_target.publish,
@@ -201,7 +209,7 @@ class HarvestModule(Module):
                     act_endpoint=self.config.act_endpoint,
                     max_steps=self.config.grasp_max_steps,
                 )
-                grasp_note = "grasp=okra-ACT"
+                grasp_note = "grasp=okra-ACT(2cam)"
 
             skills, grasp_module = build_live_harvest_skills(
                 frame_getter=lambda: self._latest_image,

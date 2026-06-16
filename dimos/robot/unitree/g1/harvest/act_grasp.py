@@ -91,6 +91,7 @@ class ActGraspModule:
         publish_arm: Callable[[Any], None],
         publish_gripper: Callable[[Any], None],
         *,
+        wrist_getter: Callable[[], Any] | None = None,
         act_call: Callable[[dict[str, Any]], list[float]] | None = None,
         act_endpoint: str = "tcp://127.0.0.1:5701",
         rate_hz: float = 30.0,
@@ -99,6 +100,7 @@ class ActGraspModule:
         reached_fn: Callable[[list[float], int], bool] | None = None,
     ) -> None:
         self._image_getter = image_getter
+        self._wrist_getter = wrist_getter  # right-wrist frame (2-camera tree model)
         self._state_getter = state_getter
         self._gripper_getter = gripper_getter
         self._publish_arm = publish_arm
@@ -175,12 +177,20 @@ class ActGraspModule:
         while steps < self._max_steps and not self._stop.is_set() and iters < max_iters:
             iters += 1
             image, state, grip = self._image_getter(), self._state_getter(), self._gripper_getter()
-            if image is not None and state is not None:
+            wrist = self._wrist_getter() if self._wrist_getter is not None else None
+            # Wait until ALL required cameras have a frame (the 2-camera tree model
+            # needs the wrist too) — avoids the startup "missing cam_right_wrist".
+            cams_ready = image is not None and (self._wrist_getter is None or wrist is not None)
+            if cams_ready and state is not None:
                 state16 = self._build_state(state, grip)
                 if state16 is not None:
                     try:
+                        images = {"cam_high": self._encode(image)}
+                        if wrist is not None:
+                            images["cam_right_wrist"] = self._encode(wrist)
                         action = self._act_call(
-                            {"state": state16, "image_jpeg": self._encode(image), "reset": reset}
+                            {"state": state16, "images": images,
+                             "image_jpeg": images["cam_high"], "reset": reset}
                         )
                         reset = False
                         steps += 1
