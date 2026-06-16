@@ -41,8 +41,10 @@ from dimos.utils.logging_config import setup_logger
 logger = setup_logger()
 
 # Default base translation speed for converting a displacement [m] into a timed
-# velocity command. Keep conservative near the crop. [m/s]
-_BASE_SPEED = 0.15
+# velocity command. [m/s]
+# G1 LocoClient.Move(continuous_move=True) requires ≥ 0.3 m/s to actually trigger
+# locomotion — 0.15 m/s was below the hardware threshold and the robot stood still.
+_BASE_SPEED = 0.5
 _MIN_MOVE_M = 1e-3  # ignore sub-millimetre moves
 
 

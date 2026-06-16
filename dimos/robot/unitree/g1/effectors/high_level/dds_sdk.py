@@ -153,7 +153,6 @@ class G1HighLevelDdsSdk(Module, HighLevelG1Spec):
         vx = twist.linear.x
         vy = twist.linear.y
         vyaw = twist.angular.z
-
         if self._stop_timer:
             self._stop_timer.cancel()
             self._stop_timer = None
@@ -331,6 +330,7 @@ class G1HighLevelDdsSdk(Module, HighLevelG1Spec):
         if not self.motion_switcher or self._mode_selected:
             return
 
+        mode = self.config.connection_mode
         try:
             code, result = self.motion_switcher.CheckMode()
             if code == 0 and result:
@@ -346,7 +346,6 @@ class G1HighLevelDdsSdk(Module, HighLevelG1Spec):
         except Exception as e:
             logger.debug(f"Could not check current mode: {e}")
 
-        mode = self.config.connection_mode
         logger.info(f"Selecting motion mode: {mode}")
         code, _ = self.motion_switcher.SelectMode(mode)
         if code == 0:
