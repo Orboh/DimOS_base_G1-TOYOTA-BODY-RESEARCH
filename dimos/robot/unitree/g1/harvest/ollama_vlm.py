@@ -13,9 +13,12 @@ This builds the ``verify_harvest`` skill: send the latest head-camera frame + a
 yes/no prompt to an Ollama vision model and parse the answer. Fully local (no
 cloud) — ideal for the backpack Jetson.
 
-Model choice (Ollama, swap by name): ``moondream`` (tiny, fast — frequent checks)
-or ``qwen2.5vl`` (heavier, multilingual — if Moondream's vision is insufficient).
-The heavy LLM "brain" / planner (``qwen2.5``) is a separate Ollama model (Phase 2).
+Model choice (Ollama, swap by name): default ``qwen3-vl:2b`` — newest, tiny
+(1.9GB), multilingual (Japanese), fast enough for frequent checks on a Jetson.
+Because LangGraph fixes the procedure, the model's job is small (short yes/no /
+intent), so the same 2B can also serve as the Phase-2 "brain" (language feedback
+/ judgment). Bump to ``qwen3-vl:4b``/``:8b`` if 2B's judgment is insufficient.
+(Ollama's ``moondream`` is the older moondream2 — superseded by qwen3-vl:2b here.)
 
 The ``llm`` and ``encode`` args are injectable so the wiring is unit-testable
 with no Ollama server (see ``test_ollama_vlm.py``).
@@ -41,7 +44,7 @@ _AFFIRMATIVE = ("yes", "y", "true", "はい", "holding", "ある")
 def make_ollama_verify(
     frame_getter: Callable[[], Any],
     *,
-    model: str = "moondream",
+    model: str = "qwen3-vl:2b",
     host: str | None = None,
     prompt: str = DEFAULT_VERIFY_PROMPT,
     llm: Any = None,

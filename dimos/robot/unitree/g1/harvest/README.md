@@ -23,7 +23,7 @@ so this adds no new dependency.
 | `dummy_skills.py` | ⚠️ **DUMMY** full `HarvestSkills` (no robot) for end-to-end bring-up. `DummyGraspModule` is **stoppable** so the SafetyMonitor can cancel a reach mid-action; everything logs `[DUMMY]`. `make_vlm_verify_harvest` wires verify to a VLM. |
 | `harvest_module.py` | `HarvestModule` — a deployable DimOS Module that runs the whole flow on `start()`. Backs the `unitree-g1-okra-harvest` blueprint (`dimos run`). Defaults to DUMMY skills. |
 | `g1_speaker.py` | Japanese speech via the G1 speaker: `synth_pcm_jp` (pyopenjtalk, **local**) → `AudioClient.PlayStream`. `G1SpeakerAnnouncer` (non-blocking queue, cached). Onboard TTS can't do Japanese; this synthesises off-board and streams the PCM. Needs `pyopenjtalk` + `scipy`. |
-| `ollama_vlm.py` | `verify_harvest` via a **local Ollama vision model** (`make_ollama_verify`, default `moondream`; swap to `qwen2.5vl`). Sends the head frame + a yes/no prompt to Ollama. Fail-safe (no frame / Ollama down → False). |
+| `ollama_vlm.py` | `verify_harvest` via a **local Ollama vision model** (`make_ollama_verify`, default `qwen3-vl:2b` — newest tiny multilingual VLM; bump to `:4b`/`:8b`). Sends the head frame + a yes/no prompt to Ollama. Fail-safe (no frame / Ollama down → False). |
 | `nav_skills.py` | Base motion: `make_twist_move_cmd` (relative_move → `cmd_vel` Twist → G1Connection → SDK `LocoClient`; drive-for-duration then stop) and `make_navigate_stations` (`go_to_next_station` → injected DimOS nav skill / nav_stack). |
 | `act_grasp.py` | `ActGraspModule` — the REAL grasp: one **stoppable** okra-ACT reach episode (head + right-wrist frames + joints → ACT over ZMQ, same wire as ActBridge → arm/Dex1 targets). Waits for both cameras before inferring (2-cam tree model). `stop()` cancels mid-reach (SafetyMonitor). `make_zmq_act_call` talks to `act_service.py`. |
 | `graph.py` | `build_harvest_graph(skills, config, announcer)` — the `StateGraph`: nodes = phases, edges = the fixed sequence; conditional edges = the Verify gate, the §7 retry, and the §5 grasp/approach/sweep decision. |
@@ -38,14 +38,14 @@ dimos run unitree-g1-okra-harvest
 
 # LIVE: REAL head-cam YOLO detect + Japanese G1 speaker + Ollama-vision verify.
 # No arm motion (grasp = dummy). Needs robot + NX teleimager + ROBOT_INTERFACE +
-# local Ollama (`ollama pull moondream`):
+# local Ollama (`ollama pull qwen3-vl:2b`):
 dimos run unitree-g1-okra-harvest-live
 
 # LIVE-ARM: the above + the REAL arm reaches via okra-ACT (⚠️ ARM MOVES, e-stop
 # ready). Also needs act_service.py running. Base walking off; grasp-and-pull:
 #   NX:      teleimager-server --rs
 #   laptop:  ~/act-okura/.venv_act/bin/python scripts/act_service.py --serve
-#   laptop:  ollama serve && ollama pull moondream
+#   laptop:  ollama serve && ollama pull qwen3-vl:2b
 #   laptop:  ROBOT_INTERFACE=<nic> dimos run unitree-g1-okra-harvest-live-arm
 
 # Standalone dry-run script + tests:
@@ -206,7 +206,7 @@ a real subsystem — contracts below:
 | `go_to_next_station()` | `make_navigate_stations(navigate_fn, stations)` — wire `navigate_fn` to the DimOS nav skill/nav_stack (SLAM + planner + obstacle avoidance) once the field map is deployed. |
 | `swap_basket()` | Navigate to the collection point, swap an empty basket, return. |
 | `grasp_okra(okra, force)` | **Wired** to `ActGraspModule` (stoppable okra-ACT reach via `act_service.py`); the arm reaches the cut point, gripper close/cut are a separate program. |
-| `verify_harvest()` | **Wired** to a local Ollama vision model (`make_ollama_verify`, `moondream`/`qwen2.5vl`) — frame + "picked?" → yes/no. (Future: + Dex1 hold state.) |
+| `verify_harvest()` | **Wired** to a local Ollama vision model (`make_ollama_verify`, default `qwen3-vl:2b`) — frame + "picked?" → yes/no. (Future: + Dex1 hold state.) |
 | `record_harvest(rec)` | `dimos/memory2` (handbook §9 record). |
 | `announcer` (speak) | G1 `AudioClient.TtsMaker` / `PlayStream`, or DimOS `SpeakSkill` — see "Spoken announcements". |
 

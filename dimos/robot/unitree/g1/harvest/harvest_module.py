@@ -56,8 +56,8 @@ class HarvestModuleConfig(ModuleConfig):
     # False = log the lines to the console (no robot / no audio deps).
     use_g1_speaker: bool = False
     network_interface: str = ""  # NIC for the G1 audio DDS (defaults to ROBOT_INTERFACE)
-    # LIVE verify_harvest via a local Ollama vision model (e.g. "moondream",
-    # "qwen2.5vl"). Empty = placeholder verify (always True). See ollama_vlm.py.
+    # LIVE verify_harvest via a local Ollama vision model (e.g. "qwen3-vl:2b",
+    # "qwen3-vl:4b"). Empty = placeholder verify (always True). See ollama_vlm.py.
     vlm_model: str = ""
     ollama_host: str = ""  # Ollama base URL (empty = ChatOllama default localhost:11434)
     # LIVE: drive the real base for reposition/sweep via cmd_vel (SDK LocoClient).
