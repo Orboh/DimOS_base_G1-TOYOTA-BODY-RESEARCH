@@ -43,10 +43,15 @@ import cv2
 import numpy as np
 import pyrealsense2 as rs
 
-from dimos.core.transport import LCMTransport
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+
+# NB: import the low-level LCM directly, NOT dimos.core.transport — the latter
+# pulls in the DDS transport (cyclonedds) which is absent on the Jetson ik_cam env.
+# LCM(...).publish(Topic(name, MsgType), msg) yields the identical wire format
+# (channel "/topic#sensor_msgs.X" + msg.lcm_encode()) that LCMTransport produces.
+from dimos.protocol.pubsub.impl.lcmpubsub import LCM, Topic
 
 SERIAL = os.getenv("IK_CAMERA_SERIAL", "405622072808")
 WIDTH = int(os.getenv("IK_CAMERA_WIDTH", "640"))
@@ -55,6 +60,11 @@ CAPTURE_FPS = int(os.getenv("IK_CAMERA_CAPTURE_FPS", "15"))
 PC_FPS = float(os.getenv("IK_CAMERA_PC_FPS", "3.0"))
 INFO_FPS = float(os.getenv("IK_CAMERA_INFO_FPS", "1.0"))
 VOXEL = float(os.getenv("IK_CAMERA_VOXEL", "0.005"))
+# Drop points beyond this optical distance [m]. The head camera is pitched down and
+# sees the far floor/wall (median ~2m), which swamps the near okra (~0.3-0.6m) and
+# makes it un-clickable. Truncating to the near reach-workspace keeps only the okra +
+# immediate table so the click lands on the object, not the far background.
+DEPTH_TRUNC = float(os.getenv("IK_CAMERA_DEPTH_TRUNC", "0.8"))
 LCM_URL = os.getenv("LCM_DEFAULT_URL", "udpm://239.255.76.67:7667?ttl=1")
 # Match RealSenseCamera: cloud is published in the COLOR OPTICAL frame.
 OPTICAL_FRAME = "camera_color_optical_frame"
@@ -112,11 +122,11 @@ def main() -> int:
         flush=True,
     )
 
-    pc_tx = LCMTransport("/camera/pointcloud", PointCloud2, url=LCM_URL)
-    color_tx = LCMTransport("/camera/color_image", Image, url=LCM_URL)
-    info_tx = LCMTransport("/camera/camera_info", CameraInfo, url=LCM_URL)
-    for tx in (pc_tx, color_tx, info_tx):
-        tx.start()
+    lc = LCM(url=LCM_URL)
+    lc.start()
+    pc_topic = Topic("/camera/pointcloud", PointCloud2)
+    color_topic = Topic("/camera/color_image", Image)
+    info_topic = Topic("/camera/camera_info", CameraInfo)
     print(f"[ik-cam] publishing on {LCM_URL} (pc {PC_FPS}Hz, info {INFO_FPS}Hz)", flush=True)
 
     pc_interval = 1.0 / PC_FPS
@@ -157,13 +167,14 @@ def main() -> int:
                 depth_image=depth_img,
                 camera_info=camera_info,
                 depth_scale=depth_scale,
+                depth_trunc=DEPTH_TRUNC,
             ).voxel_downsample(VOXEL)
 
-            pc_tx.broadcast(None, cloud)
-            color_tx.broadcast(None, color_img)
+            lc.publish(pc_topic, cloud)
+            lc.publish(color_topic, color_img)
             if now - last_info >= info_interval:
                 camera_info.ts = ts
-                info_tx.broadcast(None, camera_info)
+                lc.publish(info_topic, camera_info)
                 last_info = now
 
             n += 1
@@ -171,11 +182,10 @@ def main() -> int:
                 pts, _ = cloud.as_numpy()
                 print(f"[ik-cam] {n} clouds, last={len(pts)} pts", flush=True)
     finally:
-        for tx in (pc_tx, color_tx, info_tx):
-            try:
-                tx.stop()
-            except Exception:
-                pass
+        try:
+            lc.stop()
+        except Exception:
+            pass
         pipeline.stop()
         print("[ik-cam] stopped", flush=True)
     return 0

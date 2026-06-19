@@ -166,6 +166,11 @@ def load_g1_right_arm_ik(
         raise RuntimeError(f"reduced model has no frame {TORSO_FRAME!r}")
     torso_in_root = data.oMf[reduced.getFrameId(TORSO_FRAME)].copy()
 
+    if ik_config is None:
+        # Reach-to-okra is a POSITION-only task: any approach orientation is acceptable.
+        # A full 6-DOF solve over-constrains the 7-DOF arm and forces large wrist
+        # reconfigurations / non-convergence. Solve position-only by default.
+        ik_config = PinocchioIKConfig(position_only=True)
     ik = PinocchioIK(reduced, data, ee_joint_id, ik_config)
 
     return G1RightArmIK(

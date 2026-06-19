@@ -18,6 +18,7 @@ from collections import defaultdict
 from collections.abc import Callable, Mapping, MutableMapping
 import importlib
 import inspect
+import os
 import shutil
 import sys
 import threading
@@ -104,6 +105,12 @@ class ModuleCoordinator(Resource):
 
     def start_rpc_service(self) -> None:
         """Expose the coordinator's API as @rpc methods over LCM."""
+        # Standalone runs (e.g. the IK-reach laptop app, which shares an LCM bus
+        # with a separate publisher) don't need the remote-control coordinator RPC.
+        # Serving it triggers _ensure_no_existing_service, which self-collides via
+        # multicast loopback once this run's modules are up. Opt out to skip it.
+        if os.environ.get("DIMOS_SKIP_COORDINATOR_RPC") == "1":
+            return
         if self._coordinator_rpc is not None:
             return
         self._coordinator_rpc = CoordinatorRPC.serve(self)

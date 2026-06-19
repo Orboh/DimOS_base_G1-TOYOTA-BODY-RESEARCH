@@ -109,8 +109,13 @@ class IkReachBridgeConfig(ModuleConfig):
     # (so R1 can pin it); LIVE REFUSES to move until this is set. MUST be set for LIVE.
     expected_click_frame: str = ""
     # Safety gates.
-    max_joint_delta_deg: float = 60.0          # gross one-shot sanity gate
-    require_converged: bool = True             # never publish a non-converged solve
+    # 90° one-shot cap: a reach from the rest pose to an okra at the edge of the
+    # wrist's ~0.45 m reach needs ~66° of shoulder-pitch swing (measured 2026-06-19).
+    max_joint_delta_deg: float = 90.0          # gross one-shot sanity gate
+    require_converged: bool = True             # never publish a solve worse than max_reach_pos_err_m
+    # Best-effort tolerance: an okra at the reach edge converges to ~24 mm, not <eps.
+    # Reaching to within this distance is an acceptable "reach toward" for the PoC.
+    max_reach_pos_err_m: float = 0.05
     # Torso-frame workspace box [m]: reject targets outside a plausible right-arm reach.
     ws_x: list[float] = [0.05, 0.85]
     ws_y: list[float] = [-0.85, 0.20]          # right arm lives at -Y
@@ -268,6 +273,18 @@ class IkReachBridge(Module):
         p_torso = np.asarray(self._T_torso_click.act(p_click)) + np.array(
             self.config.approach_offset_xyz, dtype=float
         )
+        # CALIB: raw click (cloud/optical frame) -> torso. Compare torso z against the
+        # real object height relative to torso_link (waist) to validate the transform.
+        logger.warning(
+            "IkReachBridge[CALIB] frame=%s click_optical=[%.3f %.3f %.3f] -> torso=[%.3f %.3f %.3f]",
+            click.frame_id,
+            float(click.x),
+            float(click.y),
+            float(click.z),
+            float(p_torso[0]),
+            float(p_torso[1]),
+            float(p_torso[2]),
+        )
 
         # workspace box in torso frame (blocker #11): reject implausible targets.
         if not (
@@ -295,9 +312,16 @@ class IkReachBridge(Module):
         q_sol, converged, err = self._arm.ik.solve(target, q_right)
         q_sol = np.asarray(q_sol, dtype=float).flatten()
 
-        if self.config.require_converged and not converged:
-            logger.warning(f"IkReachBridge: IK did not converge (err={err:.4f}); rejecting.")
+        if self.config.require_converged and not converged and err > self.config.max_reach_pos_err_m:
+            logger.warning(
+                f"IkReachBridge: IK err={err:.4f} m exceeds tol {self.config.max_reach_pos_err_m} m; rejecting."
+            )
             return
+        if not converged:
+            logger.warning(
+                f"IkReachBridge: accepting best-effort reach (err={err:.4f} m ≤ "
+                f"{self.config.max_reach_pos_err_m} m tol)."
+            )
         if not check_joint_delta(q_sol, q_right, self.config.max_joint_delta_deg):
             wi, wd = get_worst_joint_delta(q_sol, q_right)
             logger.warning(

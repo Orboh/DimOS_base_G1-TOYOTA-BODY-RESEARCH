@@ -66,8 +66,13 @@ _NIC = os.getenv("ROBOT_INTERFACE", "enp46s0")
 # Fail-safe live gate (blocker #10): explicit opt-in only; default is dry-run.
 _LIVE = os.getenv("IK_REACH_LIVE", "").strip() == "1"
 
-# Conservative reach speed for the first live motions (NOT the Stage-B 20 rad/s).
-_ARM_VEL_LIMIT = float(os.getenv("IK_ARM_VEL_LIMIT", "4.0"))
+# Reach slew rate [rad/s]. G1ArmSdkConnection (the DimOS arm-extension path) clips the
+# per-cycle command to measured + (target-measured)*vel_limit*dt. The per-cycle offset
+# (vel_limit*dt) must produce more than the joint breakaway torque (kp*offset) or the
+# arm never starts: real hw 2026-06-19, vel_limit=2.0 gave 0.008 rad / 0.64 Nm and 0
+# motion; the reference 20.0 gives 0.08 rad / 6.4 Nm and the arm slews to the target.
+# Using DimOS's reference value — the arm reaches fast (snaps to the okra).
+_ARM_VEL_LIMIT = float(os.getenv("IK_ARM_VEL_LIMIT", "20.0"))
 
 if _LIVE:
     logger.warning(
@@ -83,7 +88,10 @@ unitree_g1_ik_reach = autoconnect(
     # Pin 'rerun' so RerunWebSocketServer (the clicked_point producer) is always present
     # — a 'none' viewer would silently leave the bridge armed but unable to ever reach.
     vis_module("rerun"),
-    IkReachBridge.blueprint(log_only=not _LIVE),
+    IkReachBridge.blueprint(
+        log_only=not _LIVE,
+        expected_click_frame="/world/camera/pointcloud",  # R1-confirmed; required for LIVE
+    ),
     G1ArmSdkConnection.blueprint(
         network_interface=_NIC,
         arm_velocity_limit=_ARM_VEL_LIMIT,

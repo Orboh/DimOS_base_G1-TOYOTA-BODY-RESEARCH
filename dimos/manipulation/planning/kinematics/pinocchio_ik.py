@@ -67,6 +67,11 @@ class PinocchioIKConfig:
     damp: float = 1e-2
     dt: float = 1.0
     max_velocity: float = 10.0
+    # If True, solve for end-effector POSITION only (ignore orientation). Useful for
+    # "reach toward a point" tasks where any approach orientation is acceptable; avoids
+    # the over-constrained 6-DOF solve forcing large wrist reconfigurations. Default
+    # False preserves the original full-pose behavior for all existing callers.
+    position_only: bool = False
 
 
 class PinocchioIK:
@@ -172,19 +177,20 @@ class PinocchioIK:
         cfg = config or self._config
         q = q_init.copy()
         final_err = float("inf")
+        ndim = 3 if cfg.position_only else 6  # translation-only vs full pose
 
         for _ in range(cfg.max_iter):
             pinocchio.forwardKinematics(self._model, self._data, q)
             iMd = self._data.oMi[self._ee_joint_id].actInv(target_pose)
 
-            err = pinocchio.log(iMd).vector
+            err = pinocchio.log(iMd).vector[:ndim]  # [:3]=translation, [3:]=rotation
             final_err = float(norm(err))
             if final_err < cfg.eps:
                 return q, True, final_err
 
             J = pinocchio.computeJointJacobian(self._model, self._data, q, self._ee_joint_id)
-            J = -np.dot(pinocchio.Jlog6(iMd.inverse()), J)
-            v = -J.T.dot(solve(J.dot(J.T) + cfg.damp * np.eye(6), err))
+            J = (-np.dot(pinocchio.Jlog6(iMd.inverse()), J))[:ndim, :]
+            v = -J.T.dot(solve(J.dot(J.T) + cfg.damp * np.eye(ndim), err))
 
             # Clamp velocity to prevent explosion near singularities
             v_norm = norm(v)
