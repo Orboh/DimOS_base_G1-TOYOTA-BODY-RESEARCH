@@ -74,6 +74,47 @@ _LIVE = os.getenv("IK_REACH_LIVE", "").strip() == "1"
 # Using DimOS's reference value — the arm reaches fast (snaps to the okra).
 _ARM_VEL_LIMIT = float(os.getenv("IK_ARM_VEL_LIMIT", "20.0"))
 
+
+def _camera_info_overlay(ci):  # type: ignore[no-untyped-def]
+    """RerunBridge visual_override for the camera_info topic.
+
+    Logs the camera Pinhole at the COLOR IMAGE entity so the RGB frame renders as
+    a 3D image-plane co-located with the point cloud (overlay in one Spatial3D
+    view). Without image_topic the bridge logs a bare Pinhole at
+    world/camera/camera_info and the image stays a flat 2D panel. optical_frame is
+    omitted on purpose: the image msg's own frame_id already attaches the
+    Transform3D to tf#/camera_color_optical_frame at this same entity; passing
+    optical_frame here would set a SECOND parent on it, which Rerun rejects (see
+    CameraInfo.to_rerun). Same K + same optical frame as from_rgbd → points project
+    back onto their source pixels, so RGB and cloud line up with no extra transform.
+
+    Must be a module-level function (NOT a lambda): the blueprint config is pickled
+    to deploy the RerunBridge to a forkserver worker, and lambdas aren't picklable.
+    """
+    return ci.to_rerun(image_topic="world/camera/color_image")
+
+
+def _pointcloud_rgb_overlay(pc):  # type: ignore[no-untyped-def]
+    """RerunBridge visual_override for the pointcloud topic.
+
+    Render the cloud with its TRUE per-point camera RGB instead of the default
+    height-based turbo colormap, so the RGB image is effectively painted onto the
+    points (the okra shows in real color, easy to spot and click). The cloud
+    already carries RGB (publisher builds it via PointCloud2.from_rgbd), exposed by
+    as_numpy() as Nx3 floats in [0,1]; we just forward it to rr.Points3D instead of
+    letting to_rerun() fall back to class_ids/colormap. Falls back to the default
+    rendering if a cloud arrives without colors. Module-level (not a lambda) so the
+    blueprint config stays picklable for the forkserver worker.
+    """
+    import numpy as np
+    import rerun as rr
+
+    points, colors = pc.as_numpy()
+    if colors is None or len(points) == 0:
+        return pc.to_rerun()
+    rgb = (np.asarray(colors) * 255.0).clip(0, 255).astype(np.uint8)
+    return rr.Points3D(positions=np.asarray(points), colors=rgb, radii=0.005)
+
 if _LIVE:
     logger.warning(
         f"unitree-g1-ik-reach LAUNCHING **LIVE** — arm WILL move via rt/arm_sdk on NIC "
@@ -87,7 +128,18 @@ else:
 unitree_g1_ik_reach = autoconnect(
     # Pin 'rerun' so RerunWebSocketServer (the clicked_point producer) is always present
     # — a 'none' viewer would silently leave the bridge armed but unable to ever reach.
-    vis_module("rerun"),
+    vis_module(
+        "rerun",
+        rerun_config={
+            # Overlay the RGB frame with the point cloud in ONE 3D view. See
+            # _camera_info_overlay (module-level, not a lambda — config is pickled
+            # to the worker) for the full rationale.
+            "visual_override": {
+                "world/camera/camera_info": _camera_info_overlay,
+                "world/camera/pointcloud": _pointcloud_rgb_overlay,
+            },
+        },
+    ),
     IkReachBridge.blueprint(
         log_only=not _LIVE,
         expected_click_frame="/world/camera/pointcloud",  # R1-confirmed; required for LIVE
