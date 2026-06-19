@@ -38,11 +38,19 @@ SAFETY (fail-safe by default):
 - ``arm_velocity_limit`` defaults to a conservative 4 rad/s (NOT the Stage-B 20).
 - LIVE runs require a physical e-stop in hand and clear space around the arms.
 
-Run:
+Run (recommended — one-shot launcher handles Jetson camera + laptop net + native
+viewer; see examples/start_ik_reach.sh, edit the SITE CONFIG block for your IPs):
+    bash dimos/robot/unitree/g1/examples/start_ik_reach.sh          # DRY (no motion)
+    bash dimos/robot/unitree/g1/examples/start_ik_reach.sh --live   # arm moves; e-stop in hand
+
+Run (manual, equivalent):
     # Jetson:  LCM_DEFAULT_URL='udpm://239.255.76.67:7667?ttl=1' dimos run unitree-g1-ik-camera
+    #          (or run examples/ik_camera_standalone.py directly in the ik_cam env)
+    # laptop:  sudo ip link set lo multicast on   # dimos LCM-loopback prereq (once per boot)
     # laptop (DRY):  ROBOT_INTERFACE=enp46s0 LCM_DEFAULT_URL='udpm://239.255.76.67:7667?ttl=1' \
     #                dimos run unitree-g1-ik-reach
     # laptop (LIVE): add IK_REACH_LIVE=1  (e-stop in hand, area clear)
+    # viewer:  dimos-viewer --connect rerun+http://127.0.0.1:9877/proxy --ws-url ws://127.0.0.1:3030/ws
 """
 
 from __future__ import annotations
