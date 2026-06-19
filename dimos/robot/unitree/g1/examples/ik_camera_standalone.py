@@ -59,7 +59,7 @@ HEIGHT = int(os.getenv("IK_CAMERA_HEIGHT", "480"))
 CAPTURE_FPS = int(os.getenv("IK_CAMERA_CAPTURE_FPS", "15"))
 PC_FPS = float(os.getenv("IK_CAMERA_PC_FPS", "3.0"))
 INFO_FPS = float(os.getenv("IK_CAMERA_INFO_FPS", "1.0"))
-VOXEL = float(os.getenv("IK_CAMERA_VOXEL", "0.005"))
+VOXEL = float(os.getenv("IK_CAMERA_VOXEL", "0.002"))  # 2mm voxel: dense enough to read the okra (≈6x the old 5mm). Smaller=denser but heavier.
 # Drop points beyond this optical distance [m]. The head camera is pitched down and
 # sees the far floor/wall (median ~2m), which swamps the near okra (~0.3-0.6m) and
 # makes it un-clickable. Truncating to the near reach-workspace keeps only the okra +

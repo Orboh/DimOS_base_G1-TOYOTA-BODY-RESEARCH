@@ -114,6 +114,8 @@ def _pointcloud_rgb_overlay(pc):  # type: ignore[no-untyped-def]
     rendering if a cloud arrives without colors. Module-level (not a lambda) so the
     blueprint config stays picklable for the forkserver worker.
     """
+    import os
+
     import numpy as np
     import rerun as rr
 
@@ -121,7 +123,12 @@ def _pointcloud_rgb_overlay(pc):  # type: ignore[no-untyped-def]
     if colors is None or len(points) == 0:
         return pc.to_rerun()
     rgb = (np.asarray(colors) * 255.0).clip(0, 255).astype(np.uint8)
-    return rr.Points3D(positions=np.asarray(points), colors=rgb, radii=0.005)
+    # Point size. radii is in METERS (world-space): a point looks bigger as you
+    # zoom in. Use a NEGATIVE value for screen-space (UI) points of |r| pixels —
+    # constant on-screen size regardless of zoom. Tune live via IK_PC_POINT_RADIUS
+    # without editing code (read here so the forkserver worker picks up the env).
+    radius = float(os.getenv("IK_PC_POINT_RADIUS", "0.0015"))
+    return rr.Points3D(positions=np.asarray(points), colors=rgb, radii=radius)
 
 if _LIVE:
     logger.warning(
