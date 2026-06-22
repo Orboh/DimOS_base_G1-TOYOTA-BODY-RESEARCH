@@ -99,6 +99,14 @@ class IkReachBridgeConfig(ModuleConfig):
     log_only: bool = True
     # Reach target shaping (torso_link frame).
     approach_offset_xyz: list[float] = [0.0, 0.0, 0.0]  # +X fwd, +Y left, +Z up [m]
+    # Gripper-tip offset from the wrist (right_wrist_yaw_joint), in the WRIST/EE frame
+    # [m]. IK drives THIS tip onto the clicked target. Because the tip is a frame
+    # rigidly attached to the wrist, wrist-yaw rotation is accounted for exactly each
+    # solve iteration (not a frozen pre-offset). Change this per gripper shape.
+    # Default = palm 20 cm out along the wrist +X axis (custom gripper; the bare G1
+    # palm reference is PALM_OFFSET_FROM_WRIST ≈ 4 cm). Applied at module construction
+    # (load-time); changing it requires a restart. Tune y/z if the tip is off-axis.
+    gripper_offset_xyz: list[float] = [0.20, 0.0, 0.0]
     # Fixed EE orientation as quaternion xyzw in the IK ROOT frame; empty = hold the
     # current EE orientation (position-only reach; safest for R3).
     fixed_orientation_xyzw: list[float] = []
@@ -117,9 +125,14 @@ class IkReachBridgeConfig(ModuleConfig):
     # Reaching to within this distance is an acceptable "reach toward" for the PoC.
     max_reach_pos_err_m: float = 0.05
     # Torso-frame workspace box [m]: reject targets outside a plausible right-arm reach.
-    ws_x: list[float] = [0.05, 0.85]
-    ws_y: list[float] = [-0.85, 0.20]          # right arm lives at -Y
-    ws_z: list[float] = [-0.45, 0.55]
+    # Re-fit to the measured palm-tip reach envelope with the 20 cm gripper_offset_xyz
+    # (200k uniform-joint samples in torso frame: x[-0.57,0.58] y[-0.71,0.43] z[-0.32,0.83])
+    # plus margin. Two human limits kept tighter than kinematics on purpose: x lower
+    # (forward-only — okra are in front, never behind/into the torso) and y upper
+    # (don't reach across the body to the left; the right arm lives at -Y).
+    ws_x: list[float] = [0.05, 0.65]
+    ws_y: list[float] = [-0.75, 0.20]          # right arm lives at -Y
+    ws_z: list[float] = [-0.35, 0.85]          # raised: 20 cm tip reaches higher/lower
     reach_min_interval_s: float = 2.0          # debounce: ignore clicks during/just after a reach
     max_click_age_s: float = 5.0               # reject stale clicks (laptop-local receive time)
     max_state_age_s: float = 1.0               # reject reach if measured motor_states is stale
@@ -137,7 +150,10 @@ class IkReachBridge(Module):
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self._arm = load_g1_right_arm_ik(self.config.urdf_path)
+        self._arm = load_g1_right_arm_ik(
+            self.config.urdf_path,
+            gripper_offset_xyz=self.config.gripper_offset_xyz,
+        )
         # FAIL CLOSED: every downstream index (warm-start pos[22:29], q_sol, the
         # 14-vec, the delta-gate message) assumes the canonical right-arm order.
         # A non-canonical reduced order would silently map shoulder targets onto

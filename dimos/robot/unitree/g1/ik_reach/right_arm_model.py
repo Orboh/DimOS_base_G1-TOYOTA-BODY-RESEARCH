@@ -68,8 +68,12 @@ RIGHT_ARM_JOINTS: list[str] = [
 ]
 EE_JOINT_NAME = "right_wrist_yaw_joint"
 TORSO_FRAME = "torso_link"
-# right_hand_palm_joint is a fixed offset from the wrist (g1.urdf:976); optional EE post-offset.
+# right_hand_palm_joint is a fixed offset from the wrist (g1.urdf:976); used as the
+# DEFAULT gripper-tip offset (the point IK drives onto the target). Override per
+# gripper shape via load_g1_right_arm_ik(gripper_offset_xyz=...).
 PALM_OFFSET_FROM_WRIST = np.array([0.0415, -0.003, 0.0])
+# Name of the operational frame we attach to the wrist for tip-based IK.
+GRIPPER_TIP_FRAME = "gripper_tip"
 
 
 @dataclass
@@ -79,6 +83,8 @@ class G1RightArmIK:
     Attributes:
         ik: PinocchioIK over the reduced 7-DOF model (solve/FK operate in ROOT frame).
         ee_joint_id: EE joint id in the reduced model (right_wrist_yaw_joint).
+        ee_frame_id: id of the gripper-tip operational frame the IK actually targets
+            (rigidly attached to the wrist; offset rotates with wrist motion).
         joint_names: actual reduced-model joint order (verify == RIGHT_ARM_JOINTS).
         torso_in_root: constant SE3 placement (pinocchio oMtorso) of torso_link in
             the solver's ROOT frame.
@@ -87,6 +93,7 @@ class G1RightArmIK:
 
     ik: PinocchioIK
     ee_joint_id: int
+    ee_frame_id: int
     joint_names: list[str]
     torso_in_root: Any  # pinocchio.SE3 (oMtorso)
     lower: NDArray[np.floating[Any]]
@@ -105,7 +112,12 @@ class G1RightArmIK:
         return self.torso_in_root.actInv(oMx)
 
     def fk_root(self, q: NDArray[np.floating[Any]]) -> Any:
-        """EE pose (SE3) in the solver ROOT frame for joint config q."""
+        """Gripper-tip pose (SE3) in the solver ROOT frame for joint config q.
+
+        Returns the tip frame (ee_frame_id) the IK targets, not the bare wrist joint.
+        Tip orientation == wrist orientation (identity relative rotation), so callers
+        that use only .rotation (orientation hold) are unaffected by the offset.
+        """
         return self.ik.forward_kinematics(np.asarray(q, dtype=np.float64))
 
     def clamp_ok(self, q: NDArray[np.floating[Any]]) -> bool:
@@ -117,8 +129,18 @@ class G1RightArmIK:
 def load_g1_right_arm_ik(
     urdf_path: str | Path = DEFAULT_URDF,
     ik_config: PinocchioIKConfig | None = None,
+    gripper_offset_xyz: NDArray[np.floating[Any]] | list[float] | tuple[float, float, float] = PALM_OFFSET_FROM_WRIST,
 ) -> G1RightArmIK:
     """Build the 7-DOF right-arm reduced model and wrap it in PinocchioIK.
+
+    Args:
+        urdf_path: G1 URDF path.
+        ik_config: solver config (defaults to position-only; see below).
+        gripper_offset_xyz: gripper-tip offset from the wrist (right_wrist_yaw_joint)
+            expressed in the WRIST frame [m]. The IK drives THIS tip onto the target,
+            and because the tip is a frame rigidly attached to the wrist, wrist-yaw
+            (and all joint) rotation is accounted for every solver iteration. Set this
+            per gripper shape. Defaults to PALM_OFFSET_FROM_WRIST (palm reference).
 
     Raises:
         FileNotFoundError: if the URDF is missing.
@@ -155,8 +177,22 @@ def load_g1_right_arm_ik(
             "caller MUST permute warm-start and q_sol to match."
         )
 
-    data = reduced.createData()
     ee_joint_id = reduced.getJointId(EE_JOINT_NAME)
+
+    # Attach a gripper-tip operational frame to the wrist joint at the configured
+    # offset (wrist-frame coords). IK targets this frame, so the offset rotates with
+    # the wrist and wrist-yaw rotation is handled exactly each iteration. MUST be added
+    # before createData() so the frame buffers (data.oMf) are allocated for it.
+    offset = np.asarray(gripper_offset_xyz, dtype=np.float64).reshape(3)
+    tip_placement = pinocchio.SE3(np.eye(3), offset)
+    reduced.addFrame(
+        pinocchio.Frame(
+            GRIPPER_TIP_FRAME, ee_joint_id, 0, tip_placement, pinocchio.FrameType.OP_FRAME
+        )
+    )
+
+    data = reduced.createData()
+    ee_frame_id = reduced.getFrameId(GRIPPER_TIP_FRAME)
 
     # Capture the constant torso_link placement in the ROOT frame at neutral.
     qn = pinocchio.neutral(reduced)
@@ -171,11 +207,12 @@ def load_g1_right_arm_ik(
         # A full 6-DOF solve over-constrains the 7-DOF arm and forces large wrist
         # reconfigurations / non-convergence. Solve position-only by default.
         ik_config = PinocchioIKConfig(position_only=True)
-    ik = PinocchioIK(reduced, data, ee_joint_id, ik_config)
+    ik = PinocchioIK(reduced, data, ee_joint_id, ik_config, ee_frame_id=ee_frame_id)
 
     return G1RightArmIK(
         ik=ik,
         ee_joint_id=ee_joint_id,
+        ee_frame_id=ee_frame_id,
         joint_names=joint_names,
         torso_in_root=torso_in_root,
         lower=np.asarray(reduced.lowerPositionLimit, dtype=np.float64).copy(),
@@ -203,6 +240,7 @@ def fk_sanity_check(arm: G1RightArmIK | None = None) -> None:
     print(f"canonical [22:29]     : {list(canonical)}")
     print(f"order matches (norm)  : {order_ok}")
     print(f"ee_joint_id           : {arm.ee_joint_id}")
+    print(f"ee_frame_id (tip)     : {arm.ee_frame_id}")
     q0 = np.zeros(arm.ik.nq)
     oMee = arm.fk_root(q0)
     print(f"FK(neutral) ROOT  xyz : {np.asarray(oMee.translation)}")
@@ -210,6 +248,23 @@ def fk_sanity_check(arm: G1RightArmIK | None = None) -> None:
     print(f"torso in ROOT     xyz : {np.asarray(arm.torso_in_root.translation)}")
     print(f"lower limits          : {arm.lower}")
     print(f"upper limits          : {arm.upper}")
+
+    # --- gripper-tip frame checks (Method B) ------------------------------------
+    # Bare wrist-joint placement vs the tip frame: their difference == the offset
+    # rotated into ROOT. Demonstrates the offset is applied (vs the old wrist-only target).
+    pinocchio.forwardKinematics(arm.ik.model, arm.ik._data, q0)
+    pinocchio.updateFramePlacements(arm.ik.model, arm.ik._data)
+    wrist0 = arm.ik._data.oMi[arm.ee_joint_id].translation.copy()
+    tip0 = oMee.translation
+    print(f"tip - wrist (ROOT)    : {np.asarray(tip0) - np.asarray(wrist0)}  (== offset rotated to ROOT)")
+
+    # Wrist-yaw consideration: rotating the last joint MUST move the tip (unless the
+    # offset is parallel to the yaw axis). This is exactly what Method A could not do.
+    q_yaw = q0.copy()
+    q_yaw[-1] = np.radians(30.0)  # right_wrist_yaw_joint is the last reduced DOF
+    tip_yaw = arm.fk_root(q_yaw).translation
+    print(f"tip @ wrist_yaw=30deg : {np.asarray(tip_yaw)}")
+    print(f"tip shift from yaw    : {np.asarray(tip_yaw) - np.asarray(tip0)}  (nonzero => yaw is accounted for)")
 
 
 if __name__ == "__main__":
