@@ -107,6 +107,11 @@ class IkReachBridgeConfig(ModuleConfig):
     # palm reference is PALM_OFFSET_FROM_WRIST ≈ 4 cm). Applied at module construction
     # (load-time); changing it requires a restart. Tune y/z if the tip is off-axis.
     gripper_offset_xyz: list[float] = [0.20, 0.0, 0.0]
+    # Handoff standoff [m] along the EE approach axis (= normalize(gripper_offset_xyz)).
+    # IK stops the hand TIP this far SHORT of the clicked okra, leaving a pre-grasp pose
+    # for ACT to close the last few cm (design: ① IK reach → handoff → ② ACT grasp).
+    # 0.0 = drive the tip exactly onto the okra (today's validated behavior). Load-time.
+    standoff_m: float = 0.05   # placeholder: tune to ACT's handoff distance once known
     # Fixed EE orientation as quaternion xyzw in the IK ROOT frame; empty = hold the
     # current EE orientation (position-only reach; safest for R3).
     fixed_orientation_xyzw: list[float] = []
@@ -153,6 +158,7 @@ class IkReachBridge(Module):
         self._arm = load_g1_right_arm_ik(
             self.config.urdf_path,
             gripper_offset_xyz=self.config.gripper_offset_xyz,
+            standoff_m=self.config.standoff_m,
         )
         # FAIL CLOSED: every downstream index (warm-start pos[22:29], q_sol, the
         # 14-vec, the delta-gate message) assumes the canonical right-arm order.
@@ -355,9 +361,12 @@ class IkReachBridge(Module):
         arm14 = np.concatenate([q_left, q_sol])  # left7 hold + right7 IK (canonical order)
         if self.config.log_every_n and self._count % self.config.log_every_n == 0:
             tag = "DRY" if self.config.log_only else "LIVE->arm_sdk"
+            # Real hand tip (torso frame): with standoff_m>0 it lands short of p_torso.
+            tip_torso = self._arm.root_to_torso_pose(self._arm.fk_tip(q_sol)).translation
             logger.info(
                 f"[{tag}] reach #{self._count}: click({click.frame_id}) "
-                f"-> torso{np.round(p_torso, 3)} | q_right={np.round(q_sol, 3)} "
+                f"-> torso{np.round(p_torso, 3)} | hand_tip(torso){np.round(np.asarray(tip_torso), 3)} "
+                f"standoff={self.config.standoff_m} | q_right={np.round(q_sol, 3)} "
                 f"converged={converged} err={err:.4f}"
             )
         if not self.config.log_only:
