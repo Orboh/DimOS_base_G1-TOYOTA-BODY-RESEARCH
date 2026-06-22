@@ -103,10 +103,18 @@ class IkReachBridgeConfig(ModuleConfig):
     # [m]. IK drives THIS tip onto the clicked target. Because the tip is a frame
     # rigidly attached to the wrist, wrist-yaw rotation is accounted for exactly each
     # solve iteration (not a frozen pre-offset). Change this per gripper shape.
-    # Default = palm 20 cm out along the wrist +X axis (custom gripper; the bare G1
-    # palm reference is PALM_OFFSET_FROM_WRIST ≈ 4 cm). Applied at module construction
-    # (load-time); changing it requires a restart. Tune y/z if the tip is off-axis.
-    gripper_offset_xyz: list[float] = [0.20, 0.0, 0.0]
+    # Gripper = Unitree Dex1-1:
+    #   G1 part  (g1.urdf right_hand_palm_joint, attached directly to right_wrist_yaw_link,
+    #             no intermediate link/plate): yaw-motor -> hand-mount = [0.0415, -0.003, 0]
+    #   Dex1-1   mount-face -> fingertip = 0.143 m (Unitree spec: 143x78x67mm body,
+    #             jaw length 80mm). NOTE the dex1_1_service URDF joint-origin sum (~0.097)
+    #             undercounts — it stops at the last link ORIGIN, missing the jaw/fingertip
+    #             mesh extent; the 143mm spec is the real mount-to-tip.
+    #   total = [0.0415 + 0.143, -0.003, 0] = [0.1845, -0.003, 0]
+    # Only remaining assumption: the Dex1-1 finger axis is mounted along wrist +X (same way
+    # the rubber hand pointed). Verify/fine-tune from the live CALIB log (hand_tip torso pos
+    # vs the real okra). A cutting attachment, if fitted, extends this further. Load-time.
+    gripper_offset_xyz: list[float] = [0.1845, -0.003, 0.0]
     # Handoff standoff [m] along the EE approach axis (= normalize(gripper_offset_xyz)).
     # IK stops the hand TIP this far SHORT of the clicked okra, leaving a pre-grasp pose
     # for ACT to close the last few cm (design: ① IK reach → handoff → ② ACT grasp).
