@@ -64,6 +64,10 @@ class HarvestModuleConfig(ModuleConfig):
     # LIVE: drive the real base for reposition/sweep via cmd_vel (SDK LocoClient).
     # ⚠️ THE ROBOT WALKS — default off; enable only with real safety checks + operator.
     use_base_move: bool = False
+    # LIVE: use a ZED depth image as the detector's depth_getter, improving the
+    # 3D position estimate (replaces the assumed-depth pinhole). Used by the
+    # blueprint where ZEDCamera publishes depth_image (unitree-g1-okra-harvest-zed).
+    use_zed_depth: bool = False
     # LIVE: real okra-ACT reach for grasp (stoppable ActGraspModule). ⚠️ THE ARM
     # MOVES — default off; needs act_service + arm/gripper connections wired.
     use_act_grasp: bool = False
@@ -86,6 +90,7 @@ class HarvestModule(Module):
 
     config: HarvestModuleConfig
     color_image: In[Image]  # head camera (LIVE mode); unused in dummy mode
+    depth_image: In[Image]  # ZED depth (LIVE + use_zed_depth); falls back to assumed depth when absent
     cam_right_wrist: In[Image]  # right-wrist camera (LIVE + use_act_grasp, 2-cam tree model)
     cmd_vel: Out[Twist]  # base velocity (LIVE + use_base_move) -> G1Connection
     # Arm streams (LIVE + use_act_grasp) -> G1ArmSdkConnection / G1GripperConnection.
@@ -102,6 +107,7 @@ class HarvestModule(Module):
         self._voice: Any = None
         self._lock = threading.Lock()
         self._latest_image: Image | None = None
+        self._latest_depth: Image | None = None
         self._latest_wrist: Image | None = None
         self._latest_state: JointState | None = None
         self._latest_gripper: float = 0.0
@@ -156,6 +162,10 @@ class HarvestModule(Module):
         with self._lock:
             self._latest_image = image
 
+    def _on_depth(self, image: Image) -> None:
+        with self._lock:
+            self._latest_depth = image
+
     @rpc
     def start(self) -> None:
         super().start()
@@ -171,6 +181,32 @@ class HarvestModule(Module):
         else:
             self.register_disposable(Disposable(self.color_image.subscribe(self._on_image)))
             targets = {c.strip() for c in self.config.target_classes.split(",") if c.strip()}
+
+            depth_getter = None
+            depth_note = "depth=assumed(0.45m)"
+            if self.config.use_zed_depth:
+                import numpy as np
+
+                self.register_disposable(Disposable(self.depth_image.subscribe(self._on_depth)))
+                _FALLBACK_DEPTH_M = 0.45  # [m] used when ZED has no valid value at the pixel
+
+                def _zed_depth_getter(u: float, v: float) -> float:
+                    """Look up ZED metric depth [m] at pixel (u, v); fallback if invalid."""
+                    with self._lock:
+                        img = self._latest_depth
+                    if img is None:
+                        return _FALLBACK_DEPTH_M
+                    try:
+                        arr = img.data  # float32 [H, W] (ZED MEASURE.DEPTH: metres)
+                        h, w = arr.shape[:2]
+                        d = float(arr[int(np.clip(v, 0, h - 1)), int(np.clip(u, 0, w - 1))])
+                        return d if np.isfinite(d) and 0.05 < d < 10.0 else _FALLBACK_DEPTH_M
+                    except Exception:  # noqa: BLE001
+                        return _FALLBACK_DEPTH_M
+
+                depth_getter = _zed_depth_getter
+                depth_note = "depth=ZED"
+
             verify_fn = None
             verify_note = "verify=[LIVE-TODO] placeholder"
             if self.config.vlm_model:
@@ -218,8 +254,9 @@ class HarvestModule(Module):
                 verify_fn=verify_fn,
                 move_cmd=move_cmd,
                 grasp_module=grasp_override,
+                depth_getter=depth_getter,
             )
-            mode = f"LIVE — real YOLO detect; {verify_note}; {move_note}; {grasp_note}"
+            mode = f"LIVE — real YOLO detect; {depth_note}; {verify_note}; {move_note}; {grasp_note}"
 
         # Real §6 checks when real motion is on (file e-stop + torque), else dummy.
         self._monitor = SafetyMonitor(
