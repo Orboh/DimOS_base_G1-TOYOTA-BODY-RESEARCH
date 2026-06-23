@@ -90,7 +90,7 @@ class ActBridgeConfig(ModuleConfig):
     # grasp_duration_s and stops (one grasp per trigger). The okra-harvest
     # blueprint sets this True so IK owns the pre-grasp until it fires reach_done.
     trigger_mode: bool = False
-    grasp_duration_s: float = 4.0
+    grasp_duration_s: float = 8.0
     # 8-DoF right-only policy (tree-right model). False (default) = legacy 16-dim
     # both-arms wire. True = state/action are [right arm 7, right grip 1]; the
     # head image goes as cam_high and right_wrist_image (if wired) as cam_right_wrist.

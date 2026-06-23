@@ -85,7 +85,7 @@ _LIVE = os.getenv("IK_REACH_LIVE", "").strip() == "1"
 _ARM_VEL_LIMIT = float(os.getenv("IK_ARM_VEL_LIMIT", "20.0"))
 
 # How long ACT drives the grasp after reach_done [s] (fixed-duration stop).
-_GRASP_DURATION_S = float(os.getenv("OKRA_GRASP_DURATION_S", "4.0"))
+_GRASP_DURATION_S = float(os.getenv("OKRA_GRASP_DURATION_S", "8.0"))
 
 
 def _camera_info_overlay(ci):  # type: ignore[no-untyped-def]

@@ -30,7 +30,7 @@ LAPTOP_IP="${LAPTOP_IP:-192.168.123.222}"
 G1_NX_PW="${G1_NX_PW:-123}"
 CYCLONEDDS_HOME="${CYCLONEDDS_HOME:-/home/sota/cyclonedds-noshm}"
 ACT_VENV_PY="${ACT_VENV_PY:-$HOME/act-okura/.venv_act/bin/python}"
-export OKRA_GRASP_DURATION_S="${OKRA_GRASP_DURATION_S:-4.0}"
+export OKRA_GRASP_DURATION_S="${OKRA_GRASP_DURATION_S:-8.0}"
 # ACT model: 8-dim right-only, 2-camera (cam_high + cam_right_wrist) tree-right.
 export ACT_REPO_ID="${ACT_REPO_ID:-sotata/act-okura-pick-tree-right-06162026}"
 export ACT_DATASET_REPO="${ACT_DATASET_REPO:-sotata/okura-pick-tree-right-20260616}"
