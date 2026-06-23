@@ -173,13 +173,44 @@ HarvestModule started — LIVE — real YOLO detect; depth=ZED; verify=Ollama:qw
 
 ---
 
+## Enabling NEURAL depth (optional, much denser depth)
+
+`PERFORMANCE` is the default because `NEURAL` needs TensorRT + an optimized
+engine. NEURAL fills depth holes on low-texture / single-colour surfaces, so a
+near-field object (e.g. a banana at 30 cm) gets a dense, accurate pointcloud
+where PERFORMANCE leaves only sparse edge points. Verified on the Orin
+(2026-06-23): at 30 cm, PERFORMANCE gave the centre-pixel method a 0.45 m
+fallback and ~4k surface points; NEURAL gave ~0.28 m and ~60k points, with all
+three 3D methods agreeing.
+
+This Orin ships TensorRT **runtime** only — NEURAL also needs the dev/bindings,
+then a one-time engine optimization:
+
+```bash
+# 1. TensorRT dev + python bindings (same v10.3 as the runtime; NVIDIA L4T repo)
+sudo apt-get update
+sudo apt-get install -y python3-libnvinfer libnvinfer-dev   # adds NvInfer.h + libnvinfer.so + python3 tensorrt
+# without these, ZED_Diagnostic prints "Cannot find TENSORRT" and -nrlo does nothing
+
+# 2. Optimize (and download) the NEURAL depth engine (~6 min on Orin; jetson_clocks helps)
+sudo jetson_clocks
+/usr/local/zed/tools/ZED_Diagnostic -c -nrlo
+# writes /usr/local/zed/resources/.neural_depth_*.model_optimized-...
+# NOTE: the process can sit at 100% before exiting; the engine is already written.
+
+# 3. use NEURAL: blueprint ZEDCamera(depth_mode="NEURAL"), or the scripts' --depth_mode NEURAL
+```
+
+NEURAL is heavier than PERFORMANCE (GPU load, lower FPS) — pick per task. Other
+modes: `NEURAL_LIGHT` (faster, optimize with `-nrlo_light`), `NEURAL_PLUS`
+(highest quality, `-nrlo_plus`).
+
 ## Gotchas (hit during bring-up)
 
-- **NEURAL depth needs TensorRT.** With `depth_mode=NEURAL` and no TensorRT the
-  SDK errors `NEURAL TRT NOT FOUND` then `CORRUPTED SDK INSTALLATION` and the
-  camera fails to open. The blueprint therefore pins
-  `ZEDCamera(depth_mode="PERFORMANCE")`. Switch back to NEURAL only after
-  installing TensorRT for the depth models.
+- **NEURAL depth needs TensorRT.** With `depth_mode=NEURAL` and no TensorRT
+  engine the SDK errors `NEURAL TRT NOT FOUND` then `CORRUPTED SDK INSTALLATION`
+  and the camera fails to open. See "Enabling NEURAL depth" above; the blueprint
+  pins `ZEDCamera(depth_mode="PERFORMANCE")` by default.
 - **`libsl_zed.so` not found** → step 3 (permissions + `ldconfig`) wasn't done.
 - **`No module named pip` in the venv** → it's a `uv` venv; install wheels with
   `uv pip install --python .venv/bin/python <wheel>`, not `python -m pip`.
