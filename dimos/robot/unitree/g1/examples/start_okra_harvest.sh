@@ -112,6 +112,11 @@ echo "== [4/5] starting ACT inference service (ZMQ :5701) =="
 if [ ! -x "$ACT_VENV_PY" ]; then
   echo "  ERROR: ACT venv python not found at $ACT_VENV_PY (set ACT_VENV_PY). ActBridge will time out."
 else
+  # Free a stale ACT service holding :5701 (e.g. from a previous crashed run),
+  # else the new one fails to bind (ZMQError: Address already in use).
+  pkill -f "act_service.py --serve" 2>/dev/null
+  fuser -k 5701/tcp 2>/dev/null
+  sleep 1
   ( cd "$REPO" && "$ACT_VENV_PY" scripts/act_service.py --serve ) >/tmp/act_service.log 2>&1 &
   ACT_PID=$!
   echo "  act_service.py launched (pid $ACT_PID, log /tmp/act_service.log); waiting for 'serving on' ..."

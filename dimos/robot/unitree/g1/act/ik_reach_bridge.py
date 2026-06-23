@@ -155,7 +155,11 @@ class IkReachBridgeConfig(ModuleConfig):
     # settled at the pre-grasp), so ACT starts from the real pre-grasp pose (not
     # a mid-slew transitional pose). In DRY (log_only) the arm is not driven, so
     # reach_done fires immediately (see _reach) — this only gates the LIVE wait.
-    settle_tol_deg: float = 2.0                # per-joint convergence tolerance [deg]
+    # Per-joint convergence tolerance [deg]. Must exceed arm_sdk's steady-state
+    # clip-to-measured tracking residual (~0.064 rad ≈ 3.7° measured on real hw
+    # 2026-06-23), else reach_done rarely fires and ACT never starts. 5° leaves
+    # margin; the ~3.7° pre-grasp offset is well within what ACT corrects.
+    settle_tol_deg: float = 5.0
     settle_timeout_s: float = 5.0              # give up waiting for settle after this [s]
     log_every_n: int = 1
 
