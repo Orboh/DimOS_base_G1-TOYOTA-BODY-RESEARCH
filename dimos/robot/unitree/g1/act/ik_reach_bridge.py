@@ -155,12 +155,15 @@ class IkReachBridgeConfig(ModuleConfig):
     # settled at the pre-grasp), so ACT starts from the real pre-grasp pose (not
     # a mid-slew transitional pose). In DRY (log_only) the arm is not driven, so
     # reach_done fires immediately (see _reach) — this only gates the LIVE wait.
-    # Per-joint convergence tolerance [deg]. Must exceed arm_sdk's steady-state
-    # clip-to-measured tracking residual (~0.064 rad ≈ 3.7° measured on real hw
-    # 2026-06-23), else reach_done rarely fires and ACT never starts. 5° leaves
-    # margin; the ~3.7° pre-grasp offset is well within what ACT corrects.
-    settle_tol_deg: float = 5.0
-    settle_timeout_s: float = 5.0              # give up waiting for settle after this [s]
+    # IK->ACT handoff settle gate. arm_sdk's clip-to-measured leaves a POSE-
+    # DEPENDENT steady-state residual (often > several deg, sometimes > 5°,
+    # measured on real hw 2026-06-23), so judging "within tol of q_sol" is
+    # unreliable. PRIMARY trigger is "the arm STOPPED MOVING" (reached steady
+    # state); the residual is then arm_sdk's limit and ACT corrects the rest.
+    settle_tol_deg: float = 5.0    # fast-path: fire at once if this close to q_sol
+    settle_move_deg: float = 0.5   # per-poll motion below this counts as "not moving"
+    settle_stable_s: float = 0.4   # low motion sustained this long = settled (stopped)
+    settle_timeout_s: float = 5.0  # fire anyway after this (arm is at steady state by now)
     log_every_n: int = 1
 
 
@@ -408,30 +411,49 @@ class IkReachBridge(Module):
             logger.info("IkReachBridge[DRY]: arm not driven; firing reach_done immediately (no settle wait).")
             self.reach_done.publish(Bool(data=True))
             return
+        # Fire when the arm SETTLES: reached q_sol (fast path), OR stopped moving
+        # (steady state — residual is arm_sdk's clip-to-measured limit), OR timed
+        # out (arm is at steady state by now). Never silently strand ACT.
         tol = float(np.deg2rad(self.config.settle_tol_deg))
+        move_eps = float(np.deg2rad(self.config.settle_move_deg))
+        poll_dt = 0.05
+        stable_needed = max(1, int(self.config.settle_stable_s / poll_dt))
         deadline = now + self.config.settle_timeout_s
+        prev: np.ndarray | None = None
+        stable = 0
         while not self._stop_event.is_set():
-            if time.time() > deadline:
-                logger.warning(
-                    f"IkReachBridge: arm did not settle within {self.config.settle_timeout_s}s "
-                    f"(tol {self.config.settle_tol_deg}deg); NOT firing reach_done."
-                )
-                return
             with self._lock:
                 st = self._latest_state
+            meas_right: np.ndarray | None = None
             if st is not None:
                 pos_now = list(st.position)
                 if len(pos_now) >= _ARM_START + _NUM_ARM:
-                    meas_right = np.array([float(x) for x in pos_now[_RIGHT_SLICE]])
-                    if np.all(np.isfinite(meas_right)) and float(np.max(np.abs(meas_right - q_sol))) < tol:
-                        logger.info(
-                            f"IkReachBridge: arm settled at pre-grasp "
-                            f"(worst joint err {float(np.max(np.abs(meas_right - q_sol))):.4f} rad < "
-                            f"{tol:.4f}); firing reach_done."
-                        )
-                        self.reach_done.publish(Bool(data=True))
-                        return
-            self._stop_event.wait(0.02)
+                    cand = np.array([float(x) for x in pos_now[_RIGHT_SLICE]])
+                    if np.all(np.isfinite(cand)):
+                        meas_right = cand
+            timed_out = time.time() > deadline
+            if meas_right is not None:
+                err = float(np.max(np.abs(meas_right - q_sol)))
+                moved = float(np.max(np.abs(meas_right - prev))) if prev is not None else float("inf")
+                prev = meas_right
+                stable = stable + 1 if moved < move_eps else 0
+                reached = err < tol
+                stopped = stable >= stable_needed
+                if reached or stopped or timed_out:
+                    reason = "reached" if reached else ("stopped" if stopped else "timeout")
+                    logger.info(
+                        f"IkReachBridge: pre-grasp settled ({reason}; worst joint err "
+                        f"{err:.4f} rad); firing reach_done."
+                    )
+                    self.reach_done.publish(Bool(data=True))
+                    return
+            elif timed_out:
+                logger.warning(
+                    "IkReachBridge: settle timeout with no fresh measured state; firing reach_done anyway."
+                )
+                self.reach_done.publish(Bool(data=True))
+                return
+            self._stop_event.wait(poll_dt)
 
 
 __all__ = ["IkReachBridge", "IkReachBridgeConfig"]
