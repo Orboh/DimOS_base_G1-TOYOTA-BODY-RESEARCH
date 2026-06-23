@@ -50,7 +50,7 @@ from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
 from dimos.msgs.sensor_msgs.JointState import JointState
-from dimos.robot.unitree.g1.act.dds_init import ensure_channel_factory
+from dimos.robot.unitree.g1.act.dds_init import channel_lock, ensure_channel_factory
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
@@ -105,12 +105,15 @@ class G1GripperConnection(Module):
         from unitree_sdk2py.idl.default import unitree_go_msg_dds__MotorCmd_
         from unitree_sdk2py.idl.unitree_go.msg.dds_ import MotorCmds_, MotorStates_
 
-        ensure_channel_factory(self.config.network_interface)
-
-        self._publisher = ChannelPublisher("rt/dex1/right/cmd", MotorCmds_)
-        self._publisher.Init()
-        self._subscriber = ChannelSubscriber("rt/dex1/right/state", MotorStates_)
-        self._subscriber.Init(self._on_state, 10)
+        # Serialise unitree DDS channel creation vs sibling DDS modules (arm_sdk):
+        # concurrent cyclonedds type registration raises "Failed to encode union
+        # ... DDS.XTypes.TypeObject".
+        with channel_lock:
+            ensure_channel_factory(self.config.network_interface)
+            self._publisher = ChannelPublisher("rt/dex1/right/cmd", MotorCmds_)
+            self._publisher.Init()
+            self._subscriber = ChannelSubscriber("rt/dex1/right/state", MotorStates_)
+            self._subscriber.Init(self._on_state, 10)
 
         # Single-motor gripper command, soft gains (kp=5/kd=0.05).
         self._cmd_msg = MotorCmds_()

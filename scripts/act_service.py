@@ -5,14 +5,18 @@ Runs in the dedicated lerobot venv (.venv_act, separate process from dimos). It
 owns the heavy lerobot/torch dependency; dimos stays clean and talks to it over
 a neutral ZMQ wire (msgpack), so neither side needs the other's Python types.
 
-Wire protocol (ZMQ REP on tcp://127.0.0.1:5701) — UNCHANGED:
-  request  (msgpack): {"state": [16 floats], "image_jpeg": <bytes>, "reset": <bool optional>}
-  response (msgpack): {"action": [16 floats]}
+Wire protocol (ZMQ REP on tcp://127.0.0.1:5701):
+  request  (msgpack): {"state": [N floats], "image_jpeg": <bytes>,
+                       "image_right_wrist_jpeg": <bytes, optional>, "reset": <bool optional>}
+  response (msgpack): {"action": [N floats]}
 
-State / action layout (identity-mapped to dimos):
-  [0:7]   left arm   (dimos motor index 15-21)
-  [7:14]  right arm  (dimos motor index 22-28)
-  [14]    left gripper  (Dex1, constant 0)   [15] right gripper (Dex1)
+State/action layout + image keys are DERIVED from the loaded model's config
+(overridable via env ACT_REPO_ID / ACT_DATASET_REPO):
+  - 16-dim single-cam (act-okura-pick-06102026): [0:7]=left arm (motor 15-21),
+    [7:14]=right arm (22-28), [14]=left grip (const 0), [15]=right grip;
+    image_jpeg=cam_left_high.
+  - 8-dim 2-cam right-only (act-okura-pick-tree-right-06162026): [0:7]=right arm,
+    [7]=right grip; image_jpeg=cam_high, image_right_wrist_jpeg=cam_right_wrist.
 
 IMPORTANT — normalization (root-cause fix 2026-06-12):
   This lerobot version moved normalization OUT of the policy and INTO a
@@ -36,24 +40,27 @@ from __future__ import annotations
 
 import argparse
 from copy import copy
+import os
 
 import cv2
-import msgpack
-import numpy as np
-import torch
-
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.policies.factory import make_policy, make_pre_post_processors
 from lerobot.processor.rename_processor import rename_stats
 from lerobot.utils.utils import get_safe_torch_device
+import msgpack
+import numpy as np
+import torch
 
-REPO_ID = "sotata/act-okura-pick-06102026"   # policy checkpoint
-DATASET_REPO = "Orboh/okura-sub-lerobot"      # source of normalization stats + task
-IMG_KEY = "observation.images.cam_left_high"
+# Policy + dataset (normalization stats + task). Overridable via env so one
+# service supports the single-cam 16-dim model AND the 2-cam 8-dim tree-right
+# model without code edits. The image keys + state dim are derived from the
+# model config at load time (see ActService.__init__), not hard-coded here.
+REPO_ID = os.getenv("ACT_REPO_ID", "sotata/act-okura-pick-06102026")   # policy checkpoint
+DATASET_REPO = os.getenv("ACT_DATASET_REPO", "Orboh/okura-sub-lerobot")  # norm stats + task
+IMG_KEY = "observation.images.cam_left_high"  # fallback head key if cfg has no image features
 STATE_KEY = "observation.state"
-IMG_H, IMG_W = 480, 640  # model expects [3, 480, 640]
-STATE_DIM = 16
+IMG_H, IMG_W = 480, 640  # both cam_high and cam_right_wrist are [3, 480, 640]
 ENDPOINT = "tcp://127.0.0.1:5701"
 
 
@@ -69,6 +76,13 @@ class ActService:
 
         cfg = PreTrainedConfig.from_pretrained(repo_id)
         cfg.pretrained_path = repo_id
+        # Derive the model's image input keys from its config so the wire adapts
+        # to single-cam (head only) vs 2-cam (head + right wrist) models.
+        img_keys = [k for k in (getattr(cfg, "input_features", {}) or {}) if "image" in k.lower()]
+        self.wrist_img_key = next((k for k in img_keys if "wrist" in k.lower()), None)
+        self.head_img_key = next(
+            (k for k in img_keys if "wrist" not in k.lower()), img_keys[0] if img_keys else IMG_KEY
+        )
         self.policy = make_policy(cfg=cfg, ds_meta=dataset.meta)
         self.policy.eval()
         self.preprocessor, self.postprocessor = make_pre_post_processors(
@@ -82,6 +96,7 @@ class ActService:
         )
         self._reset()
         print(f"[act] loaded {repo_id} on {self.device} | task={self.task!r} "
+              f"| head_img={self.head_img_key} wrist_img={self.wrist_img_key} "
               f"| normalization via preprocessor/postprocessor (dataset={dataset_repo})")
 
     def _reset(self) -> None:
@@ -89,27 +104,41 @@ class ActService:
         self.preprocessor.reset()
         self.postprocessor.reset()
 
+    @staticmethod
+    def _to_rgb_hwc(bgr_image: np.ndarray) -> np.ndarray:
+        """BGR (cv2) -> RGB HxWxC uint8, resized to the model's [H, W]."""
+        if bgr_image.shape[:2] != (IMG_H, IMG_W):
+            bgr_image = cv2.resize(bgr_image, (IMG_W, IMG_H))  # cv2 size = (W, H)
+        return cv2.cvtColor(bgr_image, cv2.COLOR_BGR2RGB)
+
     @torch.no_grad()
-    def infer(self, state: np.ndarray, bgr_image: np.ndarray, reset: bool = False) -> np.ndarray:
+    def infer(
+        self,
+        state: np.ndarray,
+        bgr_image: np.ndarray,
+        wrist_bgr: np.ndarray | None = None,
+        reset: bool = False,
+    ) -> np.ndarray:
         """Run one closed-loop step exactly as eval_g1.py's predict_action does.
 
-        ``state`` is the raw 16-dim observation (radians); ``bgr_image`` is the
-        decoded camera frame (BGR, as cv2.imdecode returns). Normalization of
-        state + image and un-normalization of the action are handled by the
-        lerobot preprocessor/postprocessor — NOT done here by hand.
+        ``state`` is the raw observation (radians, 8-dim right-only or 16-dim);
+        ``bgr_image`` is the head/cam_high frame; ``wrist_bgr`` is the optional
+        cam_right_wrist frame (required by 2-cam models). Normalization +
+        un-normalization are handled by the lerobot preprocessor/postprocessor.
         """
         if reset:
             self._reset()
 
-        # BGR (cv2) -> RGB, HxWxC uint8. predict_action does /255 + CHW + normalize.
-        if bgr_image.shape[:2] != (IMG_H, IMG_W):
-            bgr_image = cv2.resize(bgr_image, (IMG_W, IMG_H))  # cv2 size = (W, H)
-        rgb = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2RGB)
-
         observation = {
             STATE_KEY: torch.from_numpy(state.astype(np.float32)),
-            IMG_KEY: torch.from_numpy(np.ascontiguousarray(rgb)),  # HWC uint8
+            self.head_img_key: torch.from_numpy(
+                np.ascontiguousarray(self._to_rgb_hwc(bgr_image))
+            ),  # HWC uint8
         }
+        if self.wrist_img_key is not None and wrist_bgr is not None:
+            observation[self.wrist_img_key] = torch.from_numpy(
+                np.ascontiguousarray(self._to_rgb_hwc(wrist_bgr))
+            )
         # --- predict_action (verbatim from unitree_lerobot eval path) ---
         observation = copy(observation)
         for name in list(observation):
@@ -136,9 +165,13 @@ class ActService:
         while True:
             req = msgpack.unpackb(sock.recv(), raw=False)
             state = np.asarray(req["state"], dtype=np.float32)
-            jpeg = np.frombuffer(req["image_jpeg"], dtype=np.uint8)
-            bgr = cv2.imdecode(jpeg, cv2.IMREAD_COLOR)
-            action = self.infer(state, bgr, reset=bool(req.get("reset", False)))
+            bgr = cv2.imdecode(np.frombuffer(req["image_jpeg"], dtype=np.uint8), cv2.IMREAD_COLOR)
+            wrist_bgr = None
+            if req.get("image_right_wrist_jpeg"):
+                wrist_bgr = cv2.imdecode(
+                    np.frombuffer(req["image_right_wrist_jpeg"], dtype=np.uint8), cv2.IMREAD_COLOR
+                )
+            action = self.infer(state, bgr, wrist_bgr=wrist_bgr, reset=bool(req.get("reset", False)))
             sock.send(msgpack.packb({"action": action.astype(float).tolist()}, use_bin_type=True))
 
 
@@ -149,13 +182,17 @@ def _selftest() -> int:
     from_idx = dataset.meta.episodes["dataset_from_index"][0]
     frame = dataset[from_idx]
     state = frame[STATE_KEY].float().numpy()
-    img_chw = frame[IMG_KEY]
-    # dataset image is CHW float[0,1]; convert to the BGR uint8 a camera would give
-    rgb_uint8 = (img_chw.clamp(0, 1) * 255).round().byte().permute(1, 2, 0).numpy()
-    bgr = cv2.cvtColor(rgb_uint8, cv2.COLOR_RGB2BGR)
+
+    def _frame_to_bgr(img_chw):
+        # dataset image is CHW float[0,1]; convert to the BGR uint8 a camera would give
+        rgb_uint8 = (img_chw.clamp(0, 1) * 255).round().byte().permute(1, 2, 0).numpy()
+        return cv2.cvtColor(rgb_uint8, cv2.COLOR_RGB2BGR)
+
+    bgr = _frame_to_bgr(frame[svc.head_img_key])
+    wrist_bgr = _frame_to_bgr(frame[svc.wrist_img_key]) if svc.wrist_img_key else None
     rec = frame["action"].float().numpy()
 
-    a = svc.infer(state, bgr, reset=True)
+    a = svc.infer(state, bgr, wrist_bgr=wrist_bgr, reset=True)
     err = float(np.max(np.abs(a - rec)))
     np.set_printoptions(precision=3, suppress=True)
     print(f"\n[selftest] recorded action : {rec}")

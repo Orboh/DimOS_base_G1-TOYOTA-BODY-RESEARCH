@@ -56,6 +56,7 @@ from dimos.manipulation.planning.kinematics.pinocchio_ik import (
 )
 from dimos.msgs.geometry_msgs.PointStamped import PointStamped
 from dimos.msgs.sensor_msgs.JointState import JointState
+from dimos.msgs.std_msgs.Bool import Bool
 from dimos.robot.unitree.g1.ik_reach.right_arm_model import (
     DEFAULT_URDF,
     load_g1_right_arm_ik,
@@ -149,6 +150,13 @@ class IkReachBridgeConfig(ModuleConfig):
     reach_min_interval_s: float = 2.0          # debounce: ignore clicks during/just after a reach
     max_click_age_s: float = 5.0               # reject stale clicks (laptop-local receive time)
     max_state_age_s: float = 1.0               # reject reach if measured motor_states is stale
+    # IK->ACT handoff: after an accepted reach, fire reach_done once the measured
+    # right-arm pose has converged to the IK solution (the arm has physically
+    # settled at the pre-grasp), so ACT starts from the real pre-grasp pose (not
+    # a mid-slew transitional pose). In DRY (log_only) the arm is not driven, so
+    # reach_done fires immediately (see _reach) — this only gates the LIVE wait.
+    settle_tol_deg: float = 2.0                # per-joint convergence tolerance [deg]
+    settle_timeout_s: float = 5.0              # give up waiting for settle after this [s]
     log_every_n: int = 1
 
 
@@ -160,6 +168,7 @@ class IkReachBridge(Module):
     clicked_point: In[PointStamped]      # human click in the viewer (frame=entity_path)
     motor_states: In[JointState]         # full 29-DOF measured state (IK warm-start)
     arm_target: Out[JointState]          # 14 arm targets -> G1ArmSdkConnection
+    reach_done: Out[Bool]                # fired once after the arm settles -> ActBridge
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -386,6 +395,39 @@ class IkReachBridge(Module):
                     effort=[0.0] * _NUM_ARM,
                 )
             )
+
+        # --- IK->ACT handoff: fire reach_done once the arm has settled --------
+        # DRY: the arm is NOT driven (no arm_target published), so it can never
+        # converge to q_sol — fire immediately so the wiring is testable without
+        # the robot. LIVE: wait until the measured right arm reaches q_sol.
+        if self.config.log_only:
+            logger.info("IkReachBridge[DRY]: arm not driven; firing reach_done immediately (no settle wait).")
+            self.reach_done.publish(Bool(data=True))
+            return
+        tol = float(np.deg2rad(self.config.settle_tol_deg))
+        deadline = now + self.config.settle_timeout_s
+        while not self._stop_event.is_set():
+            if time.time() > deadline:
+                logger.warning(
+                    f"IkReachBridge: arm did not settle within {self.config.settle_timeout_s}s "
+                    f"(tol {self.config.settle_tol_deg}deg); NOT firing reach_done."
+                )
+                return
+            with self._lock:
+                st = self._latest_state
+            if st is not None:
+                pos_now = list(st.position)
+                if len(pos_now) >= _ARM_START + _NUM_ARM:
+                    meas_right = np.array([float(x) for x in pos_now[_RIGHT_SLICE]])
+                    if np.all(np.isfinite(meas_right)) and float(np.max(np.abs(meas_right - q_sol))) < tol:
+                        logger.info(
+                            f"IkReachBridge: arm settled at pre-grasp "
+                            f"(worst joint err {float(np.max(np.abs(meas_right - q_sol))):.4f} rad < "
+                            f"{tol:.4f}); firing reach_done."
+                        )
+                        self.reach_done.publish(Bool(data=True))
+                        return
+            self._stop_event.wait(0.02)
 
 
 __all__ = ["IkReachBridge", "IkReachBridgeConfig"]

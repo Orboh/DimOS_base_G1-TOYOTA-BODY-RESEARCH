@@ -67,7 +67,7 @@ from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
 from dimos.msgs.sensor_msgs.JointState import JointState
-from dimos.robot.unitree.g1.act.dds_init import ensure_channel_factory
+from dimos.robot.unitree.g1.act.dds_init import channel_lock, ensure_channel_factory
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
@@ -144,12 +144,15 @@ class G1ArmSdkConnection(Module):
         from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_, LowState_
         from unitree_sdk2py.utils.crc import CRC
 
-        ensure_channel_factory(self.config.network_interface)
-
-        self._publisher = ChannelPublisher("rt/arm_sdk", LowCmd_)
-        self._publisher.Init()
-        self._subscriber = ChannelSubscriber("rt/lowstate", LowState_)
-        self._subscriber.Init(self._on_low_state, 10)
+        # Serialise unitree DDS channel creation vs sibling DDS modules (the Dex1
+        # gripper): concurrent cyclonedds type registration raises "Failed to
+        # encode union ... DDS.XTypes.TypeObject".
+        with channel_lock:
+            ensure_channel_factory(self.config.network_interface)
+            self._publisher = ChannelPublisher("rt/arm_sdk", LowCmd_)
+            self._publisher.Init()
+            self._subscriber = ChannelSubscriber("rt/lowstate", LowState_)
+            self._subscriber.Init(self._on_low_state, 10)
         self._crc = CRC()
 
         self._low_cmd = unitree_hg_msg_dds__LowCmd_()
