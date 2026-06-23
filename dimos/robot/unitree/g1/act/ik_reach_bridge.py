@@ -116,11 +116,17 @@ class IkReachBridgeConfig(ModuleConfig):
     # the rubber hand pointed). Verify/fine-tune from the live CALIB log (hand_tip torso pos
     # vs the real okra). A cutting attachment, if fitted, extends this further. Load-time.
     gripper_offset_xyz: list[float] = [0.1845, -0.003, 0.0]
-    # Handoff standoff [m] along the EE approach axis (= normalize(gripper_offset_xyz)).
-    # IK stops the hand TIP this far SHORT of the clicked okra, leaving a pre-grasp pose
-    # for ACT to close the last few cm (design: ① IK reach → handoff → ② ACT grasp).
-    # 0.0 = drive the tip exactly onto the okra (today's validated behavior). Load-time.
+    # Handoff standoff [m] along TORSO -X only (Y,Z of the clicked okra preserved).
+    # The tip is driven to (click_x - standoff_m, click_y, click_z), leaving a pre-grasp
+    # pose ACT closes by advancing +X (design: ① IK reach → handoff → ② ACT grasp).
+    # NOT along the gripper approach axis; applied in _reach as a torso-frame offset.
+    # 0.0 = drive the tip exactly onto the okra. Effective per-reach (not load-time).
     standoff_m: float = 0.05   # placeholder: tune to ACT's handoff distance once known
+    # IK->ACT handoff switch. True (default) = fire reach_done after the reach so ACT
+    # takes over. False = do the IK reach and HOLD the pre-grasp (no reach_done, ACT
+    # never starts) — for inspecting the reach/standoff without ACT immediately moving
+    # the arm. The okra-harvest blueprint wires this from env OKRA_ACT_HANDOFF.
+    fire_reach_done: bool = True
     # Fixed EE orientation as quaternion xyzw in the IK ROOT frame; empty = hold the
     # current EE orientation (position-only reach; safest for R3).
     fixed_orientation_xyzw: list[float] = []
@@ -167,6 +173,11 @@ class IkReachBridgeConfig(ModuleConfig):
     reach_max_wait_s: float = 3.0            # ceiling before handoff [s]
     reach_dry_wait_s: float = 0.1            # DRY: short fixed wait (arm not driven) [s]
     log_every_n: int = 1
+    # Hand-eye calibration diagnostic: log the MEASURED gripper tip in torso every N
+    # motor_states (0 = off). With this on, position the tip at a marker the head camera
+    # can see, read this P_arm, click the same tip in the cloud (P_cam from CALIB), and
+    # Δ = P_cam - P_arm is the camera->torso extrinsic error (no need to locate torso).
+    tip_log_every_n: int = 0
 
 
 class IkReachBridge(Module):
@@ -184,7 +195,6 @@ class IkReachBridge(Module):
         self._arm = load_g1_right_arm_ik(
             self.config.urdf_path,
             gripper_offset_xyz=self.config.gripper_offset_xyz,
-            standoff_m=self.config.standoff_m,
         )
         # FAIL CLOSED: every downstream index (warm-start pos[22:29], q_sol, the
         # 14-vec, the delta-gate message) assumes the canonical right-arm order.
@@ -206,6 +216,10 @@ class IkReachBridge(Module):
         self._thread: Thread | None = None
         self._last_reach_t: float = 0.0
         self._count = 0
+        # Separate pinocchio data buffer for the measured-tip diagnostic FK, so it never
+        # races the reach thread's ik.solve (which writes self._arm.ik._data).
+        self._diag_data = self._arm.ik.model.createData()
+        self._state_count = 0
 
     @rpc
     def start(self) -> None:
@@ -236,6 +250,31 @@ class IkReachBridge(Module):
     def _on_state(self, state: JointState) -> None:
         with self._lock:
             self._latest_state = state
+        # Hand-eye diagnostic: throttled log of the MEASURED gripper tip in torso.
+        n = self.config.tip_log_every_n
+        if n <= 0:
+            return
+        self._state_count += 1
+        if self._state_count % n != 0:
+            return
+        try:
+            pos = list(state.position)
+            if len(pos) < _ARM_START + _NUM_ARM:
+                return
+            qr = np.array([float(x) for x in pos[_RIGHT_SLICE]])
+            if not np.all(np.isfinite(qr)):
+                return
+            m = self._arm.ik.model
+            pinocchio.forwardKinematics(m, self._diag_data, qr)
+            pinocchio.updateFramePlacements(m, self._diag_data)
+            tip_root = self._diag_data.oMf[self._arm.tip_frame_id]
+            tip_torso = np.asarray(self._arm.root_to_torso_pose(tip_root).translation)
+            logger.info(
+                "IkReachBridge[TIP] measured gripper tip (torso) = [%.3f %.3f %.3f]",
+                float(tip_torso[0]), float(tip_torso[1]), float(tip_torso[2]),
+            )
+        except Exception as e:  # diagnostic only — never disturb the reach path
+            logger.debug(f"tip-log failed: {e!r}")
 
     def _on_click(self, pt: PointStamped) -> None:
         recv = time.time()
@@ -334,6 +373,12 @@ class IkReachBridge(Module):
             float(p_torso[2]),
         )
 
+        # Pre-grasp standoff along TORSO -X only: stop the tip standoff_m short of the
+        # clicked okra in X, preserving its Y and Z (ACT then advances +X to grasp).
+        # This is a fixed torso-frame offset, independent of the gripper's approach
+        # direction (NOT baked into a wrist frame).
+        p_torso = p_torso - np.array([self.config.standoff_m, 0.0, 0.0])
+
         # workspace box in torso frame (blocker #11): reject implausible targets.
         if not (
             self.config.ws_x[0] <= p_torso[0] <= self.config.ws_x[1]
@@ -431,6 +476,14 @@ class IkReachBridge(Module):
                 m = np.array([float(x) for x in pos_now[_RIGHT_SLICE]])
                 if np.all(np.isfinite(m)):
                     fire_err = float(np.max(np.abs(m - q_sol)))
+        if not self.config.fire_reach_done:
+            # ACT handoff disabled: hold the IK pre-grasp so the reach can be inspected
+            # (arm_sdk keeps commanding q_sol). ACT never starts (no reach_done on the bus).
+            logger.info(
+                f"IkReachBridge: ACT handoff OFF — holding pre-grasp (delta={delta:.3f} rad, "
+                f"worst-joint err at hold={fire_err:.4f} rad); NOT firing reach_done."
+            )
+            return
         logger.info(
             f"IkReachBridge: open-loop wait {wait_s:.2f}s done (delta={delta:.3f} rad, "
             f"nominal={self.config.reach_nominal_speed_rad_s} margin={self.config.reach_margin_s}); "

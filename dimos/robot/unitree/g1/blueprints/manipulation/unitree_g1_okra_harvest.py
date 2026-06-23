@@ -87,6 +87,23 @@ _ARM_VEL_LIMIT = float(os.getenv("IK_ARM_VEL_LIMIT", "20.0"))
 # How long ACT drives the grasp after reach_done [s] (fixed-duration stop).
 _GRASP_DURATION_S = float(os.getenv("OKRA_GRASP_DURATION_S", "8.0"))
 
+# IK->ACT handoff. Default ON. Set OKRA_ACT_HANDOFF=0 to do the IK reach and HOLD the
+# pre-grasp without ACT (no reach_done) — to inspect the reach/standoff in isolation.
+_ACT_HANDOFF = os.getenv("OKRA_ACT_HANDOFF", "1").strip() != "0"
+
+# Vertical (torso Z) target compensation [m] for ARM DROOP. The real arm settles a few cm
+# BELOW the commanded height (arm_sdk clip-to-measured steady-state / gravity sag). Hand-eye
+# calibration (scripts/handeye_calib.py, 2026-06-23) showed the camera Z is accurate
+# (Δz≈-0.2cm, fit RMS≈nominal) — so the ~5cm vertical miss is the ARM, not the camera.
+# Raising the torso target Z by ~0.05 makes the drooped tip land on the okra (5cm -> ~1cm
+# on real hw). Pose-dependent, so not exact. Override live via OKRA_TARGET_Z_OFFSET.
+_TARGET_Z_OFFSET = float(os.getenv("OKRA_TARGET_Z_OFFSET", "0.05"))
+
+# Hand-eye calibration: log the MEASURED gripper tip in torso every N motor_states
+# (0 = off). Set e.g. OKRA_TIP_LOG=25 (~2 Hz at 50 Hz state) to read P_arm for the
+# camera->torso extrinsic check (compare to the clicked tip's CALIB torso = P_cam).
+_TIP_LOG_EVERY_N = int(os.getenv("OKRA_TIP_LOG", "0"))
+
 
 def _camera_info_overlay(ci):  # type: ignore[no-untyped-def]
     """RerunBridge visual_override: log the camera Pinhole at the COLOR IMAGE
@@ -114,15 +131,21 @@ def _pointcloud_rgb_overlay(pc):  # type: ignore[no-untyped-def]
     return rr.Points3D(positions=np.asarray(points), colors=rgb, radii=radius)
 
 
+_HANDOFF_MSG = (
+    f"ACT handoff ON (grasp {_GRASP_DURATION_S}s)" if _ACT_HANDOFF
+    else "ACT handoff OFF (OKRA_ACT_HANDOFF=0): IK reaches pre-grasp and HOLDS, ACT does not start"
+)
+_HANDOFF_MSG += f" | target Z offset = {_TARGET_Z_OFFSET:+.3f} m (OKRA_TARGET_Z_OFFSET)"
 if _LIVE:
     logger.warning(
-        f"unitree-g1-okra-harvest LAUNCHING **LIVE** — arm WILL move via rt/arm_sdk and the "
-        f"right Dex1 WILL close, on NIC {_NIC!r} at <= {_ARM_VEL_LIMIT} rad/s. Click okra -> IK "
-        f"reaches pre-grasp -> ACT grasps for {_GRASP_DURATION_S}s. Keep an e-stop in hand."
+        f"unitree-g1-okra-harvest LAUNCHING **LIVE** — arm WILL move via rt/arm_sdk"
+        f"{' and the right Dex1 WILL close' if _ACT_HANDOFF else ''}, on NIC {_NIC!r} at "
+        f"<= {_ARM_VEL_LIMIT} rad/s. {_HANDOFF_MSG}. Keep an e-stop in hand."
     )
 else:
     logger.info(
-        f"unitree-g1-okra-harvest DRY-RUN (set IK_REACH_LIVE=1 to drive arm+gripper). NIC={_NIC!r}."
+        f"unitree-g1-okra-harvest DRY-RUN (set IK_REACH_LIVE=1 to drive arm+gripper). "
+        f"NIC={_NIC!r}. {_HANDOFF_MSG}."
     )
 
 unitree_g1_okra_harvest = autoconnect(
@@ -139,6 +162,9 @@ unitree_g1_okra_harvest = autoconnect(
     IkReachBridge.blueprint(
         log_only=not _LIVE,
         expected_click_frame="/world/camera/pointcloud",  # R1-confirmed; required for LIVE
+        fire_reach_done=_ACT_HANDOFF,  # OKRA_ACT_HANDOFF=0 -> hold pre-grasp, no ACT
+        approach_offset_xyz=[0.0, 0.0, _TARGET_Z_OFFSET],  # raise torso target Z (OKRA_TARGET_Z_OFFSET)
+        tip_log_every_n=_TIP_LOG_EVERY_N,  # OKRA_TIP_LOG>0 -> log measured tip(torso) for hand-eye
     ),
     ActBridge.blueprint(
         dry_run=not _LIVE,

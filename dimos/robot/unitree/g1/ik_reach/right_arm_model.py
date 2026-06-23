@@ -72,13 +72,14 @@ TORSO_FRAME = "torso_link"
 # DEFAULT gripper-tip offset (the point IK drives onto the target). Override per
 # gripper shape via load_g1_right_arm_ik(gripper_offset_xyz=...).
 PALM_OFFSET_FROM_WRIST = np.array([0.0415, -0.003, 0.0])
-# Operational frames we attach to the wrist:
-#   gripper_tip : the real hand tip at gripper_offset_xyz (diagnostics / where the hand is).
-#   ik_target   : the point IK actually drives onto the clicked target = tip + standoff
-#                 along the EE approach axis. Stopping the *ik_target* on the okra leaves
-#                 the *tip* a standoff distance short — the pre-grasp / handoff pose for ACT.
+# Operational frame attached to the wrist:
+#   gripper_tip : the real hand tip at gripper_offset_xyz. Rigid w.r.t. the wrist, so the
+#                 gripper geometry + wrist rotation are accounted for every solver
+#                 iteration (Method B). IK drives THIS tip onto the target. The pre-grasp
+#                 standoff is NOT baked into a wrist frame — the caller applies it as a
+#                 fixed TORSO-frame offset (preserving the target's Y,Z); see
+#                 IkReachBridge._reach.
 GRIPPER_TIP_FRAME = "gripper_tip"
-IK_TARGET_FRAME = "ik_target"
 
 
 @dataclass
@@ -88,10 +89,10 @@ class G1RightArmIK:
     Attributes:
         ik: PinocchioIK over the reduced 7-DOF model (solve/FK operate in ROOT frame).
         ee_joint_id: EE joint id in the reduced model (right_wrist_yaw_joint).
-        ee_frame_id: id of the ik_target frame the IK actually drives onto the target
-            (= tip + standoff along the EE approach axis; rigidly attached to the wrist).
+        ee_frame_id: id of the frame the IK drives onto the target. Now == tip_frame_id
+            (IK drives the real gripper tip; the pre-grasp standoff is a caller-side
+            torso-frame offset, not a wrist frame).
         tip_frame_id: id of the gripper_tip frame (the real hand tip at gripper_offset_xyz).
-            With standoff>0 the tip sits standoff behind ee_frame_id along the approach axis.
         joint_names: actual reduced-model joint order (verify == RIGHT_ARM_JOINTS).
         torso_in_root: constant SE3 placement (pinocchio oMtorso) of torso_link in
             the solver's ROOT frame.
@@ -120,19 +121,19 @@ class G1RightArmIK:
         return self.torso_in_root.actInv(oMx)
 
     def fk_root(self, q: NDArray[np.floating[Any]]) -> Any:
-        """ik_target pose (SE3) in the solver ROOT frame for joint config q.
+        """Gripper-tip pose (SE3) in the solver ROOT frame for joint config q.
 
-        Returns the ik_target frame (ee_frame_id) the IK drives onto the target, not the
-        bare wrist joint. Its orientation == wrist orientation (identity relative
-        rotation), so callers that use only .rotation (orientation hold) are unaffected.
+        Returns the gripper_tip frame (== ee_frame_id) the IK drives onto the target, not
+        the bare wrist joint. Its orientation == wrist orientation, so callers that use
+        only .rotation (orientation hold) are unaffected.
         """
         return self.ik.forward_kinematics(np.asarray(q, dtype=np.float64))
 
     def fk_tip(self, q: NDArray[np.floating[Any]]) -> Any:
         """Real hand-tip pose (SE3, gripper_tip frame) in ROOT for joint config q.
 
-        Diagnostic: with standoff>0 the tip sits standoff behind fk_root() along the
-        solution's approach axis. Use to verify the hand stops short of the target.
+        Same frame the IK targets. The pre-grasp standoff is applied in torso frame by
+        the caller, so the tip lands at (target_x - standoff, target_y, target_z).
         """
         m, d = self.ik.model, self.ik._data
         q = np.asarray(q, dtype=np.float64)
@@ -150,7 +151,6 @@ def load_g1_right_arm_ik(
     urdf_path: str | Path = DEFAULT_URDF,
     ik_config: PinocchioIKConfig | None = None,
     gripper_offset_xyz: NDArray[np.floating[Any]] | list[float] | tuple[float, float, float] = PALM_OFFSET_FROM_WRIST,
-    standoff_m: float = 0.0,
 ) -> G1RightArmIK:
     """Build the 7-DOF right-arm reduced model and wrap it in PinocchioIK.
 
@@ -158,15 +158,13 @@ def load_g1_right_arm_ik(
         urdf_path: G1 URDF path.
         ik_config: solver config (defaults to position-only; see below).
         gripper_offset_xyz: hand-tip offset from the wrist (right_wrist_yaw_joint)
-            expressed in the WRIST frame [m] (hand GEOMETRY: where the tip is). Both the
-            tip and the ik_target frames are rigidly attached to the wrist, so wrist-yaw
-            (and all joint) rotation is accounted for every solver iteration. Set this
-            per gripper shape. Defaults to PALM_OFFSET_FROM_WRIST (palm reference).
-        standoff_m: pre-grasp / handoff standoff [m] along the EE approach axis
-            (= normalize(gripper_offset_xyz); falls back to +X if that is ~zero). The IK
-            drives a point standoff_m BEYOND the tip onto the target, so the real tip ends
-            standoff_m SHORT of the target along the solved approach axis — the handoff
-            pose ACT closes from. 0.0 = drive the tip exactly onto the target (no standoff).
+            expressed in the WRIST frame [m] (hand GEOMETRY: where the tip is). The tip
+            frame is rigidly attached to the wrist, so wrist-yaw (and all joint) rotation
+            is accounted for every solver iteration (Method B). IK drives this tip onto
+            the target. Set this per gripper shape. Defaults to PALM_OFFSET_FROM_WRIST.
+            NOTE: the pre-grasp standoff is applied by the caller as a fixed torso-frame
+            offset (IkReachBridge._reach), NOT here — so it does not depend on the gripper
+            approach direction and preserves the target's Y,Z.
 
     Raises:
         FileNotFoundError: if the URDF is missing.
@@ -205,35 +203,22 @@ def load_g1_right_arm_ik(
 
     ee_joint_id = reduced.getJointId(EE_JOINT_NAME)
 
-    # Attach two operational frames to the wrist joint (wrist-frame coords). Both are
-    # rigid w.r.t. the wrist, so the offsets rotate with the wrist and wrist-yaw rotation
-    # is handled exactly each iteration. MUST be added before createData() so the frame
-    # buffers (data.oMf) are allocated.
-    #   gripper_tip : the real hand tip at gripper_offset_xyz.
-    #   ik_target   : tip + standoff_m along the EE approach axis = the point IK drives
-    #                 onto the clicked target. Driving ik_target onto the okra leaves the
-    #                 tip standoff_m short along the SOLVED approach axis (self-consistent;
-    #                 no frozen-orientation approximation).
+    # Attach the gripper-tip frame to the wrist joint (wrist-frame coords). It is rigid
+    # w.r.t. the wrist, so the offset rotates with the wrist and wrist-yaw rotation is
+    # handled exactly each iteration (Method B). MUST be added before createData() so the
+    # frame buffer (data.oMf) is allocated. IK drives this tip onto the target; the
+    # pre-grasp standoff is a torso-frame offset applied by the caller, not a frame here.
     offset = np.asarray(gripper_offset_xyz, dtype=np.float64).reshape(3)
-    n = float(np.linalg.norm(offset))
-    approach_axis = (offset / n) if n > 1e-9 else np.array([1.0, 0.0, 0.0])
-    ik_offset = offset + float(standoff_m) * approach_axis
     reduced.addFrame(
         pinocchio.Frame(
             GRIPPER_TIP_FRAME, ee_joint_id, 0, pinocchio.SE3(np.eye(3), offset),
             pinocchio.FrameType.OP_FRAME,
         )
     )
-    reduced.addFrame(
-        pinocchio.Frame(
-            IK_TARGET_FRAME, ee_joint_id, 0, pinocchio.SE3(np.eye(3), ik_offset),
-            pinocchio.FrameType.OP_FRAME,
-        )
-    )
 
     data = reduced.createData()
-    ee_frame_id = reduced.getFrameId(IK_TARGET_FRAME)
     tip_frame_id = reduced.getFrameId(GRIPPER_TIP_FRAME)
+    ee_frame_id = tip_frame_id  # IK drives the real tip; standoff is a torso-frame offset
 
     # Capture the constant torso_link placement in the ROOT frame at neutral.
     qn = pinocchio.neutral(reduced)
@@ -309,20 +294,16 @@ def fk_sanity_check(arm: G1RightArmIK | None = None) -> None:
     print(f"tip @ wrist_yaw=30deg : {np.asarray(tip_yaw)}")
     print(f"tip shift from yaw    : {np.asarray(tip_yaw) - np.asarray(tip0)}  (nonzero => yaw is accounted for)")
 
-    # --- handoff standoff check -------------------------------------------------
-    # Load a separate handle WITH a standoff and confirm: at neutral the ik_target sits
-    # standoff_m ahead of the tip along the approach axis; and after a real solve the tip
-    # ends standoff_m behind the solved target along the SOLVED approach axis (==self-consistent).
-    SD = 0.05
-    arm_s = load_g1_right_arm_ik(standoff_m=SD)
-    gap0 = np.linalg.norm(arm_s.fk_root(q0).translation - arm_s.fk_tip(q0).translation)
-    print(f"\n[standoff={SD} m] ik_target - tip gap @neutral : {gap0:.5f} m  (EXPECT ~{SD})")
+    # --- IK drives the tip onto the target (standoff is now a caller-side torso -X
+    # offset, NOT baked into a wrist frame) -------------------------------------
+    # Solve for a reachable tip pose and confirm the tip lands on it (err ~0). The
+    # pre-grasp standoff is verified separately in IkReachBridge (torso-frame, Y,Z kept).
     q_truth = np.array([0.3, -0.2, 0.1, 0.6, 0.0, 0.2, 0.4])
-    target = arm_s.fk_root(q_truth)  # a reachable ik_target pose
-    q_sol, conv, err = arm_s.ik.solve(target, np.zeros(arm_s.ik.nq))
-    tip_sol = arm_s.fk_tip(q_sol).translation
+    target = arm.fk_root(q_truth)  # a reachable tip pose
+    q_sol, conv, err = arm.ik.solve(target, np.zeros(arm.ik.nq))
+    tip_sol = arm.fk_tip(q_sol).translation
     back = np.linalg.norm(np.asarray(target.translation) - np.asarray(tip_sol))
-    print(f"[standoff={SD} m] solve conv={conv} err={err:.5f}; |target - tip(sol)| = {back:.5f} m  (EXPECT ~{SD})")
+    print(f"\nsolve conv={conv} err={err:.5f}; |target - tip(sol)| = {back:.5f} m  (EXPECT ~0; tip==ik frame)")
 
 
 if __name__ == "__main__":
