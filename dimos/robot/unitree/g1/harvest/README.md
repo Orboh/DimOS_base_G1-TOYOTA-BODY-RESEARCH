@@ -48,6 +48,11 @@ dimos run unitree-g1-okra-harvest-live
 #   laptop:  ollama serve && ollama pull qwen3-vl:2b
 #   laptop:  ROBOT_INTERFACE=<nic> dimos run unitree-g1-okra-harvest-live-arm
 
+# LIVE-ZED: head-cam YOLO detect with REAL ZED depth (3D position from the ZED
+# depth map instead of the assumed-depth pinhole). Runs on the AGX Orin with a
+# ZED-M. One-time SDK/pyzed setup: see ZED_SETUP.md.
+ROBOT_INTERFACE=eno1 dimos run unitree-g1-okra-harvest-zed
+
 # Standalone dry-run script + tests:
 .venv/bin/python -m dimos.robot.unitree.g1.harvest.run_demo
 .venv/bin/python -m pytest dimos/robot/unitree/g1/harvest/ -q
@@ -243,4 +248,6 @@ a real subsystem — contracts below:
 ## Design references
 
 - `okra_harvest_workflow.md` — the procedure (single source of truth).
+- `ZED_SETUP.md` — ZED SDK + `pyzed` install on the AGX Orin and running the
+  `unitree-g1-okra-harvest-zed` blueprint (ZED depth → YOLO 3D).
 - Memory `g1-okra-harvest-workflow-langgraph` — the design decision + skill gap.
