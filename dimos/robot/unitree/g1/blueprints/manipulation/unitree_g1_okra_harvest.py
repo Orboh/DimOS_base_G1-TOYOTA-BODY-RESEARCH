@@ -91,12 +91,14 @@ _GRASP_DURATION_S = float(os.getenv("OKRA_GRASP_DURATION_S", "8.0"))
 # pre-grasp without ACT (no reach_done) — to inspect the reach/standoff in isolation.
 _ACT_HANDOFF = os.getenv("OKRA_ACT_HANDOFF", "1").strip() != "0"
 
-# Vertical (torso Z) target compensation [m] for ARM DROOP. The real arm settles a few cm
-# BELOW the commanded height (arm_sdk clip-to-measured steady-state / gravity sag). Hand-eye
-# calibration (scripts/handeye_calib.py, 2026-06-23) showed the camera Z is accurate
-# (Δz≈-0.2cm, fit RMS≈nominal) — so the ~5cm vertical miss is the ARM, not the camera.
-# Raising the torso target Z by ~0.05 makes the drooped tip land on the okra (5cm -> ~1cm
-# on real hw). Pose-dependent, so not exact. Override live via OKRA_TARGET_Z_OFFSET.
+# Vertical (torso Z) target compensation [m] — EMPIRICAL correction for a constant
+# DOWNWARD Z bias of the executed tip vs the commanded pose. Hand-eye calibration
+# (scripts/handeye_calib.py, 2026-06-23) showed the camera Z is accurate (Δz≈-0.2cm,
+# fit RMS≈nominal), so the ~5cm vertical miss is on the ARM side (commanded-vs-executed:
+# arm_sdk droop AND/OR an FK / encoder-zero bias — indistinguishable in that experiment,
+# not separately diagnosed). Raising the torso target Z by ~0.05 makes the real tip land
+# on the okra (5cm -> ~1cm on real hw). Pose-dependent, so not exact. Override live via
+# OKRA_TARGET_Z_OFFSET.
 _TARGET_Z_OFFSET = float(os.getenv("OKRA_TARGET_Z_OFFSET", "0.05"))
 
 # Hand-eye calibration: log the MEASURED gripper tip in torso every N motor_states
