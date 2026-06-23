@@ -150,20 +150,22 @@ class IkReachBridgeConfig(ModuleConfig):
     reach_min_interval_s: float = 2.0          # debounce: ignore clicks during/just after a reach
     max_click_age_s: float = 5.0               # reject stale clicks (laptop-local receive time)
     max_state_age_s: float = 1.0               # reject reach if measured motor_states is stale
-    # IK->ACT handoff: after an accepted reach, fire reach_done once the measured
-    # right-arm pose has converged to the IK solution (the arm has physically
-    # settled at the pre-grasp), so ACT starts from the real pre-grasp pose (not
-    # a mid-slew transitional pose). In DRY (log_only) the arm is not driven, so
-    # reach_done fires immediately (see _reach) — this only gates the LIVE wait.
-    # IK->ACT handoff settle gate. arm_sdk's clip-to-measured leaves a POSE-
-    # DEPENDENT steady-state residual (often > several deg, sometimes > 5°,
-    # measured on real hw 2026-06-23), so judging "within tol of q_sol" is
-    # unreliable. PRIMARY trigger is "the arm STOPPED MOVING" (reached steady
-    # state); the residual is then arm_sdk's limit and ACT corrects the rest.
-    settle_tol_deg: float = 5.0    # fast-path: fire at once if this close to q_sol
-    settle_move_deg: float = 0.5   # per-poll motion below this counts as "not moving"
-    settle_stable_s: float = 0.4   # low motion sustained this long = settled (stopped)
-    settle_timeout_s: float = 5.0  # fire anyway after this (arm is at steady state by now)
+    # IK->ACT handoff: after an accepted reach we publish q_sol ONCE to arm_sdk
+    # (which slews there via clip-to-measured) and fire reach_done after an
+    # OPEN-LOOP timed wait — we do NOT read motor state to judge completion.
+    # Inferring "settled" from measured convergence false-fired ACT mid-slew
+    # (handed off 24-32° short of q_sol, 2026-06-23), and arm_sdk leaves a
+    # pose-dependent steady-state residual no within-tol/plateau gate reads
+    # reliably. Instead give the arm a duration estimated from the joint travel
+    # (delta / nominal speed + margin), clamped, then hand off. nominal_speed is
+    # biased SLOW: too fast re-introduces mid-slew firing; too slow only delays
+    # the grasp. CAVEAT: open-loop can't detect a stalled/blocked arm — the
+    # e-stop operator is the stall detector for this PoC. Tune on hardware.
+    reach_nominal_speed_rad_s: float = 1.0   # effective slew speed for the wait estimate [rad/s]
+    reach_margin_s: float = 0.5              # additive settle margin on top of travel time [s]
+    reach_min_wait_s: float = 0.8            # floor (latency + tiny moves) [s]
+    reach_max_wait_s: float = 3.0            # ceiling before handoff [s]
+    reach_dry_wait_s: float = 0.1            # DRY: short fixed wait (arm not driven) [s]
     log_every_n: int = 1
 
 
@@ -403,57 +405,38 @@ class IkReachBridge(Module):
                 )
             )
 
-        # --- IK->ACT handoff: fire reach_done once the arm has settled --------
-        # DRY: the arm is NOT driven (no arm_target published), so it can never
-        # converge to q_sol — fire immediately so the wiring is testable without
-        # the robot. LIVE: wait until the measured right arm reaches q_sol.
+        # --- IK->ACT handoff: OPEN-LOOP timed wait, then fire reach_done ------
+        # We do NOT read motor state to decide completion (that false-fired ACT
+        # mid-slew). Estimate how long the arm needs from the joint travel it must
+        # cover (q_right = measured start pose, rad), wait that long, then hand off.
         if self.config.log_only:
-            logger.info("IkReachBridge[DRY]: arm not driven; firing reach_done immediately (no settle wait).")
-            self.reach_done.publish(Bool(data=True))
-            return
-        # Fire when the arm SETTLES: reached q_sol (fast path), OR stopped moving
-        # (steady state — residual is arm_sdk's clip-to-measured limit), OR timed
-        # out (arm is at steady state by now). Never silently strand ACT.
-        tol = float(np.deg2rad(self.config.settle_tol_deg))
-        move_eps = float(np.deg2rad(self.config.settle_move_deg))
-        poll_dt = 0.05
-        stable_needed = max(1, int(self.config.settle_stable_s / poll_dt))
-        deadline = now + self.config.settle_timeout_s
-        prev: np.ndarray | None = None
-        stable = 0
-        while not self._stop_event.is_set():
-            with self._lock:
-                st = self._latest_state
-            meas_right: np.ndarray | None = None
-            if st is not None:
-                pos_now = list(st.position)
-                if len(pos_now) >= _ARM_START + _NUM_ARM:
-                    cand = np.array([float(x) for x in pos_now[_RIGHT_SLICE]])
-                    if np.all(np.isfinite(cand)):
-                        meas_right = cand
-            timed_out = time.time() > deadline
-            if meas_right is not None:
-                err = float(np.max(np.abs(meas_right - q_sol)))
-                moved = float(np.max(np.abs(meas_right - prev))) if prev is not None else float("inf")
-                prev = meas_right
-                stable = stable + 1 if moved < move_eps else 0
-                reached = err < tol
-                stopped = stable >= stable_needed
-                if reached or stopped or timed_out:
-                    reason = "reached" if reached else ("stopped" if stopped else "timeout")
-                    logger.info(
-                        f"IkReachBridge: pre-grasp settled ({reason}; worst joint err "
-                        f"{err:.4f} rad); firing reach_done."
-                    )
-                    self.reach_done.publish(Bool(data=True))
-                    return
-            elif timed_out:
-                logger.warning(
-                    "IkReachBridge: settle timeout with no fresh measured state; firing reach_done anyway."
-                )
-                self.reach_done.publish(Bool(data=True))
-                return
-            self._stop_event.wait(poll_dt)
+            # DRY: arm not driven; short fixed wait keeps wiring testable + ordering.
+            delta = 0.0
+            wait_s = self.config.reach_dry_wait_s
+        else:
+            delta = float(np.max(np.abs(q_sol - q_right)))
+            wait_s = delta / max(self.config.reach_nominal_speed_rad_s, 1e-3) + self.config.reach_margin_s
+            wait_s = min(max(wait_s, self.config.reach_min_wait_s), self.config.reach_max_wait_s)
+        if self._stop_event.wait(wait_s):
+            return  # stopping: never hand off to ACT on a shutting-down bridge
+        # Diagnostic ONLY (never a gate): worst-joint err at handoff, to tune the
+        # wait. If this is large/decreasing, the wait fired mid-slew -> lower
+        # reach_nominal_speed_rad_s or raise reach_margin_s.
+        fire_err = float("nan")
+        with self._lock:
+            st = self._latest_state
+        if st is not None:
+            pos_now = list(st.position)
+            if len(pos_now) >= _ARM_START + _NUM_ARM:
+                m = np.array([float(x) for x in pos_now[_RIGHT_SLICE]])
+                if np.all(np.isfinite(m)):
+                    fire_err = float(np.max(np.abs(m - q_sol)))
+        logger.info(
+            f"IkReachBridge: open-loop wait {wait_s:.2f}s done (delta={delta:.3f} rad, "
+            f"nominal={self.config.reach_nominal_speed_rad_s} margin={self.config.reach_margin_s}); "
+            f"firing reach_done. [diag worst-joint err at fire={fire_err:.4f} rad - NOT a gate]"
+        )
+        self.reach_done.publish(Bool(data=True))
 
 
 __all__ = ["IkReachBridge", "IkReachBridgeConfig"]
