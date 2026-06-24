@@ -57,6 +57,26 @@ def test_in_reach_okra_is_picked_immediately() -> None:
     assert _no_reposition(skills)  # picked in place; any moves are the §8 sweep
 
 
+def test_rightmost_in_reach_okra_is_grasped_first() -> None:
+    """Two okra in the reach box → the RIGHT-most (max x) is grasped first.
+
+    Selection is by position (right→left sweep), not ripeness. Both okra are in
+    the reach box and equally ripe; the right one (x=0.45) must be picked before
+    the left one (x=0.15).
+    """
+    field = [
+        FieldOkra("left", x=0.15, y=0.45, z=0.80, ripeness=0.9),
+        FieldOkra("right", x=0.45, y=0.45, z=0.80, ripeness=0.9),
+    ]
+    skills = _mock(field)
+    final = _run(skills)
+
+    picked = [r["okra_id"] for r in final.get("records", []) if r.get("result") == "picked"]
+    assert picked[0] == "right"  # right-most chosen first
+    assert final["picks"] == 2   # both eventually picked
+    assert _no_reposition(skills)  # both already in reach; no chasing
+
+
 def test_too_far_okra_triggers_forward_then_pick() -> None:
     """An okra beyond the reach box (too far) → move FORWARD → pick."""
     field = [FieldOkra("far", x=0.30, y=0.85, z=0.80, ripeness=0.9)]

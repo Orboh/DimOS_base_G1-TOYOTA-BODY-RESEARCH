@@ -156,16 +156,24 @@ def build_harvest_graph(
     def select(state: HarvestState) -> HarvestState:
         """Phase 3: decide the next move = grasp / approach / (nothing here).
 
-        Priority: a ripe okra already in the reach box → grasp it. Otherwise the
-        nearest ripe okra that is only out of reach in x/y (height OK) → approach
-        it. Ripe okra out of HEIGHT reach are skipped (the G1 cannot squat).
+        Priority: an okra already in the reach box → grasp the RIGHT-most one
+        (right→left sweep). Otherwise the nearest okra that is only out of reach
+        in x/y (height OK) → approach it. Okra out of HEIGHT reach are skipped
+        (the G1 cannot squat).
+
+        Note: ripeness gating is out of scope for now — ripeness is a 1.0
+        placeholder for every okra (no classifier/VLM wired), so ``_ripe_visible``
+        passes everything. The grasp target is chosen by position (right-most),
+        not ripeness. Restore the ripeness sort below when ``ripeness_fn`` lands.
         """
         ripe = _ripe_visible(state)
         log = state.get("log", [])
 
         in_box = [o for o in ripe if cfg.reach.contains(o.pos_3d)]
         if in_box:
-            in_box.sort(key=lambda o: o.ripeness, reverse=True)
+            # in_box.sort(key=lambda o: o.ripeness, reverse=True)  # 旧: 熟度優先（熟度実装後に復活）
+            # 右→左スイープ: reach box 内で最も右（x 最大）の okra を優先。
+            in_box.sort(key=lambda o: o.pos_3d.get("x", 0.0), reverse=True)
             target = in_box[0]
             voice.say(announce.grasping())
             return HarvestState(
