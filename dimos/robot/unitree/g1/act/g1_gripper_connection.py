@@ -77,6 +77,14 @@ class G1GripperConnectionConfig(ModuleConfig):
     # right_gripper_state, but writes NOTHING to rt/dex1/right/cmd — the gripper
     # does not move. Used by the dry-run blueprint.
     publish_cmd: bool = True
+    # FIXED-HOLD mode (kinesthetic collection): if set, hold the gripper AT this q
+    # (ramped from the measured start over hold_ramp_s), IGNORING gripper_target — so
+    # the gripper stays at e.g. ~3cm open while the operator hand-guides. None = normal
+    # (hold current / follow gripper_target). q units are the Dex1 motor q (clamp ~[0,9],
+    # observed rest ~3-5); the 3cm value is NOT a known mapping — tune on hardware
+    # (watch right_gripper_state) until the opening looks right.
+    hold_target_q: float | None = None
+    hold_ramp_s: float = 1.5     # ramp measured->hold_target_q [s] (avoid a sudden jaw move)
 
 
 class G1GripperConnection(Module):
@@ -97,6 +105,8 @@ class G1GripperConnection(Module):
         self._thread: Thread | None = None
         self._measured_q: float | None = None
         self._target_q: float | None = None
+        self._hold_q0: float | None = None   # measured q at start (fixed-hold ramp origin)
+        self._hold_t0: float = 0.0
 
     @rpc
     def start(self) -> None:
@@ -138,7 +148,16 @@ class G1GripperConnection(Module):
                     "(is the right Dex1 connected and teleimager/robot publishing?)"
                 )
             self._target_q = self._measured_q  # hold current position until ACT sends a target
-        logger.info(f"Dex1 right gripper ready; holding current q={self._target_q:.3f}")
+            if self.config.hold_target_q is not None:
+                self._hold_q0 = self._measured_q
+                self._hold_t0 = time.perf_counter()
+        if self.config.hold_target_q is not None:
+            logger.info(
+                f"Dex1 right gripper FIXED-HOLD: ramping q {self._measured_q:.3f} -> "
+                f"{self.config.hold_target_q:.3f} over {self.config.hold_ramp_s}s (ignoring gripper_target)."
+            )
+        else:
+            logger.info(f"Dex1 right gripper ready; holding current q={self._target_q:.3f}")
 
         self.register_disposable(Disposable(self.gripper_target.subscribe(self._on_target)))
         self._stop_event.clear()
@@ -209,7 +228,12 @@ class G1GripperConnection(Module):
             with self._lock:
                 if self._cmd_msg is None or self._publisher is None:
                     break
-                target = self._target_q
+                # Fixed-hold (collection): command a ramped constant, ignore gripper_target.
+                if self.config.hold_target_q is not None and self._hold_q0 is not None:
+                    a = min(1.0, (now - self._hold_t0) / max(1e-3, self.config.hold_ramp_s))
+                    target = self._hold_q0 + (self.config.hold_target_q - self._hold_q0) * a
+                else:
+                    target = self._target_q
                 measured = self._measured_q
                 if target is not None and self.config.publish_cmd:  # dry-run: no cmd write
                     self._cmd_msg.cmds[0].q = float(target)

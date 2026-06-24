@@ -67,6 +67,7 @@ from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
 from dimos.msgs.sensor_msgs.JointState import JointState
+from dimos.msgs.std_msgs.Bool import Bool
 from dimos.robot.unitree.g1.act.dds_init import channel_lock, ensure_channel_factory
 from dimos.utils.logging_config import setup_logger
 
@@ -112,6 +113,17 @@ class G1ArmSdkConnectionConfig(ModuleConfig):
     # motor_states (so this can be the observation source) but writes NOTHING to
     # rt/arm_sdk — the arms do not move. Used by the dry-run blueprint.
     publish_cmd: bool = True
+    # KINESTHETIC COLLECTION mode (default off = no behavior change for deploy).
+    # When True: subscribe reach_done; after a reach completes, the RIGHT arm (22-28)
+    # goes compliant (kp ramped to 0 + feedforward gravity tau) so a human hand-guides
+    # it while LEFT arm + waist stay stiff. A new arm_target re-stiffens the right arm
+    # (next reach). Gravity g(q) from the reduced right-arm model (pinocchio rnea, v=a=0),
+    # same as xr_teleoperate robot_arm_ik.py. Verified on hw 2026-06-24 (Step 0/0b PASS).
+    collection_mode: bool = False
+    compliant_kp_ramp_s: float = 1.5   # right-arm kp 80->0 ramp time on going compliant [s]
+    gravity_tau_scale: float = 1.0     # scale on the gravity feedforward tau
+    urdf_path: str = ""                # gravity model URDF (empty = right_arm_model DEFAULT_URDF)
+    kd_compliant: float = 1.0          # small joint damping while compliant (kp=0)
 
 
 class G1ArmSdkConnection(Module):
@@ -121,9 +133,26 @@ class G1ArmSdkConnection(Module):
 
     arm_target: In[JointState]      # 14 arm joint targets (left 7, right 7) [rad]
     motor_states: Out[JointState]   # full 29-DOF state, for the ACT observation
+    reach_done: In[Bool]            # (collection_mode) IK settled -> right arm goes compliant
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        # Kinesthetic-collection compliant state (only used when collection_mode).
+        self._compliant = False          # right arm hand-guidable (kp->0 + gravity tau)
+        self._comp_t0 = 0.0              # kp-ramp start time
+        self._grav_model = None
+        self._grav_data = None
+        if self.config.collection_mode:
+            import pinocchio  # noqa: F401  (ensure available; used in the loop)
+
+            from dimos.robot.unitree.g1.ik_reach.right_arm_model import (
+                DEFAULT_URDF,
+                load_g1_right_arm_ik,
+            )
+            urdf = self.config.urdf_path or str(DEFAULT_URDF)
+            _arm = load_g1_right_arm_ik(urdf)
+            self._grav_model = _arm.ik.model      # reduced 7-DOF right arm (q[0..6] = motors 22-28)
+            self._grav_data = self._grav_model.createData()
         self._publisher: ChannelPublisher | None = None
         self._subscriber: ChannelSubscriber | None = None
         self._low_cmd: LowCmd_ | None = None
@@ -200,6 +229,8 @@ class G1ArmSdkConnection(Module):
         logger.info(f"arm_sdk ready (mode_machine={self._mode_machine}); holding current upper-body pose")
 
         self.register_disposable(Disposable(self.arm_target.subscribe(self._on_arm_target)))
+        if self.config.collection_mode:
+            self.register_disposable(Disposable(self.reach_done.subscribe(self._on_reach_done)))
         self._t_start = time.perf_counter()
         self._stop_event.clear()
         self._thread = Thread(target=self._control_loop, name="g1-arm-sdk", daemon=True)
@@ -214,6 +245,12 @@ class G1ArmSdkConnection(Module):
     @rpc
     def stop(self) -> None:
         # Ramp weight back to 0 to hand the arms back to the onboard controller.
+        # Collection: clear compliant first so the loop re-stiffens the right arm at its
+        # measured pose before the weight ramp-down (never hand back a limp right arm).
+        with self._lock:
+            self._compliant = False
+        if self.config.collection_mode:
+            time.sleep(2.0 * (1.0 / float(self.config.publish_rate_hz)) + 0.05)  # let a few cycles re-stiffen
         self._stop_event.set()
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=2.0)
@@ -256,11 +293,24 @@ class G1ArmSdkConnection(Module):
             if self._mode_machine is None:
                 self._mode_machine = msg.mode_machine
 
+    def _on_reach_done(self, _msg: Bool) -> None:
+        # Collection: the IK reach settled at the pre-grasp -> make the RIGHT arm
+        # compliant so the operator hand-guides the grasp (left arm + waist stay stiff).
+        with self._lock:
+            if not self._compliant:
+                self._compliant = True
+                self._comp_t0 = time.perf_counter()
+        logger.info("G1ArmSdkConnection: reach_done -> RIGHT arm compliant (hand-guide; support it).")
+
     def _on_arm_target(self, msg: JointState) -> None:
         pos = list(msg.position)
         if len(pos) < len(_ARM_IDX):
             logger.warning(f"arm_target has {len(pos)} joints; expected {len(_ARM_IDX)}; ignoring")
             return
+        # A new reach target re-stiffens the right arm (it must slew to the next pre-grasp).
+        if self.config.collection_mode:
+            with self._lock:
+                self._compliant = False
         target = np.array([float(x) for x in pos[: len(_ARM_IDX)]])
         if not np.all(np.isfinite(target)):
             logger.warning("arm_target contains non-finite values; ignoring")
@@ -300,10 +350,31 @@ class G1ArmSdkConnection(Module):
                 if low_state is not None and target is not None:
                     measured = np.array([float(low_state.motor_state[i].q) for i in _ARM_IDX])
                     clipped = self._clip_to_measured(target, measured)
+                    # Collection: RIGHT arm (motors 22-28 == _ARM_IDX[7:14]) compliant.
+                    comp = self._compliant
+                    g = None
+                    if comp and self._grav_model is not None:
+                        a_ramp = min(1.0, (now - self._comp_t0) / max(1e-3, self.config.compliant_kp_ramp_s))
+                        import pinocchio
+                        g = pinocchio.computeGeneralizedGravity(
+                            self._grav_model, self._grav_data, measured[7:14].astype(np.float64)
+                        )
                     for k, i in enumerate(_ARM_IDX):
-                        self._low_cmd.motor_cmd[i].q = float(clipped[k])
-                        self._low_cmd.motor_cmd[i].dq = 0.0
-                        self._low_cmd.motor_cmd[i].tau = 0.0
+                        is_wrist = i in _WRIST_IDX
+                        base_kp = self.config.kp_wrist if is_wrist else self.config.kp_arm
+                        if comp and i >= 22:  # right-arm joint -> compliant (hand-guided)
+                            self._low_cmd.motor_cmd[i].kp = float(base_kp * (1.0 - a_ramp))
+                            self._low_cmd.motor_cmd[i].kd = float(self.config.kd_compliant)
+                            self._low_cmd.motor_cmd[i].q = float(measured[k])  # follow measured (no position fight)
+                            self._low_cmd.motor_cmd[i].dq = 0.0
+                            self._low_cmd.motor_cmd[i].tau = float(g[k - 7]) * self.config.gravity_tau_scale
+                        else:                 # stiff position track (left arm always; right when not compliant)
+                            if i >= 22:       # restore right-arm gains after compliant
+                                self._low_cmd.motor_cmd[i].kp = float(base_kp)
+                                self._low_cmd.motor_cmd[i].kd = float(self.config.kd_wrist if is_wrist else self.config.kd_arm)
+                            self._low_cmd.motor_cmd[i].q = float(clipped[k])
+                            self._low_cmd.motor_cmd[i].dq = 0.0
+                            self._low_cmd.motor_cmd[i].tau = 0.0
                     self._low_cmd.motor_cmd[_WEIGHT_IDX].q = weight
                     if self._mode_machine is not None:
                         self._low_cmd.mode_machine = self._mode_machine
