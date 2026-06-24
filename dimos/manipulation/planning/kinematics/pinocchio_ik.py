@@ -67,6 +67,11 @@ class PinocchioIKConfig:
     damp: float = 1e-2
     dt: float = 1.0
     max_velocity: float = 10.0
+    # If True, solve for end-effector POSITION only (ignore orientation). Useful for
+    # "reach toward a point" tasks where any approach orientation is acceptable; avoids
+    # the over-constrained 6-DOF solve forcing large wrist reconfigurations. Default
+    # False preserves the original full-pose behavior for all existing callers.
+    position_only: bool = False
 
 
 class PinocchioIK:
@@ -94,6 +99,7 @@ class PinocchioIK:
         data: pinocchio.Data,
         ee_joint_id: int,
         config: PinocchioIKConfig | None = None,
+        ee_frame_id: int | None = None,
     ) -> None:
         """Initialize solver with an existing Pinocchio model.
 
@@ -102,10 +108,18 @@ class PinocchioIK:
             data: Pinocchio data (created from model)
             ee_joint_id: End-effector joint ID in the kinematic chain
             config: Solver configuration (uses defaults if None)
+            ee_frame_id: Optional end-effector FRAME id. When provided, solve() and
+                forward_kinematics() operate on this frame (data.oMf /
+                computeFrameJacobian) instead of the joint placement. Use this to
+                target a tool/gripper-tip frame rigidly attached to the EE joint so
+                the offset rotates with the wrist (e.g. wrist-yaw rotation is fully
+                accounted for each iteration). When None, the original joint-based
+                path is used (backward compatible for all existing callers).
         """
         self._model = model
         self._data = data
         self._ee_joint_id = ee_joint_id
+        self._ee_frame_id = ee_frame_id
         self._config = config or PinocchioIKConfig()
 
     @classmethod
@@ -172,19 +186,32 @@ class PinocchioIK:
         cfg = config or self._config
         q = q_init.copy()
         final_err = float("inf")
+        ndim = 3 if cfg.position_only else 6  # translation-only vs full pose
+        use_frame = self._ee_frame_id is not None
 
         for _ in range(cfg.max_iter):
             pinocchio.forwardKinematics(self._model, self._data, q)
-            iMd = self._data.oMi[self._ee_joint_id].actInv(target_pose)
+            if use_frame:
+                # Frame-based: the EE is a tool frame rigidly attached to the EE joint,
+                # so its placement (and thus the offset) is recomputed every iteration
+                # — wrist rotation is fully accounted for.
+                pinocchio.updateFramePlacements(self._model, self._data)
+                oMee = self._data.oMf[self._ee_frame_id]
+            else:
+                oMee = self._data.oMi[self._ee_joint_id]
+            iMd = oMee.actInv(target_pose)
 
-            err = pinocchio.log(iMd).vector
+            err = pinocchio.log(iMd).vector[:ndim]  # [:3]=translation, [3:]=rotation
             final_err = float(norm(err))
             if final_err < cfg.eps:
                 return q, True, final_err
 
-            J = pinocchio.computeJointJacobian(self._model, self._data, q, self._ee_joint_id)
-            J = -np.dot(pinocchio.Jlog6(iMd.inverse()), J)
-            v = -J.T.dot(solve(J.dot(J.T) + cfg.damp * np.eye(6), err))
+            if use_frame:
+                J = pinocchio.computeFrameJacobian(self._model, self._data, q, self._ee_frame_id)
+            else:
+                J = pinocchio.computeJointJacobian(self._model, self._data, q, self._ee_joint_id)
+            J = (-np.dot(pinocchio.Jlog6(iMd.inverse()), J))[:ndim, :]
+            v = -J.T.dot(solve(J.dot(J.T) + cfg.damp * np.eye(ndim), err))
 
             # Clamp velocity to prevent explosion near singularities
             v_norm = norm(v)
@@ -202,9 +229,12 @@ class PinocchioIK:
             joint_positions: Joint angles in radians
 
         Returns:
-            End-effector pose as SE3
+            End-effector pose as SE3 (tool frame if ee_frame_id was given, else EE joint)
         """
         pinocchio.forwardKinematics(self._model, self._data, joint_positions)
+        if self._ee_frame_id is not None:
+            pinocchio.updateFramePlacements(self._model, self._data)
+            return self._data.oMf[self._ee_frame_id].copy()
         return self._data.oMi[self._ee_joint_id].copy()
 
 
