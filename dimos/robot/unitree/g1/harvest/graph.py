@@ -132,6 +132,7 @@ def build_harvest_graph(
         iterations = state.get("iterations", 0) + 1
         if iterations == 1:
             voice.say(announce.start())
+        voice.say(announce.detect_result(len(okra)))
         # Remember every ripe, not-yet-excluded okra in the odometry frame, so we
         # can return for ones we pass. Refreshes the estimate on each sighting.
         offset = _offset(state)
@@ -181,16 +182,20 @@ def build_harvest_graph(
         excluded = list(state.get("excluded_ids", []))
         records = list(state.get("records", []))
         pending = dict(state.get("pending", {}))
-        skipped_height = False
+        skipped_height_ids = []
         for o in ripe:
             if not cfg.reach.z_contains(o.pos_3d):
                 excluded.append(o.id)
                 pending.pop(o.id, None)  # can't reach by base motion -> forget it
                 records.append({"okra_id": o.id, "result": "skipped_height"})
                 log = log + [f"select: {o.id} out of height reach -> skip"]
-                skipped_height = True
-        if skipped_height:
+                skipped_height_ids.append(o.id)
+        if skipped_height_ids:
             voice.say(announce.skip_height())
+
+        skipped_unripe = [o for o in state.get("okra_visible", []) if o.ripeness < cfg.ripeness_threshold]
+        if skipped_unripe:
+            voice.say(announce.ripeness_skip(len(skipped_unripe)))
 
         approachable = [
             o
@@ -248,6 +253,7 @@ def build_harvest_graph(
     def verify(state: HarvestState) -> HarvestState:
         """Phase 6: re-observe and check the fruit is actually held + separated."""
         ok = skills.verify_harvest()
+        voice.say(announce.verify_ok() if ok else announce.verify_fail())
         return HarvestState(
             last_verify_ok=ok,
             log=state.get("log", []) + [f"verify: {'OK' if ok else 'FAILED'}"],

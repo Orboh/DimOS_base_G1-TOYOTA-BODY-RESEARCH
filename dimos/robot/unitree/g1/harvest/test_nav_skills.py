@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dimos.robot.unitree.g1.harvest.nav_skills import (
     make_navigate_stations,
+    make_search_forward,
     make_twist_move_cmd,
 )
 
@@ -66,3 +67,17 @@ def test_relative_move_uses_twist_move_cmd_end_to_end() -> None:
     skills.relative_move(lateral=0.0, forward=0.30)
     assert any(t.linear.x > 0 for t in published)  # drove forward
     assert published[-1].linear.x == 0.0  # ended stopped
+
+
+def test_search_forward_steps_then_finishes() -> None:
+    """go_to_next_station walks forward and returns True up to max, then False."""
+    moves: list = []
+    move_cmd = lambda vx, vy, vyaw, dur: moves.append((vx, vy, vyaw, dur))  # noqa: E731
+    go = make_search_forward(move_cmd, step_m=0.30, speed=0.5, max_advances=2)
+
+    assert go() is True  # advance 1
+    assert go() is True  # advance 2
+    assert go() is False  # exhausted -> field done (run terminates)
+    assert len(moves) == 2  # only the two successful advances drove the base
+    assert all(vx > 0 and vy == 0.0 for vx, vy, _, _ in moves)  # forward only
+    assert moves[0][3] == 0.30 / 0.5  # dur = step / speed

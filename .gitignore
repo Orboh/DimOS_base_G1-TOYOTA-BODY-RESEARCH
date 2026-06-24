@@ -97,3 +97,6 @@ MUJOCO_LOG.TXT
 *.log
 **/chromadb_data/
 **/visual_memory.pkl
+
+# Large USD assets (G1 dex1 model) — keep out of git
+usd_file/

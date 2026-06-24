@@ -172,6 +172,8 @@ def build_live_harvest_skills(
     pixel_to_base: Callable[[float, float, Any], dict[str, float]] | None = None,
     depth_getter: Callable[[float, float], float] | None = None,
     verify_fn: Callable[[], bool] | None = None,
+    detect_fn: Callable[[], list] | None = None,
+    next_station_fn: Callable[[], bool] | None = None,
 ) -> tuple[DimosHarvestSkills, Any]:
     """Assemble a :class:`DimosHarvestSkills` for the LIVE robot (first cut).
 
@@ -199,7 +201,9 @@ def build_live_harvest_skills(
         make_vlm_verify_harvest,
     )
 
-    if detector is not None:
+    if detect_fn is not None:
+        pass  # caller injected a detector (e.g. a VLM presence detector) — use it as-is
+    elif detector is not None:
         detect_fn = YoloOkraDetector(
             detector=detector,
             frame_getter=frame_getter,
@@ -248,7 +252,7 @@ def build_live_harvest_skills(
         detect_fn=detect_fn,
         grasp_fn=grasp.run_episode,
         verify_fn=verify_fn,
-        next_station_fn=_placeholder_next_station,
+        next_station_fn=next_station_fn or _placeholder_next_station,
         swap_fn=_placeholder_swap,
         base_speed=1000.0 if move_cmd is None else _BASE_SPEED,
     )

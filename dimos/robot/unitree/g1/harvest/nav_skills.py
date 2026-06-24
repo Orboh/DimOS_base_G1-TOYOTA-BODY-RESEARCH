@@ -101,4 +101,38 @@ def make_navigate_stations(
     return go_to_next_station
 
 
-__all__ = ["make_twist_move_cmd", "make_navigate_stations"]
+def make_search_forward(
+    move_cmd: Callable[[float, float, float, float], Any],
+    *,
+    step_m: float = 0.30,
+    speed: float = 0.5,
+    max_advances: int = 3,
+) -> Callable[[], bool]:
+    """Build a ``go_to_next_station()`` that WALKS FORWARD to keep searching.
+
+    Interim stand-in for the nav stack: instead of finishing after one spot when
+    no okra is found, drive the base FORWARD by ``step_m`` and return True so the
+    graph loops back to ``detect`` at the new position (okra may be ahead, out of
+    detection range). Bounded by ``max_advances``; returns False once exhausted
+    (field done) so the run still terminates. ``move_cmd(vx, vy, vyaw, dur)`` owns
+    timing (see :func:`make_twist_move_cmd`); ``vx>0`` is forward.
+
+    Combined with the §5 left-sweep this gives a forward-and-sweep search:
+    sweep left → step forward → sweep left → ... until ``max_advances``.
+    """
+    state = {"i": 0}
+
+    def go_to_next_station() -> bool:
+        if state["i"] >= max_advances:
+            logger.info(f"[search] forward advances exhausted ({max_advances}) -> field done")
+            return False
+        state["i"] += 1
+        dur = abs(step_m) / max(1e-3, speed)
+        move_cmd(speed, 0.0, 0.0, dur)  # vx = forward
+        logger.info(f"[search] step forward {step_m:.2f} m (advance {state['i']}/{max_advances})")
+        return True
+
+    return go_to_next_station
+
+
+__all__ = ["make_twist_move_cmd", "make_navigate_stations", "make_search_forward"]

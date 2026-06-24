@@ -6,16 +6,16 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""DimOS Module that runs the okra-harvest LangGraph flow on ``start()``.
+"""``start()`` でオクラ収穫 LangGraph フローを実行する DimOS モジュール。
 
-Wraps the harvest orchestrator (graph + skills + SafetyMonitor + Japanese voice)
-as a deployable Module so ``dimos run unitree-g1-okra-harvest`` starts the whole
-flow. Defaults to the **DUMMY** skills (no robot) — every action logs ``[DUMMY]``
-and the spoken lines print with a 🔊 prefix.
+収穫オーケストレーター（グラフ + スキル + SafetyMonitor + 日本語音声）を
+デプロイ可能な Module としてラップし、``dimos run unitree-g1-okra-harvest``
+でフロー全体を起動する。デフォルトは **DUMMY** スキル（ロボットなし）—
+各アクションは ``[DUMMY]`` をログ出力し、音声行は 🔊 プレフィックス付きで表示される。
 
-To drive the real robot, ``use_dummy=False`` is reserved but NOT yet wired (the
-real grasp = a stoppable okra-ACT GraspModule, detect = YOLO+depth, etc. — see
-``README.md``); it raises ``NotImplementedError`` for now rather than pretend.
+実機を動かす場合は ``use_dummy=False`` を使用する予定だが、現時点では未接続
+（実際の把持 = 停止可能な okra-ACT GraspModule、検出 = YOLO+深度 等 — ``README.md`` 参照）。
+見せかけを避けるため、現在は ``NotImplementedError`` を送出する。
 """
 
 from __future__ import annotations
@@ -45,50 +45,68 @@ logger = setup_logger()
 
 
 class HarvestModuleConfig(ModuleConfig):
-    use_dummy: bool = True  # True = DUMMY (no robot); False = LIVE (real YOLO detect on camera)
-    num_okra: int = 3  # size of the dummy field (dummy mode only)
-    stations: int = 1  # number of dummy work stations (dummy mode only)
-    # LIVE detect target class(es). Stock yolo11n is COCO ("okra" needs a fine-tuned
-    # weight) — "banana" is a proxy to exercise the real camera→detect→select path.
+    use_dummy: bool = True  # True = DUMMY（ロボットなし）; False = LIVE（実カメラで YOLO 検出）
+    num_okra: int = 3  # ダミーフィールドのオクラ本数（ダミーモードのみ）
+    stations: int = 1  # ダミー作業ステーション数（ダミーモードのみ）
+    # LIVE 検出対象クラス。標準 yolo11n は COCO（"okra" にはファインチューニング済み重みが必要）—
+    # "banana" は実カメラ→検出→選択パスの動作確認用プロキシ。
     target_classes: str = "banana"
-    recursion_limit: int = 400  # LangGraph step budget (the loop revisits nodes)
-    # LIVE: speak Japanese through the G1 speaker (pyopenjtalk + PlayStream).
-    # False = log the lines to the console (no robot / no audio deps).
+    recursion_limit: int = 400  # LangGraph ステップ上限（ループでノードを再訪するため多め）
+    # LIVE: G1 スピーカーで日本語音声再生（pyopenjtalk + PlayStream）。
+    # False = コンソールにログ出力（ロボットなし / 音声依存なし）。
     use_g1_speaker: bool = False
-    network_interface: str = ""  # NIC for the G1 audio DDS (defaults to ROBOT_INTERFACE)
-    # LIVE verify_harvest via a local Ollama vision model. "moondream" = fast
-    # caption+keyword (~1s); "qwen3-vl:2b" = chat yes/no (~5s, multilingual).
-    # Empty = placeholder verify (always True). See ollama_vlm.py.
+    network_interface: str = ""  # G1 音声 DDS 用 NIC（未設定時は ROBOT_INTERFACE を使用）
+    # LIVE: ローカル Ollama ビジョンモデルで verify_harvest を実行。"moondream" = 高速
+    # キャプション+キーワード（約1秒）; "qwen3-vl:2b" = チャット yes/no（約5秒、多言語対応）。
+    # 空文字 = プレースホルダー検証（常に True）。ollama_vlm.py 参照。
     vlm_model: str = ""
-    ollama_host: str = ""  # Ollama base URL (empty = ollama_vlm DEFAULT_HOST / Jetson)
-    # LIVE: drive the real base for reposition/sweep via cmd_vel (SDK LocoClient).
-    # ⚠️ THE ROBOT WALKS — default off; enable only with real safety checks + operator.
+    ollama_host: str = ""  # Ollama ベース URL（空 = ollama_vlm DEFAULT_HOST / Jetson）
+    # LIVE: YOLO の代わりに同じ Ollama ビジョンモデルで detect_okra を実行（存在確認）。
+    # VLM がオクラを検出した場合に1本を返す — オクラ学習済み YOLO 重みなしで
+    # 検出後フロー（把持/確認/記録/掃引）を動作確認できる。
+    # vlm_model を使用（未設定時は "moondream"）。ollama_vlm.py 参照。
+    use_vlm_detect: bool = False
+    # LIVE: cmd_vel（SDK LocoClient）で実機ベースの再配置/掃引を制御。
+    # ⚠️ ロボットが歩行します — デフォルトは OFF; 実機安全確認 + オペレーター立会いのもとで有効化。
     use_base_move: bool = False
-    # LIVE: real okra-ACT reach for grasp (stoppable ActGraspModule). ⚠️ THE ARM
-    # MOVES — default off; needs act_service + arm/gripper connections wired.
+    # LIVE: スポット使い切り後（左掃引完了、オクラなし）に前進して
+    # 探索を継続する — ナビゲーションスタックの暫定代替（前方にオクラがある可能性）。
+    # use_base_move が必要。make_search_forward 参照。
+    use_forward_search: bool = False
+    search_forward_step: float = 0.30  # [m] 前進探索1ステップあたりの移動距離
+    max_search_advances: int = 3       # 前進探索ステップ上限（超えるとランを終了）
+    # LIVE: フロー開始前に最初のカメラフレームが届くまで最大この時間 [s] 待機し、
+    # 最初の検出で空画像を掴まないようにする。
+    first_frame_timeout_s: float = 10.0
+    # LIVE: ZED 深度画像を depth_getter として使用し、YOLO 検出の 3D 位置精度を向上させる。
+    # ZEDCamera が depth_image を出力するブループリント（unitree-g1-okra-harvest-zed）で使用。
+    use_zed_depth: bool = False
+    # LIVE: 把持に実機 okra-ACT（停止可能 ActGraspModule）を使用。⚠️ アームが動きます —
+    # デフォルトは OFF; act_service + アーム/グリッパー接続の配線が必要。
     use_act_grasp: bool = False
-    act_endpoint: str = "tcp://127.0.0.1:5701"  # okra-ACT inference service (ZMQ REP)
-    grasp_max_steps: int = 120  # ACT reach episode length cap
-    # §6 real safety (used when real motion is on). File e-stop: `touch` to pause.
+    act_endpoint: str = "tcp://127.0.0.1:5701"  # okra-ACT 推論サービス（ZMQ REP）
+    grasp_max_steps: int = 120  # ACT 到達エピソード長の上限
+    # §6 実機安全（実機動作が有効な場合に使用）。ファイル E-stop: `touch` で一時停止。
     safety_estop_file: str = "/tmp/okra_estop"
-    torque_limit: float = 0.0  # [N·m] arm-torque contact guard; 0 = off (needs tuning)
+    torque_limit: float = 0.0  # [N·m] アームトルク接触ガード; 0 = OFF（要チューニング）
 
 
 class HarvestModule(Module):
-    """Runs the okra-harvest LangGraph flow in a worker thread when deployed.
+    """デプロイ時にワーカースレッドでオクラ収穫 LangGraph フローを実行する。
 
-    ``use_dummy=True`` (default): fully self-contained DUMMY flow, no robot.
-    ``use_dummy=False`` (LIVE): real YOLO detection on the head-camera
-    ``color_image`` stream; verify/move/grasp/nav are still ``[LIVE-TODO]``
-    placeholders (VLM verify, okra-ACT GraspModule, base motion and nav are
-    follow-ups), so it runs real perception without real motion.
+    ``use_dummy=True``（デフォルト）: ロボット不要の完全自己完結型 DUMMY フロー。
+    ``use_dummy=False``（LIVE）: ヘッドカメラ ``color_image`` ストリームで実 YOLO 検出を行う。
+    確認/移動/把持/ナビは引き続き ``[LIVE-TODO]`` プレースホルダー（VLM 確認、
+    okra-ACT GraspModule、ベース動作とナビは今後対応）のため、
+    実知覚のみを実行し実機動作は行わない。
     """
 
     config: HarvestModuleConfig
-    color_image: In[Image]  # head camera (LIVE mode); unused in dummy mode
-    cam_right_wrist: In[Image]  # right-wrist camera (LIVE + use_act_grasp, 2-cam tree model)
-    cmd_vel: Out[Twist]  # base velocity (LIVE + use_base_move) -> G1Connection
-    # Arm streams (LIVE + use_act_grasp) -> G1ArmSdkConnection / G1GripperConnection.
+    color_image: In[Image]  # ヘッドカメラ（LIVE モード）; ダミーモードでは未使用
+    depth_image: In[Image]  # ZED 深度画像（LIVE + use_zed_depth）; 未接続時は仮定深度にフォールバック
+    cam_right_wrist: In[Image]  # 右手首カメラ（LIVE + use_act_grasp、2カメラツリーモデル）
+    cmd_vel: Out[Twist]  # ベース速度（LIVE + use_base_move）-> G1Connection
+    # アームストリーム（LIVE + use_act_grasp）-> G1ArmSdkConnection / G1GripperConnection
     motor_states: In[JointState]
     right_gripper_state: In[JointState]
     arm_target: Out[JointState]
@@ -102,6 +120,7 @@ class HarvestModule(Module):
         self._voice: Any = None
         self._lock = threading.Lock()
         self._latest_image: Image | None = None
+        self._latest_depth: Image | None = None
         self._latest_wrist: Image | None = None
         self._latest_state: JointState | None = None
         self._latest_gripper: float = 0.0
@@ -121,12 +140,12 @@ class HarvestModule(Module):
                 self._latest_gripper = float(pos[0])
 
     def _build_voice(self) -> Any:
-        """Console-log announcer by default; the real G1 speaker if use_g1_speaker."""
+        """デフォルトはコンソールログアナウンサー; use_g1_speaker が True なら実 G1 スピーカーを使用。"""
         if self.config.use_g1_speaker:
             from dimos.robot.unitree.g1.harvest.g1_speaker import make_g1_playstream_announcer
 
             nic = self.config.network_interface or os.getenv("ROBOT_INTERFACE", "")
-            try:  # the deployment may or may not have initialised DDS already
+            try:  # デプロイ環境によって DDS が既に初期化済みの場合がある
                 return make_g1_playstream_announcer(nic, init_dds=True)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("G1 speaker init_dds=True failed; retry init_dds=False", error=str(exc))
@@ -137,7 +156,7 @@ class HarvestModule(Module):
         return CallableAnnouncer(lambda text: logger.info(f"🔊 {text}"))
 
     def _build_safety_checks(self) -> list[SafetyCheck]:
-        """Real §6 checks when real motion is on; else a dummy always-safe check."""
+        """実機動作が有効な場合は §6 実機チェック; それ以外はダミーの常時安全チェック。"""
         real_motion = self.config.use_act_grasp or self.config.use_base_move
         if not real_motion:
             return [SafetyCheck("dummy_person_clear", lambda: True)]
@@ -156,6 +175,10 @@ class HarvestModule(Module):
         with self._lock:
             self._latest_image = image
 
+    def _on_depth(self, image: Image) -> None:
+        with self._lock:
+            self._latest_depth = image
+
     @rpc
     def start(self) -> None:
         super().start()
@@ -167,12 +190,37 @@ class HarvestModule(Module):
                 num_okra=self.config.num_okra, stations=self.config.stations
             )
             grasp_module = skills.grasp_module
-            mode = "DUMMY (no robot)"
+            mode = "DUMMY（ロボットなし）"
         else:
             self.register_disposable(Disposable(self.color_image.subscribe(self._on_image)))
             targets = {c.strip() for c in self.config.target_classes.split(",") if c.strip()}
+
+            depth_getter = None
+            depth_note = "depth=assumed(0.45m)"
+            if self.config.use_zed_depth:
+                import numpy as np
+
+                self.register_disposable(Disposable(self.depth_image.subscribe(self._on_depth)))
+                _FALLBACK_DEPTH_M = 0.45  # [m] ZED が値を返さない場合のフォールバック
+
+                def _zed_depth_getter(u: float, v: float) -> float:
+                    with self._lock:
+                        img = self._latest_depth
+                    if img is None:
+                        return _FALLBACK_DEPTH_M
+                    try:
+                        arr = img.data  # float32 [H, W]（ZED MEASURE.DEPTH: メートル値）
+                        h, w = arr.shape[:2]
+                        d = float(arr[int(np.clip(v, 0, h - 1)), int(np.clip(u, 0, w - 1))])
+                        return d if np.isfinite(d) and 0.05 < d < 10.0 else _FALLBACK_DEPTH_M
+                    except Exception:
+                        return _FALLBACK_DEPTH_M
+
+                depth_getter = _zed_depth_getter
+                depth_note = "depth=ZED"
+
             verify_fn = None
-            verify_note = "verify=[LIVE-TODO] placeholder"
+            verify_note = "verify=[LIVE-TODO] プレースホルダー"
             if self.config.vlm_model:
                 from dimos.robot.unitree.g1.harvest.ollama_vlm import make_ollama_verify
 
@@ -182,13 +230,38 @@ class HarvestModule(Module):
                     host=self.config.ollama_host or None,
                 )
                 verify_note = f"verify=Ollama:{self.config.vlm_model}"
+
+            detect_override = None
+            detect_note = "detect=YOLO"
+            if self.config.use_vlm_detect:
+                from dimos.robot.unitree.g1.harvest.ollama_vlm import make_ollama_detect_okra
+
+                detect_model = self.config.vlm_model or "moondream"
+                detect_override = make_ollama_detect_okra(
+                    lambda: self._latest_image,
+                    model=detect_model,
+                    host=self.config.ollama_host or None,
+                )
+                detect_note = f"detect=Ollama:{detect_model}"
+
             move_cmd = None
-            move_note = "move=[LIVE-TODO] placeholder"
+            move_note = "move=[LIVE-TODO] プレースホルダー"
             if self.config.use_base_move:
                 from dimos.robot.unitree.g1.harvest.nav_skills import make_twist_move_cmd
 
                 move_cmd = make_twist_move_cmd(self.cmd_vel.publish)
                 move_note = "move=cmd_vel(SDK)"
+
+            next_station_override = None
+            if self.config.use_forward_search and move_cmd is not None:
+                from dimos.robot.unitree.g1.harvest.nav_skills import make_search_forward
+
+                next_station_override = make_search_forward(
+                    move_cmd,
+                    step_m=self.config.search_forward_step,
+                    max_advances=self.config.max_search_advances,
+                )
+                move_note += "+前進探索"
 
             grasp_override = None
             grasp_note = "grasp=DUMMY"
@@ -202,7 +275,7 @@ class HarvestModule(Module):
                 )
                 grasp_override = ActGraspModule(
                     image_getter=lambda: self._latest_image,
-                    wrist_getter=lambda: self._latest_wrist,  # 2-camera tree model
+                    wrist_getter=lambda: self._latest_wrist,  # 2カメラツリーモデル
                     state_getter=lambda: self._latest_state,
                     gripper_getter=lambda: self._latest_gripper,
                     publish_arm=self.arm_target.publish,
@@ -215,13 +288,16 @@ class HarvestModule(Module):
             skills, grasp_module = build_live_harvest_skills(
                 frame_getter=lambda: self._latest_image,
                 target_classes=targets,
+                detect_fn=detect_override,
                 verify_fn=verify_fn,
                 move_cmd=move_cmd,
                 grasp_module=grasp_override,
+                next_station_fn=next_station_override,
+                depth_getter=depth_getter,
             )
-            mode = f"LIVE — real YOLO detect; {verify_note}; {move_note}; {grasp_note}"
+            mode = f"LIVE — {detect_note}; {depth_note}; {verify_note}; {move_note}; {grasp_note}"
 
-        # Real §6 checks when real motion is on (file e-stop + torque), else dummy.
+        # 実機動作が有効な場合は §6 実機チェック（ファイル E-stop + トルク）; それ以外はダミー。
         self._monitor = SafetyMonitor(
             self._build_safety_checks(),
             on_pause=lambda reason: grasp_module.stop(),
@@ -231,18 +307,44 @@ class HarvestModule(Module):
         self._app = build_harvest_graph(
             skills, HarvestConfig(), announcer=voice, safety=self._monitor.gate
         )
+        # カメラは別ワーカー/プロセスからストリーミングされる — 最初のフレームが届くまで待機し、
+        # フロー最初の検出で空画像を掴まないようにする
+        # （そうしないと、フレーム到着前に picks=0 で終了してしまう）。
+        if not self.config.use_dummy:
+            self._await_first_frames(self.config.first_frame_timeout_s)
         self._thread = Thread(target=self._run, daemon=True, name="okra-harvest")
         self._thread.start()
-        logger.info(f"HarvestModule started — {mode}")
+        logger.info(f"HarvestModule 起動 — {mode}")
+
+    def _await_first_frames(self, timeout_s: float) -> None:
+        """ヘッド（ACT 把持が有効な場合は右手首も）カメラフレームが届くまでブロックし、
+        フローが画像なしで開始しないようにする。"""
+        import time
+
+        need_wrist = self.config.use_act_grasp
+        deadline = time.monotonic() + max(0.0, timeout_s)
+        while time.monotonic() < deadline:
+            with self._lock:
+                have_head = self._latest_image is not None
+                have_wrist = self._latest_wrist is not None or not need_wrist
+            if have_head and have_wrist:
+                logger.info("HarvestModule: 最初のカメラフレーム受信 — フロー開始")
+                return
+            time.sleep(0.1)
+        logger.warning(
+            f"HarvestModule: カメラフレームが {timeout_s}s 以内に届かなかった "
+            f"(head={self._latest_image is not None}, wrist_needed={need_wrist}, "
+            f"wrist={self._latest_wrist is not None}) — フローを開始します"
+        )
 
     def _run(self) -> None:
         try:
             final = self._app.invoke(
                 initial_state(), {"recursion_limit": self.config.recursion_limit}
             )
-            logger.info(f"HarvestModule: harvest flow COMPLETE — picks={final.get('picks')}")
+            logger.info(f"HarvestModule: 収穫フロー完了 — picks={final.get('picks')}")
         except Exception:  # noqa: BLE001
-            logger.exception("HarvestModule: harvest flow errored")
+            logger.exception("HarvestModule: 収穫フローでエラーが発生しました")
 
     @rpc
     def stop(self) -> None:
@@ -250,7 +352,7 @@ class HarvestModule(Module):
             self._monitor.stop()
             self._monitor = None
         if self._thread is not None:
-            self._thread.join(timeout=3.0)  # dummy flow finishes quickly; daemon otherwise
+            self._thread.join(timeout=3.0)  # ダミーフローは素早く終了; それ以外はデーモン
             self._thread = None
         if self._voice is not None and hasattr(self._voice, "stop"):
             self._voice.stop()

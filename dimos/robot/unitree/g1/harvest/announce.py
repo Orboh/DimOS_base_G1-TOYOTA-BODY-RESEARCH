@@ -148,6 +148,24 @@ def give_up() -> str:
     return "このオクラは収穫できませんでした。次に進みます。"
 
 
+def detect_result(count: int) -> str:
+    if count == 0:
+        return "オクラは見当たりません。"
+    return f"オクラが{count}個見えます。"
+
+
+def verify_ok() -> str:
+    return "しっかり握れています。収穫成功です。"
+
+
+def verify_fail() -> str:
+    return "うまくつかめていません。もう一度試みます。"
+
+
+def ripeness_skip(count: int) -> str:
+    return f"熟していないオクラが{count}個あります。飛ばします。"
+
+
 def done(count: int) -> str:
     return f"収穫を完了しました。全部で{count}個収穫しました。"
 
@@ -170,5 +188,9 @@ __all__ = [
     "next_station",
     "basket_swap",
     "give_up",
+    "detect_result",
+    "verify_ok",
+    "verify_fail",
+    "ripeness_skip",
     "done",
 ]

@@ -55,6 +55,25 @@ _EMPTY_KEYWORDS = ("empty", "nothing", "no object", "not holding")
 
 _AFFIRMATIVE = ("yes", "y", "true", "はい", "holding", "ある")
 
+# --- detection (scene-level "is there okra in view?") --------------------------
+# moondream path: describe the scene, then keyword-match for okra presence.
+DETECT_CAPTION_PROMPT = "Briefly describe any okra or green vegetables/pods visible in the image."
+# qwen3-vl path: a direct yes/no question.
+DETECT_YESNO_PROMPT = (
+    "Is there an okra (a green ridged seed pod) visible in the image? "
+    "Answer with only 'yes' or 'no'."
+)
+# Caption words that indicate okra is present in the scene.
+_OKRA_PRESENT_KEYWORDS = ("okra", "okura", "pod", "ladyfinger", "lady finger", "green vegetable", "green bean", "green")
+# Caption words that override a stray match (no okra in the scene).
+_OKRA_ABSENT_KEYWORDS = ("no okra", "no green", "no vegetable", "nothing", "empty")
+
+# Fixed IN-REACH position [m] used for a VLM detection — the default
+# HarvestConfig reach-box centre (x=lateral, y=depth, z=height). The okra-ACT
+# grasp is visuomotor (camera-driven, ignores pos_3d), so this only routes
+# select -> grasp; override via ``position`` to match a tuned reach box.
+_DEFAULT_IN_REACH = {"x": 0.30, "y": 0.45, "z": 0.75}
+
 
 def _is_moondream(model: str) -> bool:
     return "moondream" in model.lower()
@@ -167,9 +186,134 @@ def make_ollama_verify(
     return verify
 
 
+def make_ollama_detect_okra(
+    frame_getter: Callable[[], Any],
+    *,
+    model: str = "moondream",
+    host: str | None = DEFAULT_HOST,
+    position: dict[str, float] | None = None,
+    ripeness: float = 1.0,
+    prompt: str | None = None,
+    num_predict: int = 32,
+    llm: Any = None,
+    generate: Callable[[str, str], str] | None = None,
+    encode: Callable[[Any], str] | None = None,
+) -> Callable[[], list[Any]]:
+    """Build a ``detect_okra`` callable backed by a local Ollama vision model.
+
+    Unlike YOLO, the VLM only reports PRESENCE, not a location. So when okra is
+    seen this emits ONE :class:`Okra` at a fixed IN-REACH ``position`` (default
+    the HarvestConfig reach-box centre) with a fresh id, which routes
+    ``select -> grasp``. The okra-ACT grasp is visuomotor (driven by the camera,
+    NOT by ``pos_3d``), so the faked position only gates the decision — the arm
+    still reaches whatever it sees. This lets you exercise the post-detection
+    flow (grasp / verify / record / sweep) without an okra-trained YOLO weight.
+
+    ``moondream`` uses the caption+keyword strategy (it ignores yes/no); other
+    models use a chat yes/no. Fail-safe: no frame / Ollama down -> ``[]`` (never
+    fabricate a detection on error). ``llm`` / ``generate`` / ``encode`` are
+    injectable for tests.
+    """
+    from dimos.robot.unitree.g1.harvest.blackboard import Okra
+
+    moondream = _is_moondream(model)
+    pos = dict(position) if position else dict(_DEFAULT_IN_REACH)
+    state: dict[str, Any] = {"llm": llm, "n": 0}
+
+    def _encode(frame: Any) -> str:
+        import base64
+
+        import cv2
+
+        ok, buf = cv2.imencode(".jpg", frame.to_opencv())
+        if not ok:
+            raise ValueError("failed to JPEG-encode frame")
+        return base64.b64encode(buf.tobytes()).decode("ascii")
+
+    enc = encode or _encode
+
+    def _default_generate(b64: str, text: str) -> str:
+        import requests
+
+        url = (host or DEFAULT_HOST).rstrip("/") + "/api/generate"
+        payload = {
+            "model": model,
+            "prompt": text,
+            "images": [b64],
+            "stream": False,
+            "options": {"num_predict": num_predict},
+        }
+        r = requests.post(url, json=payload, timeout=60)
+        r.raise_for_status()
+        return r.json().get("response", "") or ""
+
+    gen = generate or _default_generate
+    caption_prompt = prompt or DETECT_CAPTION_PROMPT
+    yesno_prompt = prompt or DETECT_YESNO_PROMPT
+
+    def _present_moondream(frame: Any) -> bool:
+        caption = gen(enc(frame), caption_prompt).strip().lower()
+        if not caption:
+            logger.info("[ollama-detect] moondream: empty caption -> no okra")
+            return False
+        if any(k in caption for k in _OKRA_ABSENT_KEYWORDS):
+            result = False
+        else:
+            result = any(k in caption for k in _OKRA_PRESENT_KEYWORDS)
+        logger.info(f"[ollama-detect] moondream caption {caption[:60]!r} -> okra={result}")
+        return result
+
+    def _build_llm() -> Any:
+        from langchain_ollama import ChatOllama
+
+        kwargs: dict[str, Any] = {"model": model, "reasoning": True, "num_predict": 128}
+        if host:
+            kwargs["base_url"] = host
+        return ChatOllama(**kwargs)
+
+    def _present_chat(frame: Any) -> bool:
+        from langchain_core.messages import HumanMessage
+
+        if state["llm"] is None:
+            state["llm"] = _build_llm()
+        b64 = enc(frame)
+        msg = HumanMessage(
+            content=[
+                {"type": "text", "text": yesno_prompt},
+                {"type": "image_url", "image_url": f"data:image/jpeg;base64,{b64}"},
+            ]
+        )
+        answer = (getattr(state["llm"].invoke([msg]), "content", "") or "").strip().lower()
+        result = answer.startswith("yes") or answer.startswith(_AFFIRMATIVE)
+        logger.info(f"[ollama-detect] {model}: {answer[:40]!r} -> okra={result}")
+        return result
+
+    def detect_okra() -> list[Any]:
+        frame = frame_getter()
+        if frame is None:
+            logger.info("[ollama-detect] no camera frame yet -> []")
+            return []
+        try:
+            present = _present_moondream(frame) if moondream else _present_chat(frame)
+        except Exception as exc:  # noqa: BLE001 — Ollama down / model error => no detection
+            logger.warning(f"[ollama-detect] failed ({exc}); is Ollama running with '{model}'? -> []")
+            return []
+        if not present:
+            return []
+        state["n"] += 1
+        # Fresh id each sighting so the flow keeps engaging (bounded by
+        # max_harvest_iterations); in-reach + ripe so select routes to grasp.
+        return [Okra(id=f"vlm_okra_{state['n']}", pos_3d=dict(pos), ripeness=ripeness, reachable=True)]
+
+    return detect_okra
+
+
 __all__ = [
     "make_ollama_verify",
+    "make_ollama_detect_okra",
     "DEFAULT_HOST",
     "YESNO_PROMPT",
     "CAPTION_PROMPT",
+    "DETECT_CAPTION_PROMPT",
+    "DETECT_YESNO_PROMPT",
 ]

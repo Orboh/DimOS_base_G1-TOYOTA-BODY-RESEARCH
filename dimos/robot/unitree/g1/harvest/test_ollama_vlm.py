@@ -16,7 +16,10 @@ the network so nothing touches a model or robot. Also checks the fail-safe
 
 from __future__ import annotations
 
-from dimos.robot.unitree.g1.harvest.ollama_vlm import make_ollama_verify
+from dimos.robot.unitree.g1.harvest.ollama_vlm import (
+    make_ollama_detect_okra,
+    make_ollama_verify,
+)
 
 
 # --- moondream caption path (default model) ---------------------------------
@@ -121,3 +124,54 @@ def test_chat_sends_prompt_and_image() -> None:
     content = stub.calls[0][0].content  # HumanMessage.content blocks
     assert any(b.get("type") == "text" and b.get("text") == "PICKED?" for b in content)
     assert any(b.get("type") == "image_url" and "ABC123" in b.get("image_url", "") for b in content)
+
+
+# --- VLM detect_okra (moondream presence -> one in-reach okra) ----------------
+
+def _moondream_detect(caption: str, frame=object(), **kw):
+    return make_ollama_detect_okra(
+        lambda: frame, model="moondream", generate=lambda b64, prompt: caption,
+        encode=lambda f: "B64", **kw
+    )
+
+
+def test_detect_emits_in_reach_okra_when_seen() -> None:
+    okra = _moondream_detect("A plant with several green okra pods.")()
+    assert len(okra) == 1
+    o = okra[0]
+    assert o.ripeness >= 1.0 and o.reachable is True
+    assert o.pos_3d == {"x": 0.30, "y": 0.45, "z": 0.75}  # default in-reach centre
+
+
+def test_detect_empty_when_no_okra() -> None:
+    assert _moondream_detect("A plain white wall.")() == []
+
+
+def test_detect_absent_keyword_overrides() -> None:
+    assert _moondream_detect("There is no okra here, just green grass.")() == []
+
+
+def test_detect_fresh_id_each_sighting() -> None:
+    det = _moondream_detect("green okra pod")
+    first, second = det()[0].id, det()[0].id
+    assert first != second  # fresh id so the flow keeps engaging
+
+
+def test_detect_no_frame_is_empty() -> None:
+    assert _moondream_detect("okra", frame=None)() == []
+
+
+def test_detect_error_is_empty() -> None:
+    def boom(b64, prompt):
+        raise RuntimeError("connection refused")
+
+    det = make_ollama_detect_okra(lambda: object(), model="moondream", generate=boom, encode=lambda f: "B64")
+    assert det() == []  # fail-safe: never fabricate a detection on error
+
+
+def test_detect_custom_position() -> None:
+    det = make_ollama_detect_okra(
+        lambda: object(), model="moondream", generate=lambda b64, p: "okra",
+        encode=lambda f: "B64", position={"x": 0.1, "y": 0.5, "z": 0.6},
+    )
+    assert det()[0].pos_3d == {"x": 0.1, "y": 0.5, "z": 0.6}
