@@ -282,6 +282,10 @@ class G1ArmSdkConnection(Module):
                 w_start = float(max(0.0, min(1.0, self._last_weight)))
                 for w in np.linspace(w_start, 0.0, 101):
                     with self._lock:
+                        # Re-check inside the lock: a concurrent stop() (worker +
+                        # coordinator both call stop) may have torn these down already.
+                        if self._low_cmd is None or self._publisher is None or self._crc is None:
+                            break
                         self._low_cmd.motor_cmd[_WEIGHT_IDX].q = float(w)
                         if self._mode_machine is not None:
                             self._low_cmd.mode_machine = self._mode_machine

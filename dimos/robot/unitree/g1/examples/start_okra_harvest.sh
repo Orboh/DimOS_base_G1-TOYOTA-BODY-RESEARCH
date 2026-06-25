@@ -50,8 +50,9 @@ set -u
 LIVE="${1:-}"
 export LCM_DEFAULT_URL="udpm://${MCAST}:${PORT}?ttl=1"
 
-ACT_PID=""; HARVEST_PID=""; VIEWER_PID=""
+ACT_PID=""; HARVEST_PID=""; VIEWER_PID=""; WRIST_VIEW_PID=""
 cleanup() {
+  [ -n "$WRIST_VIEW_PID" ] && kill "$WRIST_VIEW_PID" 2>/dev/null
   [ -n "$VIEWER_PID" ] && kill "$VIEWER_PID" 2>/dev/null
   # Stop the harvest app with SIGINT (same as Ctrl-C) so G1ArmSdkConnection.stop()
   # ramps weight->0 before tearing down; wait for it to finish that handover.
@@ -157,7 +158,15 @@ for _ in $(seq 1 60); do
   grep -qm1 "G1ArmSdkConnection started" "$LOGFILE" && { echo "  harvest app up."; break; }
   sleep 1
 done
+# Auto-open the live wrist-camera view (the ACT model's only input) so the operator can
+# confirm the okra stays in frame through the grasp. Disable with OKRA_WRIST_VIEW=0.
+if [ "${OKRA_WRIST_VIEW:-1}" != "0" ]; then
+  echo "  opening live wrist-camera view (ACT input; OKRA_WRIST_VIEW=0 to disable)."
+  "$REPO/.venv/bin/python" scripts/wrist_cam_view.py >/dev/null 2>&1 &
+  WRIST_VIEW_PID=$!
+fi
 echo "================================================================"
+echo "  A live WRIST-CAMERA window (ACT's input) opens too — check the okra stays in frame."
 echo "  CLICK the okra in the viewer POINT CLOUD -> IK reach -> ACT grasp window."
 echo "  STOP (this terminal): press 'q' — cuts G1 transmission (weight->0, arm back to"
 echo "       the onboard controller), waits for the handover, then quits the program."
