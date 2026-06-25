@@ -27,6 +27,7 @@
 前提条件 / 環境変数:
   # NX:      右手首 UVC ウェブカメラの配信（teleimager-server 等）
   # laptop or Orin: act_service.py --serve（ZMQ :5701, ACT 推論）
+  #            ACT_REPO_ID=sotata/act-okura-kinesthetic-wrist-7d（手首単眼・右腕7次元）
   # Orin:    ollama serve（moondream を pull 済み）
   # Orin:    ROBOT_INTERFACE=<nic> dimos run unitree-g1-okra-harvest-ik
   #
@@ -80,6 +81,9 @@ unitree_g1_okra_harvest_ik = (
             # --- 把持（IK → ACT → 切断 シーケンス, [[SS-04/05/06]]）---
             use_act_grasp=_ARM,
             use_ik_grasp_sequence=_ARM,
+            # ACT は手首単眼・右腕7次元（sotata/act-okura-kinesthetic-wrist-7d）。
+            # act_service を ACT_REPO_ID=sotata/act-okura-kinesthetic-wrist-7d で起動すること。
+            act_right_arm_only_7d=True,
             act_endpoint=os.getenv("ACT_ENDPOINT", "tcp://127.0.0.1:5701"),
             cut_close_q=4.4,   # 切断時のグリッパ閉じ位置 [rad]
             blade_max_q=5.2,   # 刃保護の上限 [rad]（BladeGuard）

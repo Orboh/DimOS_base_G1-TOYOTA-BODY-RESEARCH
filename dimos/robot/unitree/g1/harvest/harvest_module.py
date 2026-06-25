@@ -90,6 +90,10 @@ class HarvestModuleConfig(ModuleConfig):
     use_act_grasp: bool = False
     act_endpoint: str = "tcp://127.0.0.1:5701"  # okra-ACT 推論サービス（ZMQ REP）
     grasp_max_steps: int = 120  # ACT 到達エピソード長の上限
+    # ACT モデルが手首単眼・右腕7次元（sotata/act-okura-kinesthetic-wrist-7d）か。
+    # True: state/action は右腕7関節のみ、画像は手首1枚、グリッパ次元なし（切断は ACT 外）。
+    # False（既定）: 旧 8次元右腕+グリッパ / 16次元両腕モデル（後方互換）。
+    act_right_arm_only_7d: bool = False
     # LIVE: 把持を IK 粗アプローチ→ACT 微調整→切断 のシーケンス（GraspSequence）で行う。
     # use_act_grasp と併用: True なら ActGraspModule を GraspSequence でラップし、
     # 重心への IK 接近後に ACT で切断点へ寄せ、グリッパを閉じて切断する（[[SS-04/05/06]]）。
@@ -320,13 +324,14 @@ class HarvestModule(Module):
                 )
                 act_module = ActGraspModule(
                     image_getter=lambda: self._latest_image,
-                    wrist_getter=lambda: self._latest_wrist,  # 2カメラツリーモデル
+                    wrist_getter=lambda: self._latest_wrist,  # 2カメラ / 手首単眼
                     state_getter=lambda: self._latest_state,
                     gripper_getter=lambda: self._latest_gripper,
                     publish_arm=self.arm_target.publish,
                     publish_gripper=self.gripper_target.publish,
                     act_endpoint=self.config.act_endpoint,
                     max_steps=self.config.grasp_max_steps,
+                    right_arm_only_7d=self.config.act_right_arm_only_7d,
                 )
                 if self.config.use_ik_grasp_sequence:
                     # IK 粗アプローチ→ACT 微調整→切断可否→切断 を1エピソードに束ねる。

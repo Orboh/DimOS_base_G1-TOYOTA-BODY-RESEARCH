@@ -15,8 +15,24 @@ ZMQ / act_service / a real arm.
 
 from __future__ import annotations
 
+import sys
 import threading
 import time
+import types
+
+# _publish lazily imports JointState (pulls dimos_lcm, only in the live/Orin env).
+# Stub a lightweight stand-in so the publish path is testable off-robot.
+if "dimos_lcm" not in sys.modules:
+    class _FakeJointState:
+        def __init__(self, name=None, position=None, velocity=None, effort=None):
+            self.name = name
+            self.position = position
+            self.velocity = velocity
+            self.effort = effort
+
+    _mod = types.ModuleType("dimos.msgs.sensor_msgs.JointState")
+    _mod.JointState = _FakeJointState  # type: ignore[attr-defined]
+    sys.modules["dimos.msgs.sensor_msgs.JointState"] = _mod
 
 from dimos.robot.unitree.g1.harvest.act_grasp import ActGraspModule
 
@@ -60,6 +76,66 @@ def test_two_camera_sends_both_images() -> None:
     mod.run_episode(_Okra(), 0.3)
     images = sent[0]["images"]
     assert set(images) == {"cam_high", "cam_right_wrist"}
+
+
+def test_7d_wrist_only_state_and_wire() -> None:
+    """7-DOF wrist-only: state is 7 right-arm joints, sole image = wrist in image_jpeg."""
+    sent: list = []
+
+    def _state():
+        s = _State()
+        # right arm (motor 22-28) = recognizable values 1..7
+        for i, v in enumerate(range(1, 8)):
+            s.position[22 + i] = float(v)
+        return s
+
+    published = {"arm": [], "grip": []}
+    mod = ActGraspModule(
+        image_getter=lambda: None,  # head not needed in 7d mode
+        state_getter=_state,
+        gripper_getter=lambda: 0.0,
+        publish_arm=lambda js: published["arm"].append(js),
+        publish_gripper=lambda js: published["grip"].append(js),
+        act_call=lambda obs: sent.append(obs) or [0.1] * 7,
+        rate_hz=1000.0,
+        max_steps=1,
+        wrist_getter=lambda: object(),
+        right_arm_only_7d=True,
+    )
+    mod._encode = lambda image: b"WRISTJPEG"
+    mod.run_episode(_Okra(), 0.3)
+
+    assert len(sent) == 1
+    # state = exactly the 7 right-arm joints, no gripper dim
+    assert sent[0]["state"] == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]
+    # sole image is the wrist, and it is also sent in the head image_jpeg slot
+    assert set(sent[0]["images"]) == {"cam_right_wrist"}
+    assert sent[0]["image_jpeg"] == b"WRISTJPEG"
+
+
+def test_7d_publishes_arm_not_gripper() -> None:
+    """7-DOF mode publishes the right arm into arm_target and NEVER the gripper (cut is out of ACT)."""
+    published = {"arm": [], "grip": []}
+    mod = ActGraspModule(
+        image_getter=lambda: None,
+        state_getter=lambda: _State(),
+        gripper_getter=lambda: 0.0,
+        publish_arm=lambda js: published["arm"].append(js),
+        publish_gripper=lambda js: published["grip"].append(js),
+        act_call=lambda obs: [0.5] * 7,
+        rate_hz=1000.0,
+        max_steps=1,
+        wrist_getter=lambda: object(),
+        right_arm_only_7d=True,
+    )
+    mod._encode = lambda image: b"JPEG"
+    mod.run_episode(_Okra(), 0.3)
+
+    assert len(published["arm"]) == 1
+    arm = published["arm"][0]
+    assert len(arm.position) == 14            # full 14-joint arm_target
+    assert arm.position[7:] == [0.5] * 7      # right half = ACT action
+    assert published["grip"] == []            # gripper untouched by ACT
 
 
 def test_two_camera_waits_for_wrist_frame() -> None:
