@@ -113,6 +113,12 @@ class G1ArmSdkConnectionConfig(ModuleConfig):
     # motor_states (so this can be the observation source) but writes NOTHING to
     # rt/arm_sdk — the arms do not move. Used by the dry-run blueprint.
     publish_cmd: bool = True
+    # OPERATOR DISCONNECT (2-stage stop). When True, subscribe a `disconnect` Bool:
+    # on True the loop ramps weight ->0 over weight_ramp_s (hand the upper body back
+    # to the onboard controller) and HOLDS the arm at its measured pose, while the
+    # process stays alive (so the operator cuts G1 transmission first, then quits the
+    # program). Wired by the okra-harvest blueprint to /g1/arm_sdk_disconnect.
+    enable_disconnect: bool = False
     # KINESTHETIC COLLECTION mode (default off = no behavior change for deploy).
     # When True: subscribe reach_done; after a reach completes, the RIGHT arm (22-28)
     # goes compliant (kp ramped to 0 + feedforward gravity tau) so a human hand-guides
@@ -134,6 +140,7 @@ class G1ArmSdkConnection(Module):
     arm_target: In[JointState]      # 14 arm joint targets (left 7, right 7) [rad]
     motor_states: Out[JointState]   # full 29-DOF state, for the ACT observation
     reach_done: In[Bool]            # (collection_mode) IK settled -> right arm goes compliant
+    disconnect: In[Bool]            # (enable_disconnect) operator cut: ramp weight->0, hold, stay alive
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -164,6 +171,12 @@ class G1ArmSdkConnection(Module):
         self._thread: Thread | None = None
         self._target_q: np.ndarray | None = None  # 14-vector ACT arm target [rad]
         self._t_start: float = 0.0
+        # Operator-disconnect (2-stage stop) state.
+        self._disconnect = False         # True => ramp weight->0 + hold, stay alive
+        self._disc_t0 = 0.0              # disconnect-ramp start time
+        self._weight_at_disc = 1.0       # weight value when disconnect fired (ramp from here)
+        self._disc_logged = False        # log "transmission cut" once weight reaches 0
+        self._last_weight = 0.0          # last weight commanded (so stop() ramps from here, not 1.0)
 
     @rpc
     def start(self) -> None:
@@ -231,6 +244,8 @@ class G1ArmSdkConnection(Module):
         self.register_disposable(Disposable(self.arm_target.subscribe(self._on_arm_target)))
         if self.config.collection_mode:
             self.register_disposable(Disposable(self.reach_done.subscribe(self._on_reach_done)))
+        if self.config.enable_disconnect:
+            self.register_disposable(Disposable(self.disconnect.subscribe(self._on_disconnect)))
         self._t_start = time.perf_counter()
         self._stop_event.clear()
         self._thread = Thread(target=self._control_loop, name="g1-arm-sdk", daemon=True)
@@ -262,7 +277,10 @@ class G1ArmSdkConnection(Module):
                 and self._low_cmd is not None
                 and self._crc is not None
             ):
-                for w in np.linspace(1.0, 0.0, 101):
+                # Ramp from the LAST commanded weight (≈0 already if the operator hit
+                # 'd' / disconnect), so a clean shutdown never re-engages arm_sdk at 1.0.
+                w_start = float(max(0.0, min(1.0, self._last_weight)))
+                for w in np.linspace(w_start, 0.0, 101):
                     with self._lock:
                         self._low_cmd.motor_cmd[_WEIGHT_IDX].q = float(w)
                         if self._mode_machine is not None:
@@ -301,6 +319,23 @@ class G1ArmSdkConnection(Module):
                 self._compliant = True
                 self._comp_t0 = time.perf_counter()
         logger.info("G1ArmSdkConnection: reach_done -> RIGHT arm compliant (hand-guide; support it).")
+
+    def _on_disconnect(self, msg: Bool) -> None:
+        # Operator pressed 'd': cut G1 transmission. Ramp weight->0 from its current
+        # value (hand the upper body back to the onboard controller) and hold the arm
+        # at its measured pose; the process stays alive so the operator can then quit.
+        if not bool(getattr(msg, "data", True)):
+            return
+        with self._lock:
+            if self._disconnect:
+                return
+            self._disconnect = True
+            self._disc_t0 = time.perf_counter()
+            self._weight_at_disc = self._last_weight
+        logger.warning(
+            "G1ArmSdkConnection: DISCONNECT -> ramping weight->0 over "
+            f"{self.config.weight_ramp_s}s; arm returns to the onboard controller (then quit safely)."
+        )
 
     def _on_arm_target(self, msg: JointState) -> None:
         pos = list(msg.position)
@@ -349,9 +384,22 @@ class G1ArmSdkConnection(Module):
                 target = self._target_q
                 if low_state is not None and target is not None:
                     measured = np.array([float(low_state.motor_state[i].q) for i in _ARM_IDX])
-                    clipped = self._clip_to_measured(target, measured)
+                    if self._disconnect:
+                        # Operator cut: ramp weight from its value at disconnect -> 0
+                        # and HOLD the arm at measured (no ACT tracking, no compliant).
+                        frac = (now - self._disc_t0) / max(1e-3, self.config.weight_ramp_s)
+                        weight = max(0.0, self._weight_at_disc * (1.0 - frac))
+                        clipped = measured
+                        if weight <= 0.0 and not self._disc_logged:
+                            self._disc_logged = True
+                            logger.warning(
+                                "G1ArmSdkConnection: G1 transmission CUT (weight=0; upper body "
+                                "back on the onboard controller). Safe to quit the program ('q')."
+                            )
+                    else:
+                        clipped = self._clip_to_measured(target, measured)
                     # Collection: RIGHT arm (motors 22-28 == _ARM_IDX[7:14]) compliant.
-                    comp = self._compliant
+                    comp = self._compliant and not self._disconnect
                     g = None
                     if comp and self._grav_model is not None:
                         a_ramp = min(1.0, (now - self._comp_t0) / max(1e-3, self.config.compliant_kp_ramp_s))
@@ -376,6 +424,7 @@ class G1ArmSdkConnection(Module):
                             self._low_cmd.motor_cmd[i].dq = 0.0
                             self._low_cmd.motor_cmd[i].tau = 0.0
                     self._low_cmd.motor_cmd[_WEIGHT_IDX].q = weight
+                    self._last_weight = weight  # so stop() ramps from here, not always 1.0
                     if self._mode_machine is not None:
                         self._low_cmd.mode_machine = self._mode_machine
                     self._low_cmd.crc = self._crc.Crc(self._low_cmd)

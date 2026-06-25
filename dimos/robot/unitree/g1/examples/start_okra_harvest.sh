@@ -50,8 +50,17 @@ set -u
 LIVE="${1:-}"
 export LCM_DEFAULT_URL="udpm://${MCAST}:${PORT}?ttl=1"
 
-ACT_PID=""
+ACT_PID=""; HARVEST_PID=""; VIEWER_PID=""
 cleanup() {
+  [ -n "$VIEWER_PID" ] && kill "$VIEWER_PID" 2>/dev/null
+  # Stop the harvest app with SIGINT (same as Ctrl-C) so G1ArmSdkConnection.stop()
+  # ramps weight->0 before tearing down; wait for it to finish that handover.
+  if [ -n "$HARVEST_PID" ] && kill -0 "$HARVEST_PID" 2>/dev/null; then
+    echo "  stopping harvest app (SIGINT pid $HARVEST_PID; weight ramps ->0) ..."
+    kill -INT "$HARVEST_PID" 2>/dev/null
+    for _ in $(seq 1 50); do kill -0 "$HARVEST_PID" 2>/dev/null || break; sleep 0.1; done
+    kill "$HARVEST_PID" 2>/dev/null
+  fi
   [ -n "$ACT_PID" ] && kill "$ACT_PID" 2>/dev/null && echo "  stopped ACT service (pid $ACT_PID)"
 }
 trap cleanup EXIT INT TERM
@@ -134,7 +143,24 @@ else
   done
 fi
 
-echo "== [5/5] native dimos-viewer auto-opens in ~12s; starting okra-harvest app (Ctrl-C to stop) =="
+echo "== [5/5] starting okra-harvest app (background) + viewer + key helper (foreground) =="
+# App in the BACKGROUND so the key helper owns this terminal's keyboard (clicking is
+# in the viewer GUI). The helper's 'q' cuts G1 transmission (weight->0) THEN quits.
+"$REPO/.venv/bin/dimos" run unitree-g1-okra-harvest >>"$LOGFILE" 2>&1 &
+HARVEST_PID=$!
 ( sleep 12; "$REPO/.venv/bin/dimos-viewer" \
     --connect rerun+http://127.0.0.1:9877/proxy --ws-url ws://127.0.0.1:3030/ws >/dev/null 2>&1 ) &
-"$REPO/.venv/bin/dimos" run unitree-g1-okra-harvest 2>&1 | tee -a "$LOGFILE"
+VIEWER_PID=$!
+echo "  waiting for the harvest app to come up (log $LOGFILE) ..."
+for _ in $(seq 1 60); do
+  kill -0 "$HARVEST_PID" 2>/dev/null || { echo "  ERROR: harvest app exited — see $LOGFILE"; tail -8 "$LOGFILE"; exit 1; }
+  grep -qm1 "G1ArmSdkConnection started" "$LOGFILE" && { echo "  harvest app up."; break; }
+  sleep 1
+done
+echo "================================================================"
+echo "  CLICK the okra in the viewer POINT CLOUD -> IK reach -> ACT grasp window."
+echo "  STOP (this terminal): press 'q' — cuts G1 transmission (weight->0, arm back to"
+echo "       the onboard controller), waits for the handover, then quits the program."
+echo "  (App log: $LOGFILE)"
+echo "================================================================"
+"$REPO/.venv/bin/python" scripts/okra_harvest_keys.py

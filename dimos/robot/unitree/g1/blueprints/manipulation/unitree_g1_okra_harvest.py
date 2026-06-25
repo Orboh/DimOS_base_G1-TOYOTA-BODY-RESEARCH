@@ -200,6 +200,9 @@ unitree_g1_okra_harvest = autoconnect(
         network_interface=_NIC,
         arm_velocity_limit=_ARM_VEL_LIMIT,
         publish_cmd=_LIVE,
+        # 2-stage stop: 'd' in the key helper publishes /g1/arm_sdk_disconnect ->
+        # ramp weight->0 (hand the arm back to the onboard controller), then 'q' quits.
+        enable_disconnect=True,
         # NOTE: no initial_arm_pose — ACT starts from the IK pre-grasp, not the
         # dataset first-frame pose (the IK reach provides the in-distribution start).
     ),
@@ -226,6 +229,8 @@ unitree_g1_okra_harvest = autoconnect(
         ("right_gripper_state", JointState): LCMTransport("/g1/right_gripper_state", JointState),
         # explicit transport so the IK->ACT trigger crosses forkserver workers.
         ("reach_done", Bool): LCMTransport("/g1/reach_done", Bool),
+        # operator 2-stage stop: the key helper publishes here to cut G1 transmission.
+        ("disconnect", Bool): LCMTransport("/g1/arm_sdk_disconnect", Bool),
     }
 )
 
