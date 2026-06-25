@@ -103,6 +103,7 @@ all_blueprints = {
     "unitree-g1-okra-harvest-live-arm": "dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_okra_harvest_live_arm:unitree_g1_okra_harvest_live_arm",
     "unitree-g1-okra-harvest-walk": "dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_okra_harvest_walk:unitree_g1_okra_harvest_walk",
     "unitree-g1-okra-harvest-zed": "dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_okra_harvest_zed:unitree_g1_okra_harvest_zed",
+    "unitree-g1-okra-harvest-ik": "dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_okra_harvest_ik:unitree_g1_okra_harvest_ik",
     "unitree-g1-shm": "dimos.robot.unitree.g1.blueprints.perceptive.unitree_g1_shm:unitree_g1_shm",
     "unitree-g1-sim": "dimos.robot.unitree.g1.blueprints.perceptive.unitree_g1_sim:unitree_g1_sim",
     "unitree-go2": "dimos.robot.unitree.go2.blueprints.smart.unitree_go2:unitree_go2",
