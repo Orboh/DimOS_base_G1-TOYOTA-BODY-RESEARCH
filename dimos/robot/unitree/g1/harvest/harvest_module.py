@@ -49,8 +49,12 @@ class HarvestModuleConfig(ModuleConfig):
     num_okra: int = 3  # ダミーフィールドのオクラ本数（ダミーモードのみ）
     stations: int = 1  # ダミー作業ステーション数（ダミーモードのみ）
     # LIVE 検出対象クラス。標準 yolo11n は COCO（"okra" にはファインチューニング済み重みが必要）—
-    # "banana" は実カメラ→検出→選択パスの動作確認用プロキシ。
+    # "banana" は実カメラ→検出→選択パスの動作確認用プロキシ。okra 重み投入後は "okra"。
     target_classes: str = "banana"
+    # LIVE YOLO 重み。既定は COCO yolo11n（banana プロキシ用）。オクラ専用 seg モデルは
+    # HuggingFace Kota0612/okra-seg-detector（[[SS-01-オクラ検出]]）。ローカルパス or
+    # ultralytics が解決できる名前を渡す。seg モデルならマスク重心+depth median で3D化。
+    yolo_model: str = "yolo11n.pt"
     recursion_limit: int = 400  # LangGraph ステップ上限（ループでノードを再訪するため多め）
     # LIVE: G1 スピーカーで日本語音声再生（pyopenjtalk + PlayStream）。
     # False = コンソールにログ出力（ロボットなし / 音声依存なし）。
@@ -368,6 +372,7 @@ class HarvestModule(Module):
                 grasp_module=grasp_override,
                 next_station_fn=next_station_override,
                 depth_getter=depth_getter,
+                yolo_model=self.config.yolo_model,
             )
             mode = f"LIVE — {detect_note}; {depth_note}; {verify_note}; {move_note}; {grasp_note}"
 

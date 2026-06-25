@@ -42,6 +42,27 @@ _VFOV_DEG = 42.0
 _CAM_HEIGHT_M = 1.10  # head camera height off the ground (approx, G1 ~1.27 m)
 _CAM_FORWARD_M = 0.05  # camera forward offset from the base origin
 _ASSUMED_DEPTH_M = 0.45  # fallback fruit depth when no depth source is wired
+_MASK_DEPTH_SAMPLES = 200  # cap on mask pixels sampled for the median depth (perf)
+
+
+def _mask_centroid(det: Any) -> tuple[float, float] | None:
+    """Pixel centroid (u, v) of a segmentation mask, or None if no mask.
+
+    The mask centroid sits on the fruit body (where depth is reliable), unlike the
+    bbox centre which can fall on background between fruit and leaves.
+    """
+    mask = getattr(det, "mask", None)
+    if mask is None:
+        return None
+    try:
+        import numpy as np
+
+        ys, xs = np.where(np.asarray(mask) > 0)
+        if len(xs) == 0:
+            return None
+        return (float(np.mean(xs)), float(np.mean(ys)))
+    except Exception:
+        return None
 
 
 def default_pixel_to_base(
@@ -123,9 +144,13 @@ class YoloOkraDetector:
                 continue
             if float(getattr(det, "confidence", 1.0)) < self._min_conf:
                 continue
-            x1, y1, x2, y2 = getattr(det, "bbox")
-            u = (x1 + x2) / 2.0
-            v = (y1 + y2) / 2.0
+            # セグメンテーションマスクがあれば「実の重心(u,v)」を使う（[[SS-04-粗アプローチIK]]）。
+            # 無ければ bbox 中心にフォールバック。
+            uv = _mask_centroid(det)
+            if uv is None:
+                x1, y1, x2, y2 = getattr(det, "bbox")
+                uv = ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
+            u, v = uv
             pos = self._pos_3d(u, v, det, frame)
             ripeness = float(self._ripeness_fn(det)) if self._ripeness_fn else 1.0
             track = getattr(det, "track_id", None)
@@ -146,8 +171,40 @@ class YoloOkraDetector:
             return self._pixel_to_base(u, v, det)
         w = int(getattr(frame, "width", 640))
         h = int(getattr(frame, "height", 480))
-        depth = self._depth_getter(u, v) if self._depth_getter else _ASSUMED_DEPTH_M
+        # 深度: セグメンテーションマスクがあれば「マスク内の有効深度の median」（外れ値に
+        # 強い・茎/背景の混入を避ける、[[SS-04-粗アプローチIK]]）。無ければ点(u,v)の深度。
+        depth = self._mask_median_depth(det)
+        if depth is None:
+            depth = self._depth_getter(u, v) if self._depth_getter else _ASSUMED_DEPTH_M
         return default_pixel_to_base(u, v, image_w=w, image_h=h, depth_m=depth)
+
+    def _mask_median_depth(self, det: Any) -> float | None:
+        """マスク内画素の有効深度の median [m]。マスク/depth_getter 無し → None。"""
+        if self._depth_getter is None:
+            return None
+        mask = getattr(det, "mask", None)
+        if mask is None:
+            return None
+        try:
+            import numpy as np
+
+            ys, xs = np.where(np.asarray(mask) > 0)
+            if len(xs) == 0:
+                return None
+            # マスク全画素は重いので最大 N 点をサブサンプル（重心近傍に偏らせない一様間引き）。
+            if len(xs) > _MASK_DEPTH_SAMPLES:
+                step = len(xs) // _MASK_DEPTH_SAMPLES
+                xs, ys = xs[::step], ys[::step]
+            depths = []
+            for u, v in zip(xs, ys):
+                d = self._depth_getter(float(u), float(v))
+                if d is not None and np.isfinite(d) and 0.05 < d < 10.0:
+                    depths.append(float(d))
+            if not depths:
+                return None
+            return float(np.median(depths))
+        except Exception:
+            return None
 
 
 def make_yolo_detect_okra(
