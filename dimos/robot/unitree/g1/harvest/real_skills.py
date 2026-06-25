@@ -174,6 +174,7 @@ def build_live_harvest_skills(
     verify_fn: Callable[[], bool] | None = None,
     detect_fn: Callable[[], list] | None = None,
     next_station_fn: Callable[[], bool] | None = None,
+    yolo_model: str = "yolo11n.pt",
 ) -> tuple[DimosHarvestSkills, Any]:
     """Assemble a :class:`DimosHarvestSkills` for the LIVE robot (first cut).
 
@@ -215,6 +216,7 @@ def build_live_harvest_skills(
         detect_fn = make_yolo_detect_okra(
             frame_getter,
             target_classes=target_classes,
+            model_name=yolo_model,
             pixel_to_base=pixel_to_base,
             depth_getter=depth_getter,
         )

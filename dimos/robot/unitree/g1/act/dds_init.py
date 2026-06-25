@@ -36,6 +36,15 @@ logger = setup_logger()
 _lock = threading.Lock()
 _initialized = False
 
+# Serialises unitree DDS channel/topic CREATION across modules. cyclonedds type
+# registration (building the XTypes TypeObject for a topic's IDL type) is NOT
+# thread-safe: two modules calling Channel*.Init() concurrently on parallel start
+# threads — e.g. G1ArmSdkConnection (unitree_hg LowCmd_/LowState_) and the Dex1
+# gripper (unitree_go MotorCmds_/MotorStates_) — corrupt it and raise
+# "Failed to encode union ... DDS.XTypes.TypeObject". Hold this around
+# ensure_channel_factory + every Channel*.Init() so sibling DDS modules serialise.
+channel_lock = threading.Lock()
+
 
 def ensure_channel_factory(network_interface: str = "") -> None:
     """Initialise the Unitree DDS channel factory once per process (thread-safe).
@@ -61,4 +70,4 @@ def ensure_channel_factory(network_interface: str = "") -> None:
         _initialized = True
 
 
-__all__ = ["ensure_channel_factory"]
+__all__ = ["channel_lock", "ensure_channel_factory"]

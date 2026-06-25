@@ -42,6 +42,8 @@ _ARM_START = 15
 _NUM_ARM = 14
 _RIGHT_GRIP_IDX = 15  # action[15] = right Dex1 target (action[14] left = dropped)
 _RIGHT_GRIPPER_JOINT = "g1/right_gripper"
+_RIGHT_ARM_START = 22  # right arm = canonical motor 22-28
+_NUM_RIGHT_ARM = 7
 
 
 def make_zmq_act_call(
@@ -98,6 +100,7 @@ class ActGraspModule:
         max_steps: int = 120,
         grasp_force: float = 0.3,
         reached_fn: Callable[[list[float], int], bool] | None = None,
+        right_arm_only_7d: bool = False,
     ) -> None:
         self._image_getter = image_getter
         self._wrist_getter = wrist_getter  # right-wrist frame (2-camera tree model)
@@ -111,6 +114,11 @@ class ActGraspModule:
         self._max_steps = max_steps
         self._grasp_force = grasp_force
         self._reached_fn = reached_fn
+        # 7-DOF wrist-only model (sotata/act-okura-kinesthetic-wrist-7d): state/action
+        # are the 7 RIGHT-arm joints only (motor 22-28), wrist camera as the sole image,
+        # NO gripper dim (close/cut is OUT of ACT — handled by GraspSequence). When False
+        # (default): legacy 8-dim right-only / 16-dim two-arm with a gripper action.
+        self._right_arm_only_7d = bool(right_arm_only_7d)
         self._stop = threading.Event()
         # (okra_id, steps, cancelled) per episode — for trace / assertions.
         self.episodes: list[tuple[str, int, bool]] = []
@@ -136,12 +144,36 @@ class ActGraspModule:
         if len(pos) < _ARM_START + _NUM_ARM:
             logger.warning(f"[act-grasp] motor_states has {len(pos)} joints; expected >= 29")
             return None
+        if self._right_arm_only_7d:
+            # 7-dim: right arm only (motor 22-28), no gripper dim.
+            right = pos[_RIGHT_ARM_START : _RIGHT_ARM_START + _NUM_RIGHT_ARM]
+            return [float(x) for x in right]
         arms = pos[_ARM_START : _ARM_START + _NUM_ARM]
         return [float(x) for x in arms] + [0.0, float(right_grip)]  # left grip const 0
 
     def _publish(self, action: Any, force: float) -> None:
         from dimos.msgs.sensor_msgs.JointState import JointState
 
+        if self._right_arm_only_7d:
+            # action = 7 right-arm joints. Publish them into the right half of the
+            # 14-joint arm_target (left held at the measured pose), and do NOT touch
+            # the gripper (cut/close is GraspSequence's job, OUT of ACT).
+            st = self._state_getter()
+            left = [0.0] * 7
+            if st is not None:
+                pos = list(st.position)
+                if len(pos) >= _ARM_START + _NUM_ARM:
+                    left = [float(x) for x in pos[_ARM_START : _ARM_START + 7]]
+            right = [float(x) for x in action[:_NUM_RIGHT_ARM]]
+            self._publish_arm(
+                JointState(
+                    name=list(self._arm_names),
+                    position=left + right,
+                    velocity=[0.0] * _NUM_ARM,
+                    effort=[0.0] * _NUM_ARM,
+                )
+            )
+            return
         arms = [float(x) for x in action[:_NUM_ARM]]
         self._publish_arm(
             JointState(
@@ -178,20 +210,31 @@ class ActGraspModule:
             iters += 1
             image, state, grip = self._image_getter(), self._state_getter(), self._gripper_getter()
             wrist = self._wrist_getter() if self._wrist_getter is not None else None
-            # Wait until ALL required cameras have a frame (the 2-camera tree model
-            # needs the wrist too) — avoids the startup "missing cam_right_wrist".
-            cams_ready = image is not None and (self._wrist_getter is None or wrist is not None)
+            if self._right_arm_only_7d:
+                # Wrist-only model: the wrist frame is the SOLE image; head not needed.
+                cams_ready = wrist is not None
+            else:
+                # 2-camera tree model needs head + wrist; single-cam needs head.
+                cams_ready = image is not None and (self._wrist_getter is None or wrist is not None)
             if cams_ready and state is not None:
-                state16 = self._build_state(state, grip)
-                if state16 is not None:
+                obs_state = self._build_state(state, grip)
+                if obs_state is not None:
                     try:
-                        images = {"cam_high": self._encode(image)}
-                        if wrist is not None:
-                            images["cam_right_wrist"] = self._encode(wrist)
-                        action = self._act_call(
-                            {"state": state16, "images": images,
-                             "image_jpeg": images["cam_high"], "reset": reset}
-                        )
+                        if self._right_arm_only_7d:
+                            # Sole image = wrist. act_service derives head_img_key =
+                            # img_keys[0] (the wrist key for this model) and reads it
+                            # from image_jpeg, so send the wrist there.
+                            wrist_jpeg = self._encode(wrist)
+                            images = {"cam_right_wrist": wrist_jpeg}
+                            req = {"state": obs_state, "images": images,
+                                   "image_jpeg": wrist_jpeg, "reset": reset}
+                        else:
+                            images = {"cam_high": self._encode(image)}
+                            if wrist is not None:
+                                images["cam_right_wrist"] = self._encode(wrist)
+                            req = {"state": obs_state, "images": images,
+                                   "image_jpeg": images["cam_high"], "reset": reset}
+                        action = self._act_call(req)
                         reset = False
                         steps += 1
                         self._publish(action, f)

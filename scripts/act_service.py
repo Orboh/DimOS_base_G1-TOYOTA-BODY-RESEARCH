@@ -5,89 +5,84 @@ Runs in the dedicated lerobot venv (.venv_act, separate process from dimos). It
 owns the heavy lerobot/torch dependency; dimos stays clean and talks to it over
 a neutral ZMQ wire (msgpack), so neither side needs the other's Python types.
 
-Model (default): ``sotata/act-okura-pick-tree-06152026`` — okra "tree" pick.
-  * state 16, action 16 (same layout as before)
-  * TWO camera images: ``cam_high`` (head) + ``cam_right_wrist`` (right wrist)
-  * normalization stats from dataset ``sotata/okura-pick-tree-20260615``
-The image keys, resolutions and state dim are AUTO-DETECTED from the model
-config, so ``--repo``/``--dataset`` can also load the older single-camera model.
-
 Wire protocol (ZMQ REP on tcp://127.0.0.1:5701):
-  request  (msgpack): {"state": [16 floats],
-                       "images": {"cam_high": <jpeg bytes>, "cam_right_wrist": <jpeg bytes>},
-                       "reset": <bool optional>}
-                      (legacy single-cam: {"state":..., "image_jpeg": <bytes>, ...})
-  response (msgpack): {"action": [16 floats]}
+  request  (msgpack): {"state": [N floats], "image_jpeg": <bytes>,
+                       "image_right_wrist_jpeg": <bytes, optional>, "reset": <bool optional>}
+  response (msgpack): {"action": [N floats]}
 
-State / action layout (identity-mapped to dimos):
-  [0:7]   left arm   (dimos motor index 15-21)
-  [7:14]  right arm  (dimos motor index 22-28)
-  [14]    left gripper  (Dex1, constant 0)   [15] right gripper (Dex1)
+State/action layout + image keys are DERIVED from the loaded model's config
+(overridable via env ACT_REPO_ID / ACT_DATASET_REPO):
+  - 16-dim single-cam (act-okura-pick-06102026): [0:7]=left arm (motor 15-21),
+    [7:14]=right arm (22-28), [14]=left grip (const 0), [15]=right grip;
+    image_jpeg=cam_left_high.
+  - 8-dim 2-cam right-only (act-okura-pick-tree-right-06162026): [0:7]=right arm,
+    [7]=right grip; image_jpeg=cam_high, image_right_wrist_jpeg=cam_right_wrist.
 
 IMPORTANT — normalization (root-cause fix 2026-06-12):
   This lerobot version moved normalization OUT of the policy and INTO a
   preprocessor/postprocessor pipeline built from the *dataset stats*
-  (`make_pre_post_processors`). We run the EXACT verified eval_g1.py path:
-      raw obs -> preprocessor(normalize state+images) -> policy -> postprocessor(un-normalize)
-  Calling ``policy.select_action`` on RAW values feeds garbage. The dataset
-  must MATCH the model (its stats normalise the obs), hence --dataset tracks --repo.
+  (`make_pre_post_processors`). Calling ``policy.select_action`` on RAW values —
+  as this file used to — feeds the network un-normalized inputs and returns
+  normalized-space outputs, which we were sending to the robot as raw radians:
+  the arms moved, but to garbage targets ("strange motion").
+
+  We now run the EXACT verified eval_g1.py path:
+      raw obs -> preprocessor(normalize state+image) -> policy -> postprocessor(un-normalize) -> action
+  Offline check vs the dataset's recorded first action: max error 0.056 rad
+  (the old raw path was off by 2.21 rad).
 
 Run (from the dimos repo root; the venv lives at ~/act-okura/.venv_act):
   service : ~/act-okura/.venv_act/bin/python scripts/act_service.py --serve
   selftest: ~/act-okura/.venv_act/bin/python scripts/act_service.py --selftest
-  (older model: ... --repo sotata/act-okura-pick-06102026 --dataset Orboh/okura-sub-lerobot)
 """
 
 from __future__ import annotations
 
 import argparse
 from copy import copy
+import os
 
 import cv2
-import msgpack
-import numpy as np
-import torch
-
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.policies.factory import make_policy, make_pre_post_processors
 from lerobot.processor.rename_processor import rename_stats
 from lerobot.utils.utils import get_safe_torch_device
+import msgpack
+import numpy as np
+import torch
 
-REPO_ID = "sotata/act-okura-pick-tree-06152026"  # policy checkpoint (okra tree pick)
-DATASET_REPO = "sotata/okura-pick-tree-20260615"  # normalization stats + task (MUST match repo)
+# Policy + dataset (normalization stats + task). Overridable via env so one
+# service supports the single-cam 16-dim model AND the 2-cam 8-dim tree-right
+# model without code edits. The image keys + state dim are derived from the
+# model config at load time (see ActService.__init__), not hard-coded here.
+REPO_ID = os.getenv("ACT_REPO_ID", "sotata/act-okura-pick-06102026")   # policy checkpoint
+DATASET_REPO = os.getenv("ACT_DATASET_REPO", "Orboh/okura-sub-lerobot")  # norm stats + task
+IMG_KEY = "observation.images.cam_left_high"  # fallback head key if cfg has no image features
 STATE_KEY = "observation.state"
-_IMG_PREFIX = "observation.images."  # model image keys are this + short name (e.g. cam_high)
+IMG_H, IMG_W = 480, 640  # both cam_high and cam_right_wrist are [3, 480, 640]
 ENDPOINT = "tcp://127.0.0.1:5701"
-
-
-def _short(img_key: str) -> str:
-    """'observation.images.cam_high' -> 'cam_high' (the wire short name)."""
-    return img_key[len(_IMG_PREFIX):] if img_key.startswith(_IMG_PREFIX) else img_key
 
 
 class ActService:
     def __init__(self, repo_id: str = REPO_ID, dataset_repo: str = DATASET_REPO) -> None:
         self.device = get_safe_torch_device("cuda" if torch.cuda.is_available() else "cpu")
 
-        # The dataset provides the normalization stats AND the task string.
+        # The dataset provides the normalization stats AND the task string the
+        # policy was trained with (e.g. "pick up cube.").
         dataset = LeRobotDataset(repo_id=dataset_repo)
         from_idx = dataset.meta.episodes["dataset_from_index"][0]
         self.task = dataset[from_idx].get("task", "") if hasattr(dataset[from_idx], "get") else ""
 
         cfg = PreTrainedConfig.from_pretrained(repo_id)
         cfg.pretrained_path = repo_id
-
-        # Auto-detect the model's expected inputs (works for 1- or 2-camera models).
-        feats = cfg.input_features
-        self.state_key = next((k for k in feats if "state" in k), STATE_KEY)
-        self.image_keys = [k for k in feats if "image" in k]
-        # Per-image (H, W) from the feature shape [C, H, W].
-        self.image_hw = {}
-        for k in self.image_keys:
-            shape = list(getattr(feats[k], "shape", [3, 480, 640]))
-            self.image_hw[k] = (int(shape[1]), int(shape[2])) if len(shape) == 3 else (480, 640)
-
+        # Derive the model's image input keys from its config so the wire adapts
+        # to single-cam (head only) vs 2-cam (head + right wrist) models.
+        img_keys = [k for k in (getattr(cfg, "input_features", {}) or {}) if "image" in k.lower()]
+        self.wrist_img_key = next((k for k in img_keys if "wrist" in k.lower()), None)
+        self.head_img_key = next(
+            (k for k in img_keys if "wrist" not in k.lower()), img_keys[0] if img_keys else IMG_KEY
+        )
         self.policy = make_policy(cfg=cfg, ds_meta=dataset.meta)
         self.policy.eval()
         self.preprocessor, self.postprocessor = make_pre_post_processors(
@@ -100,8 +95,8 @@ class ActService:
             },
         )
         self._reset()
-        cams = ", ".join(_short(k) for k in self.image_keys)
-        print(f"[act] loaded {repo_id} on {self.device} | task={self.task!r} | cameras=[{cams}] "
+        print(f"[act] loaded {repo_id} on {self.device} | task={self.task!r} "
+              f"| head_img={self.head_img_key} wrist_img={self.wrist_img_key} "
               f"| normalization via preprocessor/postprocessor (dataset={dataset_repo})")
 
     def _reset(self) -> None:
@@ -109,28 +104,41 @@ class ActService:
         self.preprocessor.reset()
         self.postprocessor.reset()
 
+    @staticmethod
+    def _to_rgb_hwc(bgr_image: np.ndarray) -> np.ndarray:
+        """BGR (cv2) -> RGB HxWxC uint8, resized to the model's [H, W]."""
+        if bgr_image.shape[:2] != (IMG_H, IMG_W):
+            bgr_image = cv2.resize(bgr_image, (IMG_W, IMG_H))  # cv2 size = (W, H)
+        return cv2.cvtColor(bgr_image, cv2.COLOR_BGR2RGB)
+
     @torch.no_grad()
     def infer(
-        self, state: np.ndarray, bgr_images: dict[str, np.ndarray], reset: bool = False
+        self,
+        state: np.ndarray,
+        bgr_image: np.ndarray,
+        wrist_bgr: np.ndarray | None = None,
+        reset: bool = False,
     ) -> np.ndarray:
-        """One closed-loop step (eval_g1.py predict_action path), multi-camera.
+        """Run one closed-loop step exactly as eval_g1.py's predict_action does.
 
-        ``bgr_images`` maps each model image key to its decoded BGR frame.
-        Normalization of state + images and un-normalization of the action are
-        done by the lerobot preprocessor/postprocessor — NOT by hand here.
+        ``state`` is the raw observation (radians, 8-dim right-only or 16-dim);
+        ``bgr_image`` is the head/cam_high frame; ``wrist_bgr`` is the optional
+        cam_right_wrist frame (required by 2-cam models). Normalization +
+        un-normalization are handled by the lerobot preprocessor/postprocessor.
         """
         if reset:
             self._reset()
 
-        observation = {self.state_key: torch.from_numpy(state.astype(np.float32))}
-        for k in self.image_keys:
-            bgr = bgr_images[k]
-            h, w = self.image_hw[k]
-            if bgr.shape[:2] != (h, w):
-                bgr = cv2.resize(bgr, (w, h))  # cv2 size = (W, H)
-            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-            observation[k] = torch.from_numpy(np.ascontiguousarray(rgb))  # HWC uint8
-
+        observation = {
+            STATE_KEY: torch.from_numpy(state.astype(np.float32)),
+            self.head_img_key: torch.from_numpy(
+                np.ascontiguousarray(self._to_rgb_hwc(bgr_image))
+            ),  # HWC uint8
+        }
+        if self.wrist_img_key is not None and wrist_bgr is not None:
+            observation[self.wrist_img_key] = torch.from_numpy(
+                np.ascontiguousarray(self._to_rgb_hwc(wrist_bgr))
+            )
         # --- predict_action (verbatim from unitree_lerobot eval path) ---
         observation = copy(observation)
         for name in list(observation):
@@ -147,29 +155,6 @@ class ActService:
         action = self.postprocessor(action)
         return action.squeeze(0).to("cpu").numpy()
 
-    def _images_from_request(self, req: dict) -> dict[str, np.ndarray]:
-        """Decode the request's JPEG(s) into a {model_image_key: BGR} dict."""
-        def _decode(buf: bytes) -> np.ndarray:
-            return cv2.imdecode(np.frombuffer(buf, dtype=np.uint8), cv2.IMREAD_COLOR)
-
-        wire = req.get("images") or {}
-        out: dict[str, np.ndarray] = {}
-        by_short = {_short(k): k for k in self.image_keys}
-        for short, buf in wire.items():  # new multi-camera form: {short_name: jpeg}
-            key = by_short.get(short, _IMG_PREFIX + short)
-            if key in self.image_keys:
-                out[key] = _decode(buf)
-        # Legacy single-image fallback: if exactly one model image is still missing
-        # and a bare image_jpeg was sent, use it (keeps old single-cam clients working).
-        still_missing = [k for k in self.image_keys if k not in out]
-        if len(still_missing) == 1 and "image_jpeg" in req:
-            out[still_missing[0]] = _decode(req["image_jpeg"])
-        missing = [_short(k) for k in self.image_keys if k not in out]
-        if missing:
-            raise ValueError(f"request missing camera image(s): {missing}; model needs "
-                             f"{[_short(k) for k in self.image_keys]}")
-        return out
-
     def serve(self, endpoint: str = ENDPOINT) -> None:
         import zmq
 
@@ -179,38 +164,38 @@ class ActService:
         print(f"[act] serving on {endpoint} (Ctrl-C to stop)", flush=True)
         while True:
             req = msgpack.unpackb(sock.recv(), raw=False)
-            try:
-                state = np.asarray(req["state"], dtype=np.float32)
-                images = self._images_from_request(req)
-                action = self.infer(state, images, reset=bool(req.get("reset", False)))
-                sock.send(msgpack.packb({"action": action.astype(float).tolist()}, use_bin_type=True))
-            except Exception as exc:  # noqa: BLE001 — keep the service alive, report the error
-                sock.send(msgpack.packb({"error": str(exc)}, use_bin_type=True))
+            state = np.asarray(req["state"], dtype=np.float32)
+            bgr = cv2.imdecode(np.frombuffer(req["image_jpeg"], dtype=np.uint8), cv2.IMREAD_COLOR)
+            wrist_bgr = None
+            if req.get("image_right_wrist_jpeg"):
+                wrist_bgr = cv2.imdecode(
+                    np.frombuffer(req["image_right_wrist_jpeg"], dtype=np.uint8), cv2.IMREAD_COLOR
+                )
+            action = self.infer(state, bgr, wrist_bgr=wrist_bgr, reset=bool(req.get("reset", False)))
+            sock.send(msgpack.packb({"action": action.astype(float).tolist()}, use_bin_type=True))
 
 
-def _selftest(repo_id: str = REPO_ID, dataset_repo: str = DATASET_REPO) -> int:
-    """Verify the service reproduces the dataset's recorded action (normalization OK).
-
-    Standalone model check — uses the dataset's first frame (all cameras), no
-    robot / live camera. A small error means the model loads and infers correctly.
-    """
-    svc = ActService(repo_id, dataset_repo)
-    dataset = LeRobotDataset(repo_id=dataset_repo)
+def _selftest() -> int:
+    """Verify the service reproduces the dataset's recorded actions (normalization OK)."""
+    svc = ActService()
+    dataset = LeRobotDataset(repo_id=DATASET_REPO)
     from_idx = dataset.meta.episodes["dataset_from_index"][0]
     frame = dataset[from_idx]
-    state = frame[svc.state_key].float().numpy()
-    bgr_images = {}
-    for k in svc.image_keys:
-        img_chw = frame[k]  # CHW float[0,1]
+    state = frame[STATE_KEY].float().numpy()
+
+    def _frame_to_bgr(img_chw):
+        # dataset image is CHW float[0,1]; convert to the BGR uint8 a camera would give
         rgb_uint8 = (img_chw.clamp(0, 1) * 255).round().byte().permute(1, 2, 0).numpy()
-        bgr_images[k] = cv2.cvtColor(rgb_uint8, cv2.COLOR_RGB2BGR)
+        return cv2.cvtColor(rgb_uint8, cv2.COLOR_RGB2BGR)
+
+    bgr = _frame_to_bgr(frame[svc.head_img_key])
+    wrist_bgr = _frame_to_bgr(frame[svc.wrist_img_key]) if svc.wrist_img_key else None
     rec = frame["action"].float().numpy()
 
-    a = svc.infer(state, bgr_images, reset=True)
+    a = svc.infer(state, bgr, wrist_bgr=wrist_bgr, reset=True)
     err = float(np.max(np.abs(a - rec)))
     np.set_printoptions(precision=3, suppress=True)
-    print(f"\n[selftest] cameras         : {[_short(k) for k in svc.image_keys]}")
-    print(f"[selftest] recorded action : {rec}")
+    print(f"\n[selftest] recorded action : {rec}")
     print(f"[selftest] service action  : {a}")
     print(f"[selftest] max|err| = {err:.4f} rad  -> {'OK' if err < 0.2 else 'FAIL (normalization?)'}")
     return 0 if err < 0.2 else 1
@@ -220,14 +205,12 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--serve", action="store_true", help="run the ZMQ REP service")
     ap.add_argument("--selftest", action="store_true", help="reproduce recorded action check")
-    ap.add_argument("--repo", default=REPO_ID, help="policy checkpoint repo id")
-    ap.add_argument("--dataset", default=DATASET_REPO, help="dataset repo id (normalization stats)")
     ap.add_argument("--endpoint", default=ENDPOINT)
     args = ap.parse_args()
     if args.selftest:
-        return _selftest(args.repo, args.dataset)
+        return _selftest()
     if args.serve:
-        ActService(args.repo, args.dataset).serve(args.endpoint)
+        ActService().serve(args.endpoint)
         return 0
     ap.print_help()
     return 1
