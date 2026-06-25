@@ -86,6 +86,16 @@ class HarvestModuleConfig(ModuleConfig):
     use_act_grasp: bool = False
     act_endpoint: str = "tcp://127.0.0.1:5701"  # okra-ACT 推論サービス（ZMQ REP）
     grasp_max_steps: int = 120  # ACT 到達エピソード長の上限
+    # LIVE: 把持を IK 粗アプローチ→ACT 微調整→切断 のシーケンス（GraspSequence）で行う。
+    # use_act_grasp と併用: True なら ActGraspModule を GraspSequence でラップし、
+    # 重心への IK 接近後に ACT で切断点へ寄せ、グリッパを閉じて切断する（[[SS-04/05/06]]）。
+    # False（既定）なら従来どおり ACT 単独（後方互換）。
+    use_ik_grasp_sequence: bool = False
+    cut_close_q: float = 4.4   # [rad] 切断時のグリッパ閉じ位置
+    blade_max_q: float = 5.2   # [rad] 刃保護の上限（機械限界 5.4 の手前）
+    # ZED→torso のハンドアイ外部パラメータ（重心3D を IK の torso フレームへ変換）。
+    # 空 = 未校正（Step 4 で配線）。形式は [x,y,z, qx,qy,qz,qw]（torso<-camera）。
+    cam_to_torso_xyzquat: str = ""
     # §6 実機安全（実機動作が有効な場合に使用）。ファイル E-stop: `touch` で一時停止。
     safety_estop_file: str = "/tmp/okra_estop"
     torque_limit: float = 0.0  # [N·m] アームトルク接触ガード; 0 = OFF（要チューニング）
@@ -170,6 +180,37 @@ class HarvestModule(Module):
             f"(touch to pause), torque_limit={self.config.torque_limit}"
         )
         return checks
+
+    def _parse_cam_to_torso(self, spec: str):
+        """``"x,y,z,qx,qy,qz,qw"`` → 関数 ``[x,y,z](camera)->[x,y,z](torso)``。
+
+        空文字なら None（未校正; その場合 IK には camera 系座標がそのまま渡る＝Step 4 で
+        実校正値を入れるまでの暫定）。実際のハンドアイ校正値は [[SS-04-粗アプローチIK]]。
+        """
+        spec = (spec or "").strip()
+        if not spec:
+            return None
+        import numpy as np
+
+        vals = [float(v) for v in spec.replace(" ", "").split(",")]
+        if len(vals) != 7:
+            logger.warning(f"cam_to_torso_xyzquat needs 7 values (x,y,z,qx,qy,qz,qw); got {len(vals)}; ignoring")
+            return None
+        tx, ty, tz, qx, qy, qz, qw = vals
+        # quaternion(xyzw) -> 回転行列（torso<-camera）
+        n = (qx * qx + qy * qy + qz * qz + qw * qw) ** 0.5 or 1.0
+        qx, qy, qz, qw = qx / n, qy / n, qz / n, qw / n
+        rot = np.array([
+            [1 - 2 * (qy * qy + qz * qz), 2 * (qx * qy - qz * qw), 2 * (qx * qz + qy * qw)],
+            [2 * (qx * qy + qz * qw), 1 - 2 * (qx * qx + qz * qz), 2 * (qy * qz - qx * qw)],
+            [2 * (qx * qz - qy * qw), 2 * (qy * qz + qx * qw), 1 - 2 * (qx * qx + qy * qy)],
+        ])
+        trans = np.array([tx, ty, tz])
+
+        def _to_torso(p_cam):
+            return list(rot @ np.asarray(p_cam, dtype=float) + trans)
+
+        return _to_torso
 
     def _on_image(self, image: Image) -> None:
         with self._lock:
@@ -273,7 +314,7 @@ class HarvestModule(Module):
                 self.register_disposable(
                     Disposable(self.right_gripper_state.subscribe(self._on_gripper))
                 )
-                grasp_override = ActGraspModule(
+                act_module = ActGraspModule(
                     image_getter=lambda: self._latest_image,
                     wrist_getter=lambda: self._latest_wrist,  # 2カメラツリーモデル
                     state_getter=lambda: self._latest_state,
@@ -283,7 +324,40 @@ class HarvestModule(Module):
                     act_endpoint=self.config.act_endpoint,
                     max_steps=self.config.grasp_max_steps,
                 )
-                grasp_note = "grasp=okra-ACT(2cam)"
+                if self.config.use_ik_grasp_sequence:
+                    # IK 粗アプローチ→ACT 微調整→切断可否→切断 を1エピソードに束ねる。
+                    from dimos.robot.unitree.g1.harvest.grasp_sequence import GraspSequence
+                    from dimos.robot.unitree.g1.harvest.ik_approach import IkApproachSkill
+
+                    ik_skill = IkApproachSkill()
+                    cam_to_torso = self._parse_cam_to_torso(self.config.cam_to_torso_xyzquat)
+
+                    def _ik_solve(okra: Any) -> Any:
+                        """対象オクラの重心(pos_3d)→torso 3D→右腕 IK。解けなければ None。"""
+                        pos = getattr(okra, "pos_3d", None) or {}
+                        p = [float(pos.get("x", 0.0)), float(pos.get("y", 0.0)), float(pos.get("z", 0.0))]
+                        target_torso = cam_to_torso(p) if cam_to_torso is not None else p
+                        with self._lock:
+                            state = self._latest_state
+                        if state is None:
+                            logger.warning("[ik-grasp] no motor_states yet; cannot solve IK")
+                            return None
+                        return ik_skill.solve(target_torso, list(state.position))
+
+                    # 切断可否ゲート: verify_fn（moondream）を流用。未配線なら None=常許可。
+                    grasp_override = GraspSequence(
+                        ik_solve=_ik_solve,
+                        publish_arm=self.arm_target.publish,
+                        act_module=act_module,
+                        cut_ok_fn=verify_fn,
+                        publish_gripper=self.gripper_target.publish,
+                        q_close=self.config.cut_close_q,
+                        q_blade_max=self.config.blade_max_q,
+                    )
+                    grasp_note = "grasp=IK->ACT->cut(seq)"
+                else:
+                    grasp_override = act_module
+                    grasp_note = "grasp=okra-ACT(2cam)"
 
             skills, grasp_module = build_live_harvest_skills(
                 frame_getter=lambda: self._latest_image,
