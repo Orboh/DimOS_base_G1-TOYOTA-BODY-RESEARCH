@@ -31,9 +31,16 @@ G1_NX_PW="${G1_NX_PW:-123}"
 CYCLONEDDS_HOME="${CYCLONEDDS_HOME:-/home/sota/cyclonedds-noshm}"
 ACT_VENV_PY="${ACT_VENV_PY:-$HOME/act-okura/.venv_act/bin/python}"
 export OKRA_GRASP_DURATION_S="${OKRA_GRASP_DURATION_S:-8.0}"
-# ACT model: 8-dim right-only, 2-camera (cam_high + cam_right_wrist) tree-right.
-export ACT_REPO_ID="${ACT_REPO_ID:-sotata/act-okura-pick-tree-right-06162026}"
-export ACT_DATASET_REPO="${ACT_DATASET_REPO:-sotata/okura-pick-tree-right-20260616}"
+# Model select. OKRA_ARM_ONLY=1 -> 7-DoF arm-only / single wrist cam kinesthetic model
+# ("condition D", 2026-06-24); else the proven 8-DoF / 2-cam tree-right model. The blueprint
+# reads OKRA_ARM_ONLY (inherited here); we just switch the ACT model defaults to match.
+if [ "${OKRA_ARM_ONLY:-}" = "1" ]; then
+  export ACT_REPO_ID="${ACT_REPO_ID:-sotata/act-okura-kinesthetic-wrist-7d}"
+  export ACT_DATASET_REPO="${ACT_DATASET_REPO:-sotata/okura-kinesthetic-wrist-7d}"
+else
+  export ACT_REPO_ID="${ACT_REPO_ID:-sotata/act-okura-pick-tree-right-06162026}"
+  export ACT_DATASET_REPO="${ACT_DATASET_REPO:-sotata/okura-pick-tree-right-20260616}"
+fi
 MCAST="239.255.76.67"; PORT="7667"
 # Repo root is auto-derived from this script's location (…/dimos/robot/unitree/g1/examples).
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../../.." && pwd)"

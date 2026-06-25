@@ -87,6 +87,19 @@ _ARM_VEL_LIMIT = float(os.getenv("IK_ARM_VEL_LIMIT", "20.0"))
 # How long ACT drives the grasp after reach_done [s] (fixed-duration stop).
 _GRASP_DURATION_S = float(os.getenv("OKRA_GRASP_DURATION_S", "8.0"))
 
+# Model layout. Default = the proven 8-DoF / 2-camera tree-right model (right_only).
+# OKRA_ARM_ONLY=1 selects the 7-DoF arm-only / single-wrist-cam kinesthetic model
+# (sotata/act-okura-kinesthetic-wrist-7d, 2026-06-24, "condition D"): state/action are
+# the right arm 7 joints ONLY (no gripper dim). The wrist camera feeds ACT (the head
+# D435i is still used for the click->IK point cloud); the Dex1 is held OPEN (no ACT grip).
+# Set ACT_REPO_ID / ACT_DATASET_REPO to the 7-DoF model + its dataset when using this.
+_ARM_ONLY = os.getenv("OKRA_ARM_ONLY", "").strip() == "1"
+
+# Dex1 hold-open q while ACT drives the arm (arm_only mode only; gripper is out of the
+# ACT model). q=3.0 ≈ 3cm (hw 2-pt fit 2026-06-24); same as the collection default.
+_grip_env = os.getenv("OKRA_GRIP_OPEN_Q", "3.0").strip()
+_GRIP_OPEN_Q = float(_grip_env) if _grip_env else None
+
 # IK->ACT handoff. Default ON. Set OKRA_ACT_HANDOFF=0 to do the IK reach and HOLD the
 # pre-grasp without ACT (no reach_done) — to inspect the reach/standoff in isolation.
 _ACT_HANDOFF = os.getenv("OKRA_ACT_HANDOFF", "1").strip() != "0"
@@ -138,6 +151,12 @@ _HANDOFF_MSG = (
     else "ACT handoff OFF (OKRA_ACT_HANDOFF=0): IK reaches pre-grasp and HOLDS, ACT does not start"
 )
 _HANDOFF_MSG += f" | target Z offset = {_TARGET_Z_OFFSET:+.3f} m (OKRA_TARGET_Z_OFFSET)"
+_MODEL_MSG = (
+    "model=7-DoF arm-only / wrist-only cam (OKRA_ARM_ONLY=1; Dex1 held open, no ACT grip)"
+    if _ARM_ONLY
+    else "model=8-DoF right-only / 2-cam (cam_high + cam_right_wrist; ACT drives Dex1)"
+)
+_HANDOFF_MSG += f" | {_MODEL_MSG}"
 if _LIVE:
     logger.warning(
         f"unitree-g1-okra-harvest LAUNCHING **LIVE** — arm WILL move via rt/arm_sdk"
@@ -173,7 +192,9 @@ unitree_g1_okra_harvest = autoconnect(
         trigger_mode=True,        # idle until reach_done; IK owns the pre-grasp
         startup_delay_s=0.0,      # arm is already at the IK pre-grasp (no slew)
         grasp_duration_s=_GRASP_DURATION_S,
-        right_only=True,          # 8-DoF tree-right model: cam_high + cam_right_wrist, right arm+grip
+        # 7-DoF arm-only (OKRA_ARM_ONLY=1) takes precedence; else 8-DoF tree-right.
+        arm_only=_ARM_ONLY,
+        right_only=not _ARM_ONLY,  # 8-DoF tree-right model: cam_high + cam_right_wrist, right arm+grip
     ),
     G1ArmSdkConnection.blueprint(
         network_interface=_NIC,
@@ -182,13 +203,22 @@ unitree_g1_okra_harvest = autoconnect(
         # NOTE: no initial_arm_pose — ACT starts from the IK pre-grasp, not the
         # dataset first-frame pose (the IK reach provides the in-distribution start).
     ),
-    G1GripperConnection.blueprint(network_interface=_NIC),
+    # arm_only: hold the Dex1 OPEN (~3cm) while ACT drives the arm (gripper out of ACT).
+    # 8-DoF mode: default (ACT drives the gripper via gripper_target).
+    G1GripperConnection.blueprint(
+        network_interface=_NIC,
+        **({"hold_target_q": _GRIP_OPEN_Q} if _ARM_ONLY else {}),
+    ),
 ).transports(
     {
-        # ik-camera color stream (NOT teleimager /color_image): the single head
-        # D435i is owned by the standalone cloud publisher. This is ACT's cam_high.
-        ("color_image", Image): LCMTransport("/camera/color_image", Image),
+        # ACT image input. 8-DoF (2-cam): head D435i color = cam_high. arm_only (1-cam):
+        # the WRIST stream is the model's only camera (cam_right_wrist), so route it into
+        # color_image; the act_service resolves the lone wrist key from image_jpeg.
+        ("color_image", Image): LCMTransport(
+            "/camera/right_wrist_color" if _ARM_ONLY else "/camera/color_image", Image
+        ),
         # wrist UVC color (standalone V4L2 publisher on the NX) -> ACT cam_right_wrist.
+        # (Unused in arm_only — the wrist already arrives via color_image above.)
         ("right_wrist_image", Image): LCMTransport("/camera/right_wrist_color", Image),
         ("motor_states", JointState): LCMTransport("/g1/motor_states", JointState),
         ("arm_target", JointState): LCMTransport("/g1/arm_target", JointState),

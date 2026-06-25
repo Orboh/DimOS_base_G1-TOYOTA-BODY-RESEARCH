@@ -95,6 +95,13 @@ class ActBridgeConfig(ModuleConfig):
     # both-arms wire. True = state/action are [right arm 7, right grip 1]; the
     # head image goes as cam_high and right_wrist_image (if wired) as cam_right_wrist.
     right_only: bool = False
+    # 7-DoF arm-only policy (kinesthetic wrist-only model, 2026-06-24). True =>
+    # state/action are [right arm 7] ONLY — NO gripper dim. The single wrist image
+    # is fed via color_image (the act_service resolves the model's lone cam_right_wrist
+    # key from it); right_wrist_image / gripper are NOT used. ActBridge never publishes
+    # gripper_target in this mode (the Dex1 is held open out-of-band). Takes precedence
+    # over right_only. See model sotata/act-okura-kinesthetic-wrist-7d.
+    arm_only: bool = False
 
 
 class ActBridge(Module):
@@ -133,9 +140,11 @@ class ActBridge(Module):
                 Disposable(self.right_wrist_image.subscribe(self._on_wrist_image))
             )
         self.register_disposable(Disposable(self.motor_states.subscribe(self._on_state)))
-        self.register_disposable(
-            Disposable(self.right_gripper_state.subscribe(self._on_gripper_state))
-        )
+        # arm_only (7-DoF) has no gripper dim, so the measured Dex1 q is not needed.
+        if not self.config.arm_only:
+            self.register_disposable(
+                Disposable(self.right_gripper_state.subscribe(self._on_gripper_state))
+            )
         if self.config.trigger_mode:
             self.register_disposable(Disposable(self.reach_done.subscribe(self._on_reach_done)))
         self._stop_event.clear()
@@ -193,6 +202,7 @@ class ActBridge(Module):
     def _build_state(self, state: JointState, right_grip: float) -> list[float] | None:
         """Assemble the policy state from a 29-DOF G1 JointState.
 
+        arm_only=True    -> 7-dim  [right arm 7 (motor 22-28)] (NO gripper).
         right_only=True  -> 8-dim  [right arm 7 (motor 22-28), right grip 1].
         right_only=False -> 16-dim [arms 14 (15-28), left grip=0, right grip].
         """
@@ -208,6 +218,9 @@ class ActBridge(Module):
                     f"arm slice mismatch: index {_ARM_START} is {got!r}, "
                     f"expected ...{_ARM_JOINT_NAMES[0]}; check joint ordering"
                 )
+        if self.config.arm_only:
+            right_arm = pos[_RIGHT_SLICE]  # motor 22-28
+            return [float(x) for x in right_arm]  # 7-dim, no gripper
         if self.config.right_only:
             right_arm = pos[_RIGHT_SLICE]  # motor 22-28
             return [float(x) for x in right_arm] + [float(right_grip)]
@@ -309,7 +322,11 @@ class ActBridge(Module):
         ignore its left 7 and substitute the measured left 7 so the basket-holding
         arm never moves. Falls back to the policy's left if no state is available.
         """
-        if self.config.right_only:
+        right_grip: float | None
+        if self.config.arm_only:
+            right_arm = [float(x) for x in action[0:_NUM_ARM_HALF]]   # 7-dim: action[0:7]=right arm
+            right_grip = None                                         # no gripper dim (held open out-of-band)
+        elif self.config.right_only:
             right_arm = [float(x) for x in action[0:_NUM_ARM_HALF]]   # 8-dim: action[0:7]=right arm
             right_grip = float(action[_RIGHT_ONLY_DIM - 1])           # action[7]=right grip
         else:
@@ -336,22 +353,26 @@ class ActBridge(Module):
                 )
             )
             # action[14] (left gripper) is dropped — only the right Dex1 is installed.
-            self.gripper_target.publish(
-                JointState(
-                    name=[_RIGHT_GRIPPER_JOINT],
-                    position=[right_grip],
-                    velocity=[0.0],
-                    effort=[0.0],
+            # arm_only (7-DoF) has no gripper dim: leave the Dex1 to its held-open pose.
+            if right_grip is not None:
+                self.gripper_target.publish(
+                    JointState(
+                        name=[_RIGHT_GRIPPER_JOINT],
+                        position=[right_grip],
+                        velocity=[0.0],
+                        effort=[0.0],
+                    )
                 )
-            )
         if count % self.config.log_every_n == 1:
             pairs = ", ".join(
                 f"{n.split('/')[-1]}={v:.3f}" for n, v in zip(_ARM_JOINT_NAMES, arm14, strict=False)
             )
             tag = "dry-run" if self.config.dry_run else "LIVE→arm_sdk+dex1"
+            layout = "7d-arm" if self.config.arm_only else ("8d-right" if self.config.right_only else "16d")
+            grip_str = "held-open" if right_grip is None else f"{right_grip:.3f}"
             logger.info(
-                f"[{tag}] ACT action #{count} ({'8d-right' if self.config.right_only else '16d'}): "
-                f"{pairs} | right_grip={right_grip:.3f} | left=HELD"
+                f"[{tag}] ACT action #{count} ({layout}): "
+                f"{pairs} | right_grip={grip_str} | left=HELD"
             )
 
 
