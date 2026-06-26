@@ -29,7 +29,7 @@ from isaacsim.core.api.objects import DynamicSphere, FixedCuboid
 from isaacsim.core.api.materials import PhysicsMaterial
 from isaacsim.core.utils.stage import add_reference_to_stage
 import omni.usd
-from pxr import PhysxSchema
+from pxr import PhysxSchema, UsdLux
 try:
     from isaacsim.core.prims import SingleRigidPrim as RigidPrim
 except Exception:  # noqa: BLE001
@@ -41,6 +41,11 @@ STEPS = 300            # 60Hz で 5 秒
 G = 9.81
 
 world = World(stage_units_in_meters=1.0)
+
+# 照明（このシーンは既定で暗いので Dome+Distant を追加。物理には無影響）
+_stage = omni.usd.get_context().get_stage()
+UsdLux.DomeLight.Define(_stage, "/World/DomeLight").CreateIntensityAttr(1500.0)
+UsdLux.DistantLight.Define(_stage, "/World/SunLight").CreateIntensityAttr(3000.0)
 
 # 床（floor_mat 相当: static1.0/dyn0.9/rest0）
 floor_mat = PhysicsMaterial("/World/PM/floor", static_friction=1.0, dynamic_friction=0.9, restitution=0.0)
