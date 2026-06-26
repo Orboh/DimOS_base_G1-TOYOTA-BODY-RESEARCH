@@ -92,10 +92,15 @@ def add_ceiling_lights(stage, *, n: int = CEIL_N, intensity: float = CEIL_INTENS
     共有される。view_chinou と bridge で見た目を揃えるため、両者がこの関数を呼ぶ（単一ソース）。
     部屋 bbox から天井高(z)と XY 広がりを算出。room_path 未指定なら /World/ChinouCenter→/World 探索。
     部屋が無ければ 0 を返す（天井が無いので置かない）。戻り値=設置灯数。
+    冪等: 既に /World/CeilingLights がある（USD焼き込み等）なら二重配置せず 0 を返す。
     """
     if n <= 0:
         return 0
     from pxr import Gf, Usd, UsdGeom, UsdLux
+    # 焼き込み済み（or 既に追加済み）なら二重配置しない
+    cl = stage.GetPrimAtPath("/World/CeilingLights")
+    if cl and cl.IsValid() and len(list(cl.GetChildren())) > 0:
+        return 0
     bbc = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_, UsdGeom.Tokens.render])
     rp = None
     for cand in ([room_path] if room_path else ["/World/ChinouCenter", "/World"]):

@@ -273,14 +273,15 @@ def main() -> None:
         try:
             from pxr import UsdLux
 
-            ncl = 0
             if load_room:
+                # 部屋あり: chinou_center.usd に焼き込んだ天井ライトを使用（単一ソース）。
+                # add_ceiling_lights は冪等＝焼き込み済みなら skip(0)、無い部屋なら補填。
                 import sim_scene  # 同ディレクトリ
                 ncl = sim_scene.add_ceiling_lights(
                     stage, intensity=float(os.getenv("SIM_LIGHT_INTENSITY", "40000"))
                 )
-            if ncl > 0:
-                print(f"[bridge] ceiling SphereLight x{ncl}（view_chinou と同一照明）", flush=True)
+                print(f"[bridge] ceiling lights: {'焼き込み使用(skip)' if ncl == 0 else f'補填 x{ncl}'}",
+                      flush=True)
             else:
                 # 部屋なし(G1のみ)はドーム+太陽のフィル（天井が無いので SphereLight 不可）
                 UsdLux.DomeLight.Define(stage, "/World/sim_fill_dome").CreateIntensityAttr(1500.0)
