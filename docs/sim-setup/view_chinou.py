@@ -21,6 +21,7 @@ ROOM_USD = f"{REPO}/usd_file/chinou_center.usd"
 # 収穫構成モデル = 左手首にバスケット + 右手 Dex1（g1bag.usd）。
 # 旧 g1_29dof_with_dex1_base_fix1.usd は両手 Dex1・バスケット無しなので使わない。
 G1_USD = f"{REPO}/usd_file/g1-29dof-dex1-base-fix-usd/g1bag.usd"
+OKRA_USD = f"{REPO}/usd_file/okra.usd"
 OUT_DIR = f"{REPO}/docs/sim-setup"
 
 
@@ -37,6 +38,8 @@ def main() -> None:
                     help="各天井ライトの intensity（暗ければ上げる。距離2乗で減衰）")
     ap.add_argument("--ceil-radius", type=float, default=0.15,
                     help="各天井ライトの半径[m]（大きいほど影が柔らかい）")
+    ap.add_argument("--okra", type=int, default=3,
+                    help="右手前の把持圏に置くオクラ本数（収穫対象。0で無し）")
     args = ap.parse_args()
 
     from isaacsim import SimulationApp
@@ -121,6 +124,23 @@ def main() -> None:
             break
     robot = ArtCls(prim_path=art_root or "/G1", name="g1")
     world.scene.add(robot)
+
+    # オクラを右手 Dex1（world ~0.28,-0.15,0.91）の前方の把持圏に配置（収穫対象）。
+    # okra.usd は RigidBody なので既定の gravity OFF では静止（収穫対象として浮く）、
+    # --gravity では落下する。長軸を縦に倒し、少しずつ振って房状に見せる。
+    if args.okra > 0:
+        OKRA_POS = [
+            (0.40, -0.15, 0.95), (0.43, -0.09, 0.86), (0.38, -0.21, 0.90),
+            (0.46, -0.16, 1.00), (0.41, -0.12, 0.82),
+        ]
+        no = min(args.okra, len(OKRA_POS))
+        for i in range(no):
+            pth = f"/Okra_{i}"
+            add_reference_to_stage(usd_path=OKRA_USD, prim_path=pth)
+            api = UsdGeom.XformCommonAPI(stage.GetPrimAtPath(pth))
+            api.SetTranslate(Gf.Vec3d(*OKRA_POS[i]))
+            api.SetRotate(Gf.Vec3f(-90.0, 0.0, float(i * 30)))  # 長軸を縦(ぶら下がり)に
+        print(f"[chinou] okra x{no} を右手前の把持圏に配置", flush=True)
 
     # 室内中心付近を俯瞰（部屋全体と G1 の比率が分かる画角）
     set_camera_view(eye=np.array([6.0, -6.0, 3.0]), target=np.array([0.0, 0.0, 0.8]))
