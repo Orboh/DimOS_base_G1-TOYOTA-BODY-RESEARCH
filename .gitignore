@@ -100,3 +100,6 @@ MUJOCO_LOG.TXT
 
 # Large USD assets (G1 dex1 model) — keep out of git
 usd_file/
+
+# sim 音声検証の生成WAV（再生成可能）
+docs/sim-setup/audio_samples/
