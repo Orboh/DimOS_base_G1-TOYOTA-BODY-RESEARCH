@@ -128,6 +128,40 @@ def main() -> None:
     robot = ArtCls(prim_path=art_root or "/G1", name="g1")
     world.scene.add(robot)
 
+    # self-collision: 実機同様にロボット自身のリンク同士（右グリッパ ⇄ 左手首の籠 など）を衝突させる。
+    # 「実機で暴れる前に sim で自己干渉を捕まえる」ため既定ON。隣接(親子)リンクは PhysX が自動除外する
+    # ので通常は非隣接リンクのめり込みだけ検出する。SIM_SELF_COLLISION=0 で従来(OFF)に戻せる。
+    # ※ 静止姿勢で非隣接リンクが既にめり込んでいると起動時に震える/弾かれることがある（その場合は要 collision filter）。
+    if os.getenv("SIM_SELF_COLLISION", "1") == "1" and art_root is not None:
+        try:
+            from pxr import PhysxSchema
+
+            PhysxSchema.PhysxArticulationAPI.Apply(
+                stage.GetPrimAtPath(art_root)
+            ).CreateEnabledSelfCollisionsAttr(True)
+            print(f"[bridge] self-collision ON（{art_root}）— 実機同様に自己干渉を検出", flush=True)
+        except Exception as _e:  # noqa: BLE001
+            print(f"[bridge] self-collision 設定 warn: {_e}", flush=True)
+    else:
+        print("[bridge] self-collision OFF（SIM_SELF_COLLISION=1 で実機同様に有効化）", flush=True)
+
+    # 重力ON時は per-body 制御: 「ロボット各リンク=重力OFF（弱PDでも指令角を保持して腕が垂れない）／
+    # オクラ=重力ON（籠コライダーへ物理落下）」。world 重力は既定(-9.81)のまま、ロボットだけ無効化する。
+    # これで F-07 を「本番の腕モーションで運ぶ＋物理で着籠」させつつ弱PD腕の垂れを回避できる。
+    if os.getenv("SIM_GRAVITY", "0") == "1":
+        try:
+            from pxr import PhysxSchema
+
+            _ng = 0
+            for _p in Usd.PrimRange(g1):
+                if _p.HasAPI(UsdPhysics.RigidBodyAPI):
+                    PhysxSchema.PhysxRigidBodyAPI.Apply(_p).CreateDisableGravityAttr(True)
+                    _ng += 1
+            print(f"[bridge] gravity ON: robot {_ng} links disableGravity=True"
+                  "（腕は指令角保持／オクラのみ落下）", flush=True)
+        except Exception as _e:  # noqa: BLE001
+            print(f"[bridge] per-body gravity warn: {_e}", flush=True)
+
     # 机上オクラ（A配置）: SIM_TABLE=1 で view_chinou と同一配置を載せる（M2/M3 用）。
     # world.reset() の前に stage へ追加する。配置の正本は sim_scene.build_table_okra。
     okra_paths: list[str] = []
@@ -177,6 +211,39 @@ def main() -> None:
     print(f"[bridge] num_dof={robot.num_dof} mapped {len(canon_to_isaac)}/29 canon joints; "
           f"arm mapped={len(arm_isaac_idx)}", flush=True)
 
+    # 籠の torso 座標（F-07 IK 投入のターゲット GT）。SIM_DUMP_BASKET=1 なら左腕を「提示姿勢(L字)」へ
+    # 置いて実測し終了する（その値を SIM_BASKET_TORSO="X,Y,Z" として収穫ランナへ渡す）。
+    if basket_path is not None:
+        _dump = os.getenv("SIM_DUMP_BASKET", "0") == "1"
+        _torso_p = None
+        for _tp in Usd.PrimRange(g1):
+            if _tp.GetName() == "torso_link":
+                _torso_p = _tp.GetPath().pathString
+                break
+        if _dump:
+            # place_basket.LEFT_PRESENT_BASKET と同値（bridge は isaac-sim env で dimos 非依存のため複製）
+            LEFT_PRESENT = [-0.1170, -0.0167, -0.3997, 1.1330, 0.0834, -1.0673, -0.2355]
+            _tgt = np.asarray(robot.get_joint_positions(), dtype=float).copy()
+            for _off, _val in enumerate(LEFT_PRESENT):
+                _ii = canon_to_isaac.get(15 + _off)
+                if _ii is not None:
+                    _tgt[_ii] = _val
+            for _ in range(150):
+                robot.apply_action(ArticulationAction(joint_positions=_tgt))
+                world.step(render=not headless)
+        if _torso_p is not None:
+            _xc = UsdGeom.XformCache(Usd.TimeCode.Default())
+            _Tt = _xc.GetLocalToWorldTransform(stage.GetPrimAtPath(_torso_p))
+            _bw = _xc.GetLocalToWorldTransform(stage.GetPrimAtPath(basket_path)).ExtractTranslation()
+            _btt = _Tt.GetInverse().Transform(Gf.Vec3d(float(_bw[0]), float(_bw[1]), float(_bw[2])))
+            _lbl = "左腕提示後" if _dump else "現姿勢"
+            print(f"[bridge] basket torso ({_lbl}) = "
+                  f"({_btt[0]:.3f},{_btt[1]:.3f},{_btt[2]:.3f}) → SIM_BASKET_TORSO に設定", flush=True)
+        if _dump:
+            print("[bridge] DUMP 完了 -> exit", flush=True)
+            sim_app.close()
+            return
+
     # --- DDS セットアップ（raw cyclonedds） ---
     from cyclonedds.domain import Domain, DomainParticipant
     from cyclonedds.topic import Topic
@@ -200,15 +267,25 @@ def main() -> None:
     print(f"[bridge] DDS up: domain={domain_id} sub=rt/arm_sdk,rt/dex1/right/cmd pub=rt/lowstate", flush=True)
 
     # シーン照明（room が暗くカメラ像が見えない対策。SIM_ADD_LIGHT=0 で無効）
+    # 照明はシーン(stage)単位＝同じ stage の全カメラで共有。view_chinou と見た目を揃えるため、
+    # 部屋ロード時は共有関数 sim_scene.add_ceiling_lights で「同じ天井 SphereLight」を置く（単一ソース）。
     if os.getenv("SIM_ADD_LIGHT", "1") == "1":
         try:
             from pxr import UsdLux
 
-            UsdLux.DomeLight.Define(stage, "/World/sim_fill_dome").CreateIntensityAttr(
-                float(os.getenv("SIM_LIGHT_INTENSITY", "1500"))
-            )
-            UsdLux.DistantLight.Define(stage, "/World/sim_fill_sun").CreateIntensityAttr(3000.0)
-            print("[bridge] added fill light (dome+sun)", flush=True)
+            ncl = 0
+            if load_room:
+                import sim_scene  # 同ディレクトリ
+                ncl = sim_scene.add_ceiling_lights(
+                    stage, intensity=float(os.getenv("SIM_LIGHT_INTENSITY", "40000"))
+                )
+            if ncl > 0:
+                print(f"[bridge] ceiling SphereLight x{ncl}（view_chinou と同一照明）", flush=True)
+            else:
+                # 部屋なし(G1のみ)はドーム+太陽のフィル（天井が無いので SphereLight 不可）
+                UsdLux.DomeLight.Define(stage, "/World/sim_fill_dome").CreateIntensityAttr(1500.0)
+                UsdLux.DistantLight.Define(stage, "/World/sim_fill_sun").CreateIntensityAttr(3000.0)
+                print("[bridge] added fill light (dome+sun)", flush=True)
         except Exception as _e:  # noqa: BLE001
             print(f"[bridge] light warn: {_e}", flush=True)
 
@@ -311,6 +388,23 @@ def main() -> None:
             cam.set_world_pose(eye, _ori, camera_axes="usd")
             print("[bridge] camera fixed look-at (torso_link 未検出 or mode=fixed)", flush=True)
 
+        # GUI のメインビューポートをこのカメラ視点へ切替＝画面＝カメラ映像（YOLO入力）を常時表示。
+        # SIM_VIEWPORT_CAM=0 で無効（俯瞰のまま）。GUI 時のみ。
+        if (not headless) and os.getenv("SIM_VIEWPORT_CAM", "1") == "1":
+            _campath = (f"{torso_path}/chest_cam"
+                        if (cam_mode == "torso" and torso_path is not None) else "/sim_head_cam")
+            try:
+                import omni.kit.viewport.utility as _vpu
+
+                _vp = _vpu.get_active_viewport()
+                try:
+                    _vp.set_active_camera(_campath)
+                except Exception:  # noqa: BLE001
+                    _vp.camera_path = _campath
+                print(f"[bridge] GUI ビューポート → {_campath}（カメラ映像を常時表示）", flush=True)
+            except Exception as _e:  # noqa: BLE001
+                print(f"[bridge] viewport cam set warn: {_e}", flush=True)
+
         # intrinsics（HFOV から焦点距離を設定。比 focal/aperture が画角を決める＝単位は相殺）
         _A = 20.955
         _F = (_A / 2.0) / math.tan(hfov / 2.0)
@@ -361,10 +455,23 @@ def main() -> None:
     grip_q = 0.0
     grasped_set: set[int] = set()
     basket_count = 0   # F-07: 籠に投入済みの本数（積み重ねオフセット用）
+    placed_at: dict[int, int] = {}   # F-07 物理落下: {okra idx: 投入した step}（着籠判定用）
     grasp_target = int(os.getenv("SIM_GRASP_OKRA", "1"))   # 既定 /Okra_1（単発時）
     grasp_close = float(os.getenv("SIM_GRASP_CLOSE", "2.0"))  # cmds[0].q がこれ以上で閉じ=把持
+    grip_open_q = float(os.getenv("SIM_GRIP_OPEN", "5.0"))    # これ以上=開き(リリース)。close=4.4/open=5.2 を区別
     grasp_target_file = os.getenv("SIM_GRASP_TARGET_FILE", "/tmp/sim_grasp_target.txt")  # graph がここに次の対象を書く
     _go = [float(x) for x in os.getenv("SIM_GRASP_OFFSET", "0,0,0").split(",")]  # 把持位置オフセット
+
+    def _world_xyz(path):
+        """prim の現在のワールド座標 (x,y,z) を実測（籠は左腕で動くので毎回読む）。"""
+        if not path:
+            return None
+        try:
+            _t = UsdGeom.XformCache(Usd.TimeCode.Default()).GetLocalToWorldTransform(
+                stage.GetPrimAtPath(path)).ExtractTranslation()
+            return (round(float(_t[0]), 3), round(float(_t[1]), 3), round(float(_t[2]), 3))
+        except Exception:  # noqa: BLE001
+            return None
 
     print("[bridge] loop start（Ctrl-C / touch /tmp/sim_bridge_stop で終了）", flush=True)
     while True:
@@ -414,7 +521,7 @@ def main() -> None:
         except Exception:  # noqa: BLE001
             pass
         # 閉じ かつ 未把持の対象 → world アンカー除去＋手リンクへ FixedJoint（複数可, ユニーク joint）
-        if grip_q >= grasp_close and hand_path and gt_idx not in grasped_set and 0 <= gt_idx < len(okra_paths):
+        if grasp_close <= grip_q < grip_open_q and hand_path and gt_idx not in grasped_set and 0 <= gt_idx < len(okra_paths):
             okp = okra_paths[gt_idx]
             wj = f"/World/OkraJoints/joint_{gt_idx}"
             if stage.GetPrimAtPath(wj):
@@ -426,14 +533,22 @@ def main() -> None:
             gj.CreateLocalPos1Attr(Gf.Vec3f(0.0, 0.0, 0.0))
             grasped_set.add(gt_idx)
             print(f"[bridge] GRASP {okp} → {hand_path}（idx={gt_idx}, grip_q={grip_q:.2f}, 計{len(grasped_set)}本）", flush=True)
-        # 開き かつ 把持中 → 籠へ投入（grasp joint 外し→籠位置へ world アンカーで固定＝F-07）
-        elif grip_q < grasp_close and grasped_set:
+        # 開き かつ 把持中 → リリース（手リンクの GraspJoint を外す）＝F-07。
+        #   重力ON: 手を離すだけ→重力ONのオクラが籠コライダーへ物理落下（本番の腕モーションで運んだ上で着籠）。
+        #   重力OFF: 従来どおり world アンカーで籠位置へ収める（弱PD回避の運動学デモ）。
+        elif (grip_q >= grip_open_q or grip_q < grasp_close) and grasped_set:
+            _grav_on = os.getenv("SIM_GRAVITY", "0") == "1"
             for _idx in sorted(grasped_set):
                 gjp = f"/World/GraspJoint_{_idx}"
                 if stage.GetPrimAtPath(gjp):
                     stage.RemovePrim(gjp)
-                if basket_pos is not None:
-                    # 籠内で少しずつ位置をずらして積む
+                if _grav_on:
+                    placed_at[_idx] = step
+                    print(f"[bridge] PLACE okra idx={_idx} → 手を離す（重力で物理落下）｜"
+                          f"basket={_world_xyz(basket_path)} hand={_world_xyz(hand_path)} "
+                          f"okra={_world_xyz(okra_paths[_idx])}", flush=True)
+                elif basket_pos is not None:
+                    # 籠内で少しずつ位置をずらして積む（world アンカー）
                     bx = basket_pos[0] + 0.02 * (basket_count % 3 - 1)
                     by = basket_pos[1] + 0.02 * ((basket_count // 3) % 3 - 1)
                     bz = basket_pos[2] + 0.05 + 0.015 * basket_count
@@ -442,12 +557,39 @@ def main() -> None:
                     bj.CreateLocalPos0Attr(Gf.Vec3f(bx, by, bz))   # world アンカー＝籠位置へ
                     bj.CreateLocalPos1Attr(Gf.Vec3f(0.0, 0.0, 0.0))
                     basket_count += 1
-                print(f"[bridge] PLACE okra idx={_idx} → 籠（投入{basket_count}本目）", flush=True)
+                    print(f"[bridge] PLACE okra idx={_idx} → 籠（world アンカー, 投入{basket_count}本目）", flush=True)
             grasped_set.clear()
 
         # 2) sim 1step
         world.step(render=render_on)
         step += 1
+
+        # F-07 物理落下の着籠判定（投入から ~1.5s 後に1回, 重力ON時のみ）。籠は左腕で動くので
+        # 籠の現在ワールド座標を実測し、それを中心に±半径/高さで内外を判定する。
+        if placed_at:
+            _bc = _world_xyz(basket_path) or basket_pos
+            _done = []
+            for _idx, _s0 in placed_at.items():
+                if step - _s0 < 90:
+                    continue
+                try:
+                    _o = _world_xyz(okra_paths[_idx])
+                    if _o is None or _bc is None:
+                        raise RuntimeError("座標取得不可")
+                    _dx, _dy, _dz = _o[0] - _bc[0], _o[1] - _bc[1], _o[2] - _bc[2]
+                    _rad = (_dx * _dx + _dy * _dy) ** 0.5
+                    _inb = (_rad < 0.12) and (-0.05 <= _dz <= 0.25)
+                    _verdict = "受けた(籠内)" if _inb else ("床へ落下" if _o[2] < 0.15 else "籠外/縁")
+                    _msg = (f"[bridge] F-07 着籠判定 okra{_idx}: okra={_o} 籠={_bc} "
+                            f"水平ズレr={_rad:.3f} 高さ差dz={_dz:.3f} -> {_verdict}")
+                    print(_msg, flush=True)
+                    with open("/tmp/f07_place.txt", "a") as _f:
+                        _f.write(_msg + "\n")
+                except Exception as _e:  # noqa: BLE001
+                    print(f"[bridge] 着籠判定 warn idx={_idx}: {_e}", flush=True)
+                _done.append(_idx)
+            for _idx in _done:
+                placed_at.pop(_idx, None)
 
         # 3) lowstate 発行
         if step % pub_every == 0:

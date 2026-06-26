@@ -87,30 +87,13 @@ def main() -> None:
     rsz = tuple(round(rmx[i] - rmn[i], 3) for i in range(3))
     print(f"[chinou] ROOM world size (m) = {rsz}  min={tuple(round(v,2) for v in rmn)} max={tuple(round(v,2) for v in rmx)}", flush=True)
 
-    # --- 天井照明: 研究室のシーリングライトを SphereLight グリッドで再現 ---
-    # SphereLight は位置を持つ点光源（距離2乗で減衰）。天井(z=rmx[2])の少し下に
-    # 壁際を避けて格子状に並べる。数/強度/半径は CLI で調整可。
+    # --- 天井照明: 共有ビルダー sim_scene.add_ceiling_lights で配置（bridge と単一ソース）---
+    # 照明はシーン(stage)単位＝同じ環境なら全カメラで共有。bridge も同じ関数を呼ぶ。
     if args.ceil_lights > 0:
-        from pxr import UsdLux
-        n = args.ceil_lights
-        cz = float(rmx[2]) - 0.15  # 天井から 15cm 下 [m]
-
-        def _grid(a, b, k, inset=0.7):
-            c = 0.5 * (a + b)
-            h = 0.5 * (b - a) * inset  # 内側 70% に収めて壁から離す
-            return [c] if k == 1 else [c - h + 2 * h * i / (k - 1) for i in range(k)]
-
-        xs = _grid(float(rmn[0]), float(rmx[0]), n)
-        ys = _grid(float(rmn[1]), float(rmx[1]), n)
-        for i, x in enumerate(xs):
-            for j, y in enumerate(ys):
-                lt = UsdLux.SphereLight.Define(stage, f"/World/CeilingLights/sphere_{i}_{j}")
-                lt.CreateRadiusAttr(float(args.ceil_radius))      # 光源半径 [m]
-                lt.CreateIntensityAttr(float(args.ceil_intensity))
-                lt.CreateColorAttr(Gf.Vec3f(1.0, 0.98, 0.92))     # わずかに電球色
-                UsdGeom.XformCommonAPI(lt.GetPrim()).SetTranslate(Gf.Vec3d(x, y, cz))
-        print(f"[chinou] ceiling SphereLight {n}x{n}={n*n}灯 @z={cz:.2f}m "
-              f"intensity={args.ceil_intensity} radius={args.ceil_radius}", flush=True)
+        import sim_scene  # 同ディレクトリ（docs/sim-setup）
+        ncl = sim_scene.add_ceiling_lights(stage, n=args.ceil_lights,
+                                           intensity=args.ceil_intensity, radius=args.ceil_radius)
+        print(f"[chinou] ceiling SphereLight x{ncl}（sim_scene 共有照明）", flush=True)
 
     # 床/壁コライダーは chinou_center.usd に焼き込み済み（/World/Colliders, 不可視 static box）。
     # 念のため安全網のグリッド地面を z=0 に追加したい場合は下行を有効化:

@@ -20,6 +20,12 @@ OKRA_Z_OFF = 0.05    # オクラ中心 z = 天板 + これ（長さ10cm→base=�
 OKRA_BREAK_FORCE = 8.0  # [N] 引張でこれ超→破断＝収穫（自重0.12Nでは外れない）
 _FLT_MAX = 3.4028234663852886e+38
 
+# 天井照明（収穫シーン統一照明。view_chinou / bridge 共用の単一ソース）
+CEIL_N = 3              # n×n グリッド
+CEIL_INTENSITY = 40000.0
+CEIL_RADIUS = 0.15     # [m]
+CEIL_COLOR = (1.0, 0.98, 0.92)  # わずかに電球色
+
 
 def build_table_okra(stage, *, table_h: float = 0.72, table_cx: float = TABLE_CX,
                      n_okra: int = 10, okra_usd: str = OKRA_USD) -> list[str]:
@@ -78,4 +84,46 @@ def build_table_okra(stage, *, table_h: float = 0.72, table_cx: float = TABLE_CX
     return okra_paths
 
 
-__all__ = ["build_table_okra", "OKRA_USD", "TABLE_CX"]
+def add_ceiling_lights(stage, *, n: int = CEIL_N, intensity: float = CEIL_INTENSITY,
+                       radius: float = CEIL_RADIUS, room_path: str | None = None) -> int:
+    """部屋天井に SphereLight を n×n グリッド配置（収穫シーンの統一照明）。
+
+    照明は「カメラごと」ではなく「シーン(stage)ごと」。同じ stage に置けば全カメラ・全ビューで
+    共有される。view_chinou と bridge で見た目を揃えるため、両者がこの関数を呼ぶ（単一ソース）。
+    部屋 bbox から天井高(z)と XY 広がりを算出。room_path 未指定なら /World/ChinouCenter→/World 探索。
+    部屋が無ければ 0 を返す（天井が無いので置かない）。戻り値=設置灯数。
+    """
+    if n <= 0:
+        return 0
+    from pxr import Gf, Usd, UsdGeom, UsdLux
+    bbc = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_, UsdGeom.Tokens.render])
+    rp = None
+    for cand in ([room_path] if room_path else ["/World/ChinouCenter", "/World"]):
+        p = stage.GetPrimAtPath(cand) if cand else None
+        if p and p.IsValid():
+            rp = p
+            break
+    if rp is None:
+        return 0
+    rng = bbc.ComputeWorldBound(rp).ComputeAlignedRange()
+    rmn, rmx = rng.GetMin(), rng.GetMax()
+    cz = float(rmx[2]) - 0.15  # 天井から 15cm 下
+
+    def _grid(a: float, b: float, k: int, inset: float = 0.7) -> list[float]:
+        c = 0.5 * (a + b)
+        h = 0.5 * (b - a) * inset  # 内側 inset に収め壁から離す
+        return [c] if k == 1 else [c - h + 2 * h * i / (k - 1) for i in range(k)]
+
+    xs = _grid(float(rmn[0]), float(rmx[0]), n)
+    ys = _grid(float(rmn[1]), float(rmx[1]), n)
+    for i, x in enumerate(xs):
+        for j, y in enumerate(ys):
+            lt = UsdLux.SphereLight.Define(stage, f"/World/CeilingLights/sphere_{i}_{j}")
+            lt.CreateRadiusAttr(float(radius))
+            lt.CreateIntensityAttr(float(intensity))
+            lt.CreateColorAttr(Gf.Vec3f(*CEIL_COLOR))
+            UsdGeom.XformCommonAPI(lt.GetPrim()).SetTranslate(Gf.Vec3d(x, y, cz))
+    return n * n
+
+
+__all__ = ["build_table_okra", "add_ceiling_lights", "OKRA_USD", "TABLE_CX"]
