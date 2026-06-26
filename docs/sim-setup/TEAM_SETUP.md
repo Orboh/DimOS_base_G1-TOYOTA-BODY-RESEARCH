@@ -55,6 +55,8 @@ aws s3 sync s3://orboh-datasets/g1-okra-sim/usd_file/ usd_file/
 | `g1-29dof-dex1-base-fix-usd/g1bag.usd` | 収穫構成 G1（左手首バスケット直付け / 右手 Dex1 / 足・指に物理マテリアル / GroundPlane無効） |
 | `g1-29dof-dex1-base-fix-usd/basket_physics.usd` | バスケット形状（g1bag が相対参照。**同ディレクトリ必須**） |
 | `usd_file/basket.3mf` | バスケット元データ（mm, 3MF） |
+| `okra.usd` | 把持対象オクラ（10cm/12g, RigidBody+convexHull+grippy素材 okra_mat） |
+| `usd_file/Okra01.3mf` | オクラ元データ（mm, 3MF スライサープロジェクト） |
 
 > g1bag.usd は `./basket_physics.usd` を相対パスで参照するので、**2ファイルは必ず同じフォルダに**置くこと（sync すれば自動でそうなる）。
 
