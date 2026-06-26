@@ -538,13 +538,36 @@ def main() -> None:
                 grip_q = float(gsm[-1].cmds[0].q)
             except Exception:  # noqa: BLE001
                 pass
-        # 把持対象 index: graph が書くファイル優先、無ければ env 既定（単発）
+        # 把持対象 index の決定:
+        #  (a) SIM_GRASP_NEAREST=1: 閉じる瞬間、右手リンク world 位置に最も近い未把持オクラ prim を
+        #      自動選択（YOLO 検出は prim index を知らないため＝実検出ループ用）。
+        #  (b) 既定: graph が書くファイル優先、無ければ env（GT index ループ用）。
         gt_idx = grasp_target
-        try:
-            with open(grasp_target_file) as _f:
-                gt_idx = int(_f.read().strip())
-        except Exception:  # noqa: BLE001
-            pass
+        if os.getenv("SIM_GRASP_NEAREST", "0") == "1" and grip_q >= grasp_close and hand_path:
+            try:
+                _hw = UsdGeom.XformCache(Usd.TimeCode.Default()).GetLocalToWorldTransform(
+                    stage.GetPrimAtPath(hand_path)).ExtractTranslation()
+                _best, _bd = None, 1e9
+                for _i, _op in enumerate(okra_paths):
+                    if _i in grasped_set:
+                        continue
+                    _ow = UsdGeom.XformCache(Usd.TimeCode.Default()).GetLocalToWorldTransform(
+                        stage.GetPrimAtPath(_op)).ExtractTranslation()
+                    _dd = (_hw[0]-_ow[0])**2 + (_hw[1]-_ow[1])**2 + (_hw[2]-_ow[2])**2
+                    if _dd < _bd:
+                        _best, _bd = _i, _dd
+                if _best is not None and _bd <= float(os.getenv("SIM_GRASP_NEAREST_MAX", "0.20"))**2:
+                    gt_idx = _best
+                else:
+                    gt_idx = -1  # 近傍に未把持オクラ無し→把持しない
+            except Exception:  # noqa: BLE001
+                pass
+        else:
+            try:
+                with open(grasp_target_file) as _f:
+                    gt_idx = int(_f.read().strip())
+            except Exception:  # noqa: BLE001
+                pass
         # 閉じ かつ 未把持の対象 → world アンカー除去＋手リンクへ FixedJoint（複数可, ユニーク joint）
         if grasp_close <= grip_q < grip_open_q and hand_path and gt_idx not in grasped_set and 0 <= gt_idx < len(okra_paths):
             okp = okra_paths[gt_idx]
