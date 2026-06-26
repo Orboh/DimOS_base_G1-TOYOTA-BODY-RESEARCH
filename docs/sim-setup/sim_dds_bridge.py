@@ -127,6 +127,17 @@ def main() -> None:
             break
     robot = ArtCls(prim_path=art_root or "/G1", name="g1")
     world.scene.add(robot)
+
+    # 机上オクラ（A配置）: SIM_TABLE=1 で view_chinou と同一配置を載せる（M2 可視化用）。
+    # world.reset() の前に stage へ追加する。配置の正本は sim_scene.build_table_okra。
+    if os.getenv("SIM_TABLE", "0") == "1":
+        import sim_scene  # 同ディレクトリ（docs/sim-setup）
+
+        n_okra = int(os.getenv("SIM_OKRA", "10"))
+        table_h = float(os.getenv("SIM_TABLE_H", "0.72"))
+        okra_paths = sim_scene.build_table_okra(stage, table_h=table_h, n_okra=n_okra)
+        print(f"[bridge] 机+オクラ {len(okra_paths)}本 配置（A配置, 天板{table_h}m）", flush=True)
+
     world.reset()
     try:
         robot.set_world_pose(position=np.array([0.0, 0.0, lift]))
