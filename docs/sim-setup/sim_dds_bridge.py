@@ -342,12 +342,13 @@ def main() -> None:
     ii22 = canon_to_isaac.get(22)  # right_shoulder_pitch（測定確認用）
     ii25 = canon_to_isaac.get(25)  # right_elbow
 
-    # M3 机上ピック状態
+    # M3/M4 机上ピック状態（複数把持対応: 把持対象 index はファイル or env から）
     grip_q = 0.0
-    grasped = False
-    grasp_target = int(os.getenv("SIM_GRASP_OKRA", "1"))   # 既定 /Okra_1 = r0c1（publisher の標的）
+    grasped_set: set[int] = set()
+    grasp_target = int(os.getenv("SIM_GRASP_OKRA", "1"))   # 既定 /Okra_1（単発時）
     grasp_close = float(os.getenv("SIM_GRASP_CLOSE", "2.0"))  # cmds[0].q がこれ以上で閉じ=把持
-    _GRASP_JOINT = "/World/GraspJoint"
+    grasp_target_file = os.getenv("SIM_GRASP_TARGET_FILE", "/tmp/sim_grasp_target.txt")  # graph がここに次の対象を書く
+    _go = [float(x) for x in os.getenv("SIM_GRASP_OFFSET", "0,0,0").split(",")]  # 把持位置オフセット
 
     print("[bridge] loop start（Ctrl-C / touch /tmp/sim_bridge_stop で終了）", flush=True)
     while True:
@@ -389,25 +390,26 @@ def main() -> None:
                 grip_q = float(gsm[-1].cmds[0].q)
             except Exception:  # noqa: BLE001
                 pass
-        if (not grasped) and grip_q >= grasp_close and hand_path and 0 <= grasp_target < len(okra_paths):
-            okp = okra_paths[grasp_target]
-            wj = f"/World/OkraJoints/joint_{grasp_target}"   # オクラの world アンカーを外す（=収穫）
+        # 把持対象 index: graph が書くファイル優先、無ければ env 既定（単発）
+        gt_idx = grasp_target
+        try:
+            with open(grasp_target_file) as _f:
+                gt_idx = int(_f.read().strip())
+        except Exception:  # noqa: BLE001
+            pass
+        # 閉じ かつ 未把持の対象 → world アンカー除去＋手リンクへ FixedJoint（複数可, ユニーク joint）
+        if grip_q >= grasp_close and hand_path and gt_idx not in grasped_set and 0 <= gt_idx < len(okra_paths):
+            okp = okra_paths[gt_idx]
+            wj = f"/World/OkraJoints/joint_{gt_idx}"
             if stage.GetPrimAtPath(wj):
                 stage.RemovePrim(wj)
-            gj = UsdPhysics.FixedJoint.Define(stage, _GRASP_JOINT)  # 手リンク↔オクラを剛結合
+            gj = UsdPhysics.FixedJoint.Define(stage, f"/World/GraspJoint_{gt_idx}")
             gj.CreateBody0Rel().SetTargets([hand_path])
             gj.CreateBody1Rel().SetTargets([okp])
-            # 把持位置: 手リンク原点からのオフセット（手のひら/指先へ寄せる）。GUIで微調整可。
-            _go = [float(x) for x in os.getenv("SIM_GRASP_OFFSET", "0,0,0").split(",")]
             gj.CreateLocalPos0Attr(Gf.Vec3f(_go[0], _go[1], _go[2]))
             gj.CreateLocalPos1Attr(Gf.Vec3f(0.0, 0.0, 0.0))
-            grasped = True
-            print(f"[bridge] GRASP {okp} → {hand_path}（grip_q={grip_q:.2f}）", flush=True)
-        elif grasped and grip_q < grasp_close:
-            if stage.GetPrimAtPath(_GRASP_JOINT):
-                stage.RemovePrim(_GRASP_JOINT)
-            grasped = False
-            print(f"[bridge] RELEASE（grip_q={grip_q:.2f}）", flush=True)
+            grasped_set.add(gt_idx)
+            print(f"[bridge] GRASP {okp} → {hand_path}（idx={gt_idx}, grip_q={grip_q:.2f}, 計{len(grasped_set)}本）", flush=True)
 
         # 2) sim 1step
         world.step(render=render_on)
@@ -464,7 +466,7 @@ def main() -> None:
             qm = np.asarray(robot.get_joint_positions(), dtype=float)
             mq22 = qm[ii22] if ii22 is not None else float("nan")
             mq25 = qm[ii25] if ii25 is not None else float("nan")
-            print(f"[bridge] step={step} cmds_rx={cmd_count} measured r_shoulder_pitch={mq22:.3f} r_elbow={mq25:.3f} grip_q={grip_q:.2f} grasped={grasped}", flush=True)
+            print(f"[bridge] step={step} cmds_rx={cmd_count} measured r_shoulder_pitch={mq22:.3f} r_elbow={mq25:.3f} grip_q={grip_q:.2f} grasped={sorted(grasped_set)}", flush=True)
             last_log = time.time()
 
     sim_app.close()
