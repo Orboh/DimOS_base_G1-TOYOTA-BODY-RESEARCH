@@ -39,7 +39,11 @@ def main() -> None:
     ap.add_argument("--ceil-radius", type=float, default=0.15,
                     help="各天井ライトの半径[m]（大きいほど影が柔らかい）")
     ap.add_argument("--okra", type=int, default=3,
-                    help="右手前の把持圏に置くオクラ本数（収穫対象。0で無し）")
+                    help="オクラ本数（--table 時は机上に格子配置、無指定時は右手前の把持圏）")
+    ap.add_argument("--table", action="store_true",
+                    help="ロボット前方に机を置き、机上に --okra 本のオクラを少し浮かせて配置（重力自動ON）")
+    ap.add_argument("--table-h", type=float, default=0.72,
+                    help="机の天板高さ[m]（G1がしゃがまず届く高さ。既定0.72）")
     args = ap.parse_args()
 
     from isaacsim import SimulationApp
@@ -48,6 +52,8 @@ def main() -> None:
     import numpy as np
     from pxr import Gf, Usd, UsdGeom, UsdPhysics
     from isaacsim.core.api import World
+    from isaacsim.core.api.objects import FixedCuboid
+    from isaacsim.core.api.materials import PhysicsMaterial
     from isaacsim.core.utils.stage import open_stage
     from isaacsim.core.utils.viewports import set_camera_view
     import omni.usd
@@ -64,12 +70,14 @@ def main() -> None:
     # 確認用ビューアなので重力 OFF。PD 剛性が弱く腕が垂れ下がる（→ 手首に付いた
     # バスケットごとズレる）のを防ぎ、腕・バスケットを初期姿勢で静止させる。
     # 動歩行や把持の動力学を見たい時は --gravity を付けて通常重力に戻す。
-    if not args.gravity:
+    if not (args.gravity or args.table):
         try:
             world.get_physics_context().set_gravity(0.0)  # [m/s^2]
             print("[chinou] gravity OFF（腕・バスケットを初期姿勢で固定表示）", flush=True)
         except Exception as e:  # noqa: BLE001
             print(f"[chinou] set_gravity failed: {e}", flush=True)
+    elif args.table:
+        print("[chinou] gravity ON（--table: オクラを机に落とすため）", flush=True)
 
     # 室メッシュの実寸を確認（スケール検証の主目的）
     bbc = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_, UsdGeom.Tokens.render])
@@ -125,10 +133,42 @@ def main() -> None:
     robot = ArtCls(prim_path=art_root or "/G1", name="g1")
     world.scene.add(robot)
 
-    # オクラを右手 Dex1（world ~0.28,-0.15,0.91）の前方の把持圏に配置（収穫対象）。
-    # okra.usd は RigidBody なので既定の gravity OFF では静止（収穫対象として浮く）、
-    # --gravity では落下する。長軸を縦に倒し、少しずつ振って房状に見せる。
-    if args.okra > 0:
+    if args.table:
+        # 机（天板＋台座）をロボット前方に配置。G1 がしゃがまず届く高さ（既定 0.72m）。
+        TH = args.table_h        # 天板上面 [m]
+        TCX = 0.50               # 机中心 x（前方）
+        table_mat = PhysicsMaterial("/World/PM/table", static_friction=0.8,
+                                    dynamic_friction=0.7, restitution=0.0)
+        FixedCuboid(prim_path="/World/Table_top", name="table_top",
+                    position=np.array([TCX, 0.0, TH - 0.02]), scale=np.array([0.65, 0.55, 0.04]),
+                    color=np.array([0.55, 0.40, 0.25]), physics_material=table_mat)
+        _bh = TH - 0.04          # 台座高（床→天板下）
+        FixedCuboid(prim_path="/World/Table_base", name="table_base",
+                    position=np.array([TCX, 0.0, _bh / 2.0]), scale=np.array([0.38, 0.32, _bh]),
+                    color=np.array([0.45, 0.32, 0.20]), physics_material=table_mat)
+        print(f"[chinou] 机を配置（天板高 {TH:.2f}m, 中心x={TCX}）", flush=True)
+
+        # 机上にオクラを格子配置。天板 +5cm から落として着地（要 gravity, --table で自動ON）。
+        if args.okra > 0:
+            cols = 5
+            xs = np.linspace(TCX - 0.16, TCX + 0.12, cols)        # 手前寄り＝届きやすい
+            rows = (args.okra + cols - 1) // cols
+            ys = np.linspace(-0.15, 0.15, rows) if rows > 1 else np.array([0.0])
+            k = 0
+            for r in range(rows):
+                for c in range(cols):
+                    if k >= args.okra:
+                        break
+                    pth = f"/Okra_{k}"
+                    add_reference_to_stage(usd_path=OKRA_USD, prim_path=pth)
+                    api = UsdGeom.XformCommonAPI(stage.GetPrimAtPath(pth))
+                    api.SetTranslate(Gf.Vec3d(float(xs[c]), float(ys[r]), TH + 0.05))
+                    api.SetRotate(Gf.Vec3f(0.0, 0.0, float((k * 37) % 70 - 35)))  # 水平・少し振る
+                    k += 1
+            print(f"[chinou] okra x{k} を机上(+5cm)に配置→重力で着地", flush=True)
+
+    elif args.okra > 0:
+        # 机なし: 右手 Dex1（world ~0.28,-0.15,0.91）前方の把持圏に縦向きで配置。
         OKRA_POS = [
             (0.40, -0.15, 0.95), (0.43, -0.09, 0.86), (0.38, -0.21, 0.90),
             (0.46, -0.16, 1.00), (0.41, -0.12, 0.82),
@@ -139,11 +179,14 @@ def main() -> None:
             add_reference_to_stage(usd_path=OKRA_USD, prim_path=pth)
             api = UsdGeom.XformCommonAPI(stage.GetPrimAtPath(pth))
             api.SetTranslate(Gf.Vec3d(*OKRA_POS[i]))
-            api.SetRotate(Gf.Vec3f(-90.0, 0.0, float(i * 30)))  # 長軸を縦(ぶら下がり)に
+            api.SetRotate(Gf.Vec3f(-90.0, 0.0, float(i * 30)))
         print(f"[chinou] okra x{no} を右手前の把持圏に配置", flush=True)
 
-    # 室内中心付近を俯瞰（部屋全体と G1 の比率が分かる画角）
-    set_camera_view(eye=np.array([6.0, -6.0, 3.0]), target=np.array([0.0, 0.0, 0.8]))
+    # カメラ: --table は机まわりを寄りで、通常は室内俯瞰
+    if args.table:
+        set_camera_view(eye=np.array([1.7, -1.3, 1.25]), target=np.array([0.45, 0.0, 0.72]))
+    else:
+        set_camera_view(eye=np.array([6.0, -6.0, 3.0]), target=np.array([0.0, 0.0, 0.8]))
 
     world.reset()
     try:
