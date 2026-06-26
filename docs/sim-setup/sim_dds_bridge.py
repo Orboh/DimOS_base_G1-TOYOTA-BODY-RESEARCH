@@ -128,15 +128,21 @@ def main() -> None:
     robot = ArtCls(prim_path=art_root or "/G1", name="g1")
     world.scene.add(robot)
 
-    # 机上オクラ（A配置）: SIM_TABLE=1 で view_chinou と同一配置を載せる（M2 可視化用）。
+    # 机上オクラ（A配置）: SIM_TABLE=1 で view_chinou と同一配置を載せる（M2/M3 用）。
     # world.reset() の前に stage へ追加する。配置の正本は sim_scene.build_table_okra。
+    okra_paths: list[str] = []
+    hand_path = None  # 右手リンク（M3 机上ピックでオクラを固定する先）
     if os.getenv("SIM_TABLE", "0") == "1":
         import sim_scene  # 同ディレクトリ（docs/sim-setup）
 
         n_okra = int(os.getenv("SIM_OKRA", "10"))
         table_h = float(os.getenv("SIM_TABLE_H", "0.72"))
         okra_paths = sim_scene.build_table_okra(stage, table_h=table_h, n_okra=n_okra)
-        print(f"[bridge] 机+オクラ {len(okra_paths)}本 配置（A配置, 天板{table_h}m）", flush=True)
+        for _p in Usd.PrimRange(g1):
+            if _p.GetName() == "right_hand_base_link":
+                hand_path = _p.GetPath().pathString
+                break
+        print(f"[bridge] 机+オクラ {len(okra_paths)}本 配置（A配置, 天板{table_h}m）hand={hand_path}", flush=True)
 
     world.reset()
     try:
@@ -171,7 +177,12 @@ def main() -> None:
     t_state = Topic(dp, "rt/lowstate", LowState_)
     reader = DataReader(dp, t_cmd)
     writer = DataWriter(dp, t_state)
-    print(f"[bridge] DDS up: domain={domain_id} sub=rt/arm_sdk pub=rt/lowstate", flush=True)
+    # M3 机上ピック: グリッパ指令 rt/dex1/right/cmd（MotorCmds_, cmds[0].q）を購読
+    from unitree_sdk2py.idl.unitree_go.msg.dds_ import MotorCmds_
+
+    t_grip = Topic(dp, "rt/dex1/right/cmd", MotorCmds_)
+    grip_reader = DataReader(dp, t_grip)
+    print(f"[bridge] DDS up: domain={domain_id} sub=rt/arm_sdk,rt/dex1/right/cmd pub=rt/lowstate", flush=True)
 
     # シーン照明（room が暗くカメラ像が見えない対策。SIM_ADD_LIGHT=0 で無効）
     if os.getenv("SIM_ADD_LIGHT", "1") == "1":
@@ -331,6 +342,13 @@ def main() -> None:
     ii22 = canon_to_isaac.get(22)  # right_shoulder_pitch（測定確認用）
     ii25 = canon_to_isaac.get(25)  # right_elbow
 
+    # M3 机上ピック状態
+    grip_q = 0.0
+    grasped = False
+    grasp_target = int(os.getenv("SIM_GRASP_OKRA", "1"))   # 既定 /Okra_1 = r0c1（publisher の標的）
+    grasp_close = float(os.getenv("SIM_GRASP_CLOSE", "2.0"))  # cmds[0].q がこれ以上で閉じ=把持
+    _GRASP_JOINT = "/World/GraspJoint"
+
     print("[bridge] loop start（Ctrl-C / touch /tmp/sim_bridge_stop で終了）", flush=True)
     while True:
         if run_secs > 0 and (time.time() - t0) > run_secs:
@@ -360,6 +378,36 @@ def main() -> None:
                         tgt[ii] = float(lc.motor_cmd[ci].q)
                 robot.apply_action(ArticulationAction(joint_positions=tgt))
                 last_q_target = tgt
+
+        # 1b) グリッパ受信 → 机上ピック（閉じ: world joint 外し→手リンクへ FixedJoint / 開き: 解放）
+        try:
+            gsm = [s for s in grip_reader.take(N=10) if hasattr(s, "cmds") and len(s.cmds) > 0]
+        except Exception:  # noqa: BLE001
+            gsm = []
+        if gsm:
+            try:
+                grip_q = float(gsm[-1].cmds[0].q)
+            except Exception:  # noqa: BLE001
+                pass
+        if (not grasped) and grip_q >= grasp_close and hand_path and 0 <= grasp_target < len(okra_paths):
+            okp = okra_paths[grasp_target]
+            wj = f"/World/OkraJoints/joint_{grasp_target}"   # オクラの world アンカーを外す（=収穫）
+            if stage.GetPrimAtPath(wj):
+                stage.RemovePrim(wj)
+            gj = UsdPhysics.FixedJoint.Define(stage, _GRASP_JOINT)  # 手リンク↔オクラを剛結合
+            gj.CreateBody0Rel().SetTargets([hand_path])
+            gj.CreateBody1Rel().SetTargets([okp])
+            # 把持位置: 手リンク原点からのオフセット（手のひら/指先へ寄せる）。GUIで微調整可。
+            _go = [float(x) for x in os.getenv("SIM_GRASP_OFFSET", "0,0,0").split(",")]
+            gj.CreateLocalPos0Attr(Gf.Vec3f(_go[0], _go[1], _go[2]))
+            gj.CreateLocalPos1Attr(Gf.Vec3f(0.0, 0.0, 0.0))
+            grasped = True
+            print(f"[bridge] GRASP {okp} → {hand_path}（grip_q={grip_q:.2f}）", flush=True)
+        elif grasped and grip_q < grasp_close:
+            if stage.GetPrimAtPath(_GRASP_JOINT):
+                stage.RemovePrim(_GRASP_JOINT)
+            grasped = False
+            print(f"[bridge] RELEASE（grip_q={grip_q:.2f}）", flush=True)
 
         # 2) sim 1step
         world.step(render=render_on)
@@ -416,7 +464,7 @@ def main() -> None:
             qm = np.asarray(robot.get_joint_positions(), dtype=float)
             mq22 = qm[ii22] if ii22 is not None else float("nan")
             mq25 = qm[ii25] if ii25 is not None else float("nan")
-            print(f"[bridge] step={step} cmds_rx={cmd_count} measured r_shoulder_pitch={mq22:.3f} r_elbow={mq25:.3f}", flush=True)
+            print(f"[bridge] step={step} cmds_rx={cmd_count} measured r_shoulder_pitch={mq22:.3f} r_elbow={mq25:.3f} grip_q={grip_q:.2f} grasped={grasped}", flush=True)
             last_log = time.time()
 
     sim_app.close()
