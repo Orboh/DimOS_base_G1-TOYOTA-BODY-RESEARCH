@@ -34,7 +34,7 @@ def main() -> None:
     # 天井照明（研究室のシーリングライト再現）。SphereLight をグリッド配置。
     ap.add_argument("--ceil-lights", type=int, default=3,
                     help="天井 SphereLight のグリッド数 NxN（例 3 で 3x3=9灯）。0 で無効")
-    ap.add_argument("--ceil-intensity", type=float, default=40000.0,
+    ap.add_argument("--ceil-intensity", type=float, default=6000.0,
                     help="各天井ライトの intensity（暗ければ上げる。距離2乗で減衰）")
     ap.add_argument("--ceil-radius", type=float, default=0.15,
                     help="各天井ライトの半径[m]（大きいほど影が柔らかい）")

@@ -22,7 +22,7 @@ _FLT_MAX = 3.4028234663852886e+38
 
 # 天井照明（収穫シーン統一照明。view_chinou / bridge 共用の単一ソース）
 CEIL_N = 3              # n×n グリッド
-CEIL_INTENSITY = 40000.0
+CEIL_INTENSITY = 6000.0
 CEIL_RADIUS = 0.15     # [m]
 CEIL_COLOR = (1.0, 0.98, 0.92)  # わずかに電球色
 

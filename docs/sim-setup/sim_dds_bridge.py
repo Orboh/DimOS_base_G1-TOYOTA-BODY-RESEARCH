@@ -278,7 +278,7 @@ def main() -> None:
                 # add_ceiling_lights は冪等＝焼き込み済みなら skip(0)、無い部屋なら補填。
                 import sim_scene  # 同ディレクトリ
                 ncl = sim_scene.add_ceiling_lights(
-                    stage, intensity=float(os.getenv("SIM_LIGHT_INTENSITY", "40000"))
+                    stage, intensity=float(os.getenv("SIM_LIGHT_INTENSITY", "6000"))
                 )
                 print(f"[bridge] ceiling lights: {'焼き込み使用(skip)' if ncl == 0 else f'補填 x{ncl}'}",
                       flush=True)
