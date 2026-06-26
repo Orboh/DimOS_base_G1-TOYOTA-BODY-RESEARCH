@@ -333,6 +333,21 @@ def main() -> None:
             # torso フレームでの取付: 位置 + 前方やや下向き（実 ZED 相当）
             lpos = _vec("SIM_CAM_LOCAL_POS", [0.08, 0.0, 0.20])
             fwd = _vec("SIM_CAM_LOCAL_FWD", [1.0, 0.0, -0.35])
+            # SIM_CAM_LOOK_WORLD="x,y,z" 指定時: torso の向きに関係なく「ワールドのその点」を
+            # 見るよう、胸カメラの torso-local 前方ベクトルを逆算する（机のオクラ確実捕捉用）。
+            _lookw = os.getenv("SIM_CAM_LOOK_WORLD", "")
+            if _lookw:
+                try:
+                    _tw = [float(x) for x in _lookw.split(",")]
+                    _Mt = UsdGeom.XformCache(Usd.TimeCode.Default()).GetLocalToWorldTransform(
+                        stage.GetPrimAtPath(torso_path))
+                    _camw = _Mt.Transform(Gf.Vec3d(float(lpos[0]), float(lpos[1]), float(lpos[2])))
+                    _dirw = Gf.Vec3d(_tw[0] - _camw[0], _tw[1] - _camw[1], _tw[2] - _camw[2])
+                    _dl = _Mt.GetInverse().TransformDir(_dirw)  # world dir → torso-local dir
+                    fwd = np.array([_dl[0], _dl[1], _dl[2]], dtype=float)
+                    print(f"[bridge] chest cam look-at world {_tw} → torso-local fwd {np.round(fwd, 3)}", flush=True)
+                except Exception as _e:  # noqa: BLE001
+                    print(f"[bridge] look-world warn: {_e}", flush=True)
             fwd = fwd / np.linalg.norm(fwd)
             up = np.array([0.0, 0.0, 1.0])
             camZ = -fwd                                   # USDカメラは -Z が視線
@@ -415,6 +430,15 @@ def main() -> None:
             cam.set_focal_length(_F)
         except Exception as _e:  # noqa: BLE001
             print(f"[bridge] set intrinsics warn: {_e}", flush=True)
+        # ★near クリップ: 既定が遠いと近接の机/オクラ(~0.4m)が切られ「透視」して奥の部屋が写る。
+        # near を小さく(既定0.03m)して近接物を描画する。SIM_CAM_NEAR / SIM_CAM_FAR で調整。
+        try:
+            _near = float(os.getenv("SIM_CAM_NEAR", "0.03"))
+            _far = float(os.getenv("SIM_CAM_FAR", "1000000.0"))
+            cam.set_clipping_range(_near, _far)
+            print(f"[bridge] camera clipping range = ({_near}, {_far})", flush=True)
+        except Exception as _e:  # noqa: BLE001
+            print(f"[bridge] set clipping warn: {_e}", flush=True)
         try:
             cam.add_distance_to_image_plane_to_frame()  # depth 有効化
         except Exception as _e:  # noqa: BLE001
@@ -594,8 +618,15 @@ def main() -> None:
 
         # 3) lowstate 発行
         if step % pub_every == 0:
-            q = np.asarray(robot.get_joint_positions(), dtype=float)
-            dq = np.asarray(robot.get_joint_velocities(), dtype=float)
+            q = np.atleast_1d(np.asarray(robot.get_joint_positions(), dtype=float).squeeze())
+            dq = np.atleast_1d(np.asarray(robot.get_joint_velocities(), dtype=float).squeeze())
+            # アーティキュレーション破綻時 get_joint_positions が 0次元/空を返し crash した実績あり。
+            # 形が想定外（必要 dof 未満）ならこのフレームの lowstate 発行をスキップ（落とさない）。
+            _need = (max(canon_to_isaac.values()) + 1) if canon_to_isaac else 0
+            if q.ndim != 1 or q.size < _need or dq.size < _need:
+                if step % 250 == 0:
+                    print(f"[bridge] lowstate skip: joint array shape={q.shape}（articulation 不安定?）", flush=True)
+                continue
             for ci, nm in enumerate(CANON_G1_29):
                 ii = canon_to_isaac.get(ci)
                 if ii is not None:
