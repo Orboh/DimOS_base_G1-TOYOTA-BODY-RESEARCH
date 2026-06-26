@@ -83,7 +83,12 @@ class SimHarvestSkills:
         self._gc.cmds[0].kd = 0.05
         self._cur_arm = [0.0] * 14   # 直近の腕指令（連続性のため）
         self._grip_q = 0.0
-        print(f"[sim-skills] DDS up iface={iface} peers={peers or 'mcast'}; okra={sorted(int(k) for k in self._okra)}", flush=True)
+        # DDS discovery warm-up: weight=0/grip=0 を ~1.6s 流し、最初の grasp で dex1/arm の
+        # 取りこぼし（discovery 未確立）を防ぐ。weight=0 なので腕は動かない。
+        for _ in range(80):
+            self._send([0.0] * 14, 0.0, 0.0)
+            time.sleep(0.02)
+        print(f"[sim-skills] DDS up iface={iface} peers={peers or 'mcast'} (warmup done); okra={sorted(int(k) for k in self._okra)}", flush=True)
 
     # ---- 低レベル送信 ----
     def _send(self, arm14: list[float], weight: float, grip_q: float) -> None:
@@ -149,6 +154,8 @@ class SimHarvestSkills:
         if r_lift is not None:
             self._ramp(list(r_lift.arm14), 1.5, grip_q=_Q_CLOSE)
         self._hold(0.5, grip_q=_Q_CLOSE)
+        # F-07: グリッパを開く → bridge が掴んだオクラを籠へ投入（重力OFFなので world アンカーでテレポート）
+        self._hold(0.8, grip_q=0.0)
         self._picked.add(okra.id)
 
     def verify_harvest(self) -> bool:

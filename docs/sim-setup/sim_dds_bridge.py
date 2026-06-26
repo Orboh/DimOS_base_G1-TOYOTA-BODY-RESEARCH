@@ -131,7 +131,8 @@ def main() -> None:
     # 机上オクラ（A配置）: SIM_TABLE=1 で view_chinou と同一配置を載せる（M2/M3 用）。
     # world.reset() の前に stage へ追加する。配置の正本は sim_scene.build_table_okra。
     okra_paths: list[str] = []
-    hand_path = None  # 右手リンク（M3 机上ピックでオクラを固定する先）
+    hand_path = None    # 右手リンク（机上ピックでオクラを固定する先）
+    basket_path = None  # 左手首の籠（F-07 籠収納の投入先）
     if os.getenv("SIM_TABLE", "0") == "1":
         import sim_scene  # 同ディレクトリ（docs/sim-setup）
 
@@ -139,10 +140,12 @@ def main() -> None:
         table_h = float(os.getenv("SIM_TABLE_H", "0.72"))
         okra_paths = sim_scene.build_table_okra(stage, table_h=table_h, n_okra=n_okra)
         for _p in Usd.PrimRange(g1):
-            if _p.GetName() == "right_hand_base_link":
+            nm = _p.GetName()
+            if nm == "right_hand_base_link" and hand_path is None:
                 hand_path = _p.GetPath().pathString
-                break
-        print(f"[bridge] 机+オクラ {len(okra_paths)}本 配置（A配置, 天板{table_h}m）hand={hand_path}", flush=True)
+            elif "basket" in nm.lower() and basket_path is None:
+                basket_path = _p.GetPath().pathString
+        print(f"[bridge] 机+オクラ {len(okra_paths)}本 配置（A配置, 天板{table_h}m）hand={hand_path} basket={basket_path}", flush=True)
 
     world.reset()
     try:
@@ -151,6 +154,18 @@ def main() -> None:
         pass
     for _ in range(20):
         world.step(render=not headless)
+
+    # 籠の世界位置（F-07: 離したオクラをここへ world アンカーで固定＝投入）。左腕は rest 保持なので ~固定。
+    basket_pos = None
+    if basket_path is not None:
+        try:
+            _bm = UsdGeom.XformCache(Usd.TimeCode.Default()).GetLocalToWorldTransform(
+                stage.GetPrimAtPath(basket_path))
+            _bt = _bm.ExtractTranslation()
+            basket_pos = (float(_bt[0]), float(_bt[1]), float(_bt[2]))
+            print(f"[bridge] basket world pos = {tuple(round(v,3) for v in basket_pos)}", flush=True)
+        except Exception as _e:  # noqa: BLE001
+            print(f"[bridge] basket pos warn: {_e}", flush=True)
 
     dof_names = list(robot.dof_names)
     # 正準index -> Isaac dof index のマップ（名前一致）
@@ -345,6 +360,7 @@ def main() -> None:
     # M3/M4 机上ピック状態（複数把持対応: 把持対象 index はファイル or env から）
     grip_q = 0.0
     grasped_set: set[int] = set()
+    basket_count = 0   # F-07: 籠に投入済みの本数（積み重ねオフセット用）
     grasp_target = int(os.getenv("SIM_GRASP_OKRA", "1"))   # 既定 /Okra_1（単発時）
     grasp_close = float(os.getenv("SIM_GRASP_CLOSE", "2.0"))  # cmds[0].q がこれ以上で閉じ=把持
     grasp_target_file = os.getenv("SIM_GRASP_TARGET_FILE", "/tmp/sim_grasp_target.txt")  # graph がここに次の対象を書く
@@ -410,6 +426,24 @@ def main() -> None:
             gj.CreateLocalPos1Attr(Gf.Vec3f(0.0, 0.0, 0.0))
             grasped_set.add(gt_idx)
             print(f"[bridge] GRASP {okp} → {hand_path}（idx={gt_idx}, grip_q={grip_q:.2f}, 計{len(grasped_set)}本）", flush=True)
+        # 開き かつ 把持中 → 籠へ投入（grasp joint 外し→籠位置へ world アンカーで固定＝F-07）
+        elif grip_q < grasp_close and grasped_set:
+            for _idx in sorted(grasped_set):
+                gjp = f"/World/GraspJoint_{_idx}"
+                if stage.GetPrimAtPath(gjp):
+                    stage.RemovePrim(gjp)
+                if basket_pos is not None:
+                    # 籠内で少しずつ位置をずらして積む
+                    bx = basket_pos[0] + 0.02 * (basket_count % 3 - 1)
+                    by = basket_pos[1] + 0.02 * ((basket_count // 3) % 3 - 1)
+                    bz = basket_pos[2] + 0.05 + 0.015 * basket_count
+                    bj = UsdPhysics.FixedJoint.Define(stage, f"/World/BasketAnchor_{_idx}")
+                    bj.CreateBody1Rel().SetTargets([okra_paths[_idx]])
+                    bj.CreateLocalPos0Attr(Gf.Vec3f(bx, by, bz))   # world アンカー＝籠位置へ
+                    bj.CreateLocalPos1Attr(Gf.Vec3f(0.0, 0.0, 0.0))
+                    basket_count += 1
+                print(f"[bridge] PLACE okra idx={_idx} → 籠（投入{basket_count}本目）", flush=True)
+            grasped_set.clear()
 
         # 2) sim 1step
         world.step(render=render_on)
