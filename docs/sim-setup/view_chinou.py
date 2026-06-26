@@ -148,24 +148,45 @@ def main() -> None:
                     color=np.array([0.45, 0.32, 0.20]), physics_material=table_mat)
         print(f"[chinou] 机を配置（天板高 {TH:.2f}m, 中心x={TCX}）", flush=True)
 
-        # 机上にオクラを格子配置。天板 +5cm から落として着地（要 gravity, --table で自動ON）。
+        # 机上にオクラを「直立（先端上）」で配置し、机に SINK だけめり込ませて socket 風に。
+        # 各オクラを天板へ破断可能 FixedJoint で固定（上向き維持）。joint の collision 無効で
+        # めり込みは押し出されない。ハンドで掴んで引く（breakForce 超）と外れて収穫できる。
         if args.okra > 0:
             cols = 5
             xs = np.linspace(TCX - 0.16, TCX + 0.12, cols)        # 手前寄り＝届きやすい
             rows = (args.okra + cols - 1) // cols
             ys = np.linspace(-0.15, 0.15, rows) if rows > 1 else np.array([0.0])
+            zc = TH + 0.05               # オクラ中心 z（長さ10cm → base=TH=天板表面に直立）
+            FLT_MAX = 3.4028234663852886e+38
             k = 0
             for r in range(rows):
                 for c in range(cols):
                     if k >= args.okra:
                         break
+                    xi, yi = float(xs[c]), float(ys[r])
                     pth = f"/Okra_{k}"
                     add_reference_to_stage(usd_path=OKRA_USD, prim_path=pth)
-                    api = UsdGeom.XformCommonAPI(stage.GetPrimAtPath(pth))
-                    api.SetTranslate(Gf.Vec3d(float(xs[c]), float(ys[r]), TH + 0.05))
-                    api.SetRotate(Gf.Vec3f(0.0, 0.0, float((k * 37) % 70 - 35)))  # 水平・少し振る
+                    # 直立: 先端(+Y)を上(rotX+90°)→鉛直まわりに少し振る（順序重要: 倒れ/逆さ防止）
+                    qd = (Gf.Rotation(Gf.Vec3d(1, 0, 0), 90.0)
+                          * Gf.Rotation(Gf.Vec3d(0, 0, 1), float((k * 37) % 360))).GetQuat()
+                    qf = Gf.Quatf(qd.GetReal(), Gf.Vec3f(*qd.GetImaginary()))
+                    op = UsdGeom.Xformable(stage.GetPrimAtPath(pth))
+                    op.AddTranslateOp(UsdGeom.XformOp.PrecisionDouble).Set(Gf.Vec3d(xi, yi, zc))
+                    op.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(qd)
+                    # 破断可能 FixedJoint で直立保持。body0 未設定 = world アンカー（机アンカーは
+                    # 剛性不足で倒れた）。collision 無効で接触インパルス破断を回避。
+                    # ハンドで掴んで引く（breakForce 超）と外れて収穫できる。
+                    j = UsdPhysics.FixedJoint.Define(stage, f"/World/OkraJoints/joint_{k}")
+                    j.CreateBody1Rel().SetTargets([pth])
+                    j.CreateLocalPos0Attr(Gf.Vec3f(xi, yi, zc))   # world 座標アンカー
+                    j.CreateLocalRot0Attr(qf)
+                    j.CreateLocalPos1Attr(Gf.Vec3f(0, 0, 0))
+                    j.CreateLocalRot1Attr(Gf.Quatf(1, 0, 0, 0))
+                    j.CreateBreakForceAttr(8.0)        # 引張 8N 超で外れる＝収穫（自重0.12Nでは外れない）
+                    j.CreateBreakTorqueAttr(FLT_MAX)
+                    j.CreateCollisionEnabledAttr(False)
                     k += 1
-            print(f"[chinou] okra x{k} を机上(+5cm)に配置→重力で着地", flush=True)
+            print(f"[chinou] okra x{k} を机上に直立固定（world剛ジョイント）。引張8Nで収穫可", flush=True)
 
     elif args.okra > 0:
         # 机なし: 右手 Dex1（world ~0.28,-0.15,0.91）前方の把持圏に縦向きで配置。
@@ -184,7 +205,7 @@ def main() -> None:
 
     # カメラ: --table は机まわりを寄りで、通常は室内俯瞰
     if args.table:
-        set_camera_view(eye=np.array([1.7, -1.3, 1.25]), target=np.array([0.45, 0.0, 0.72]))
+        set_camera_view(eye=np.array([1.35, -1.05, 1.00]), target=np.array([0.45, 0.0, 0.78]))
     else:
         set_camera_view(eye=np.array([6.0, -6.0, 3.0]), target=np.array([0.0, 0.0, 0.8]))
 
