@@ -12,7 +12,10 @@ CYCLONEDDS_URI 無視・config 固定のため）。env で interface/peers/mult
   SIM_DDS_IFACE  : NIC名（既定 "lo"=loopback検証。same-LAN は "wlp0s20f3"、remote は "tailscale0"）
   SIM_DDS_PEERS  : unicast peer IP のカンマ区切り（tailscale 用。空=マルチキャスト）
   SIM_DDS_DOMAIN : DDS domain id（既定 0 = unitree 既定）
-  SIM_LOAD_ROOM  : "1" で room.usd も読む（既定 0 = G1 のみ・loopback高速）
+  SIM_LOAD_ROOM  : "1" で部屋(ROOM_USD=既定 chinou_center.usd)も読む（既定 0 = G1 のみ・loopback高速）
+  SIM_ROOM_USD   : 部屋USD（既定 chinou_center.usd。旧 room.usd に差替可）
+  SIM_G1_USD     : ロボットUSD（既定 g1bag.usd=収穫構成。旧 base-fix に差替可）
+  SIM_GRAVITY    : "1" で重力ON（動力学検証）。既定OFF=弱PDのg1bag腕を指令角で保持（運動学確認）
   SIM_HEADLESS   : "0" で GUI（既定 1 = headless）
 
 実行:
@@ -29,9 +32,12 @@ import time
 os.environ.setdefault("OMNI_KIT_ACCEPT_EULA", "YES")
 sys.path.insert(0, "/home/kota-ueda/Desktop/unitree_sdk2_python")
 
-REPO = "/home/kota-ueda/Desktop/dimos-hackathon"
-ROOM_USD = f"{REPO}/usd_file/room.usd"
-G1_USD = f"{REPO}/usd_file/g1-29dof-dex1-base-fix-usd/g1_29dof_with_dex1_base_fix1.usd"
+REPO = os.getenv("SIM_REPO", "/home/kota-ueda/Desktop/dimos-hackathon")
+# 既定＝正しい収穫シーン: chinou 実測室 ＋ g1bag 収穫構成（左手首バスケット＋右手 Dex1）。
+# 旧ループバック検証用に room.usd / base-fix G1 を使う場合は env で差し替える。
+# ※ g1bag の可動関節は CANON_G1_29 と 29/29 一致（＋Dex1 prismatic 2本）を確認済み。
+ROOM_USD = os.getenv("SIM_ROOM_USD", f"{REPO}/usd_file/chinou_center.usd")
+G1_USD = os.getenv("SIM_G1_USD", f"{REPO}/usd_file/g1-29dof-dex1-base-fix-usd/g1bag.usd")
 
 # 正準 G1 29-DOF 関節名（Unitree G1_29_JointIndex 順）
 CANON_G1_29 = [
@@ -97,6 +103,16 @@ def main() -> None:
         open_stage(ROOM_USD)
     world = World(stage_units_in_meters=1.0)  # fix_base G1 は地面不要（cloud asset 取得を避ける）
     stage = omni.usd.get_context().get_stage()
+
+    # 重力: 既定OFF。g1bag は関節 PD が弱く重力下で腕が垂れて指令角を保持できないため、
+    # 運動学の追従確認（S0/IK）では重力OFFで腕を指令角に固定する。SIM_GRAVITY=1 で
+    # 通常重力（把持/籠/切断の動力学を物理検証する時）。view_chinou.py と同じ方針。
+    if os.getenv("SIM_GRAVITY", "0") != "1":
+        try:
+            world.get_physics_context().set_gravity(0.0)  # [m/s^2]
+            print("[bridge] gravity OFF（弱PDのg1bag腕を指令角で保持。SIM_GRAVITY=1で重力ON）", flush=True)
+        except Exception as _e:  # noqa: BLE001
+            print(f"[bridge] set_gravity failed: {_e}", flush=True)
 
     add_reference_to_stage(usd_path=G1_USD, prim_path="/G1")
     g1 = stage.GetPrimAtPath("/G1")
