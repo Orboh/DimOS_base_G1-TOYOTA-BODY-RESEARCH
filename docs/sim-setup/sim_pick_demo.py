@@ -87,8 +87,12 @@ def main() -> int:
     def lerp(a, b, s):
         return [a[i] + (b[i] - a[i]) * s for i in range(len(a))]
 
-    # フェーズ [s]: reach → 閉じ → 持ち上げ → 保持
-    T_REACH, T_CLOSE, T_LIFT, T_HOLD = 2.5, 1.5, 3.0, 3.0
+    # フェーズ [s]: reach → 閉じ → 持ち上げ → 保持。env で各相を延長可（摩擦検証で定常を読むため）。
+    #   例: 接近のみ長保持 = T_CLOSE=0 T_LIFT=0 T_REACH=2.5 T_HOLD=8
+    T_REACH = float(os.getenv("T_REACH", "2.5"))
+    T_CLOSE = float(os.getenv("T_CLOSE", "1.5"))
+    T_LIFT = float(os.getenv("T_LIFT", "3.0"))
+    T_HOLD = float(os.getenv("T_HOLD", "3.0"))
     total = T_REACH + T_CLOSE + T_LIFT + T_HOLD
     n = int(total * 50)
     phase_prev = ""

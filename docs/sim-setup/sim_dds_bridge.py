@@ -283,6 +283,49 @@ def main() -> None:
         except Exception as _e:  # noqa: BLE001
             print(f"[bridge] gripper gains warn: {_e}", flush=True)
 
+    # 一発キャリブレーション（摩擦把持の reach 補正用・SIM_GRASP_FRICTION=1 時）:
+    #   各オクラの実 torso 座標 / 右手リンク↔ジョーリンクのオフセット を出す。
+    #   これで「IK を実オクラ座標へ当てる」補正値が分かる。jaw_link_paths は loop の距離診断にも使う。
+    jaw_link_paths: list[str] = []
+    torso_path: str | None = None  # loop の jaw↔okra(torso) 診断で使う
+    if grasp_friction:
+        try:
+            _xc = UsdGeom.XformCache(Usd.TimeCode.Default())
+            _torso_pp = None
+            for _tp in Usd.PrimRange(g1):
+                if _tp.GetName() == "torso_link":
+                    _torso_pp = _tp.GetPath().pathString
+                    break
+            torso_path = _torso_pp
+            _Tinv = (_xc.GetLocalToWorldTransform(stage.GetPrimAtPath(_torso_pp)).GetInverse()
+                     if _torso_pp else None)
+
+            def _tx(_p):
+                _w = _xc.GetLocalToWorldTransform(stage.GetPrimAtPath(_p)).ExtractTranslation()
+                if _Tinv is None:
+                    return (round(float(_w[0]), 3), round(float(_w[1]), 3), round(float(_w[2]), 3))
+                _t = _Tinv.Transform(Gf.Vec3d(float(_w[0]), float(_w[1]), float(_w[2])))
+                return (round(float(_t[0]), 3), round(float(_t[1]), 3), round(float(_t[2]), 3))
+
+            print(f"[calib] torso_link={_torso_pp}", flush=True)
+            for _i, _op in enumerate(okra_paths):
+                print(f"[calib] Okra_{_i} torso={_tx(_op)}", flush=True)
+            _hb = (_xc.GetLocalToWorldTransform(stage.GetPrimAtPath(hand_path)).ExtractTranslation()
+                   if hand_path else None)
+            print(f"[calib] right_hand_base_link torso={_tx(hand_path) if hand_path else None}", flush=True)
+            for _p in Usd.PrimRange(g1):
+                if (_p.HasAPI(UsdPhysics.RigidBodyAPI) and "right_hand" in _p.GetName().lower()
+                        and _p.GetPath().pathString != hand_path):
+                    _lp = _p.GetPath().pathString
+                    jaw_link_paths.append(_lp)
+                    _lw = _xc.GetLocalToWorldTransform(stage.GetPrimAtPath(_lp)).ExtractTranslation()
+                    _off = ((round(float(_lw[0]-_hb[0]), 3), round(float(_lw[1]-_hb[1]), 3),
+                             round(float(_lw[2]-_hb[2]), 3)) if _hb is not None else None)
+                    print(f"[calib] jaw link {_p.GetName()} torso={_tx(_lp)} offset_from_base={_off}", flush=True)
+            print(f"[calib] jaw_link_paths={len(jaw_link_paths)}個", flush=True)
+        except Exception as _e:  # noqa: BLE001
+            print(f"[calib] warn: {_e}", flush=True)
+
     # 籠の torso 座標（F-07 IK 投入のターゲット GT）。SIM_DUMP_BASKET=1 なら左腕を「提示姿勢(L字)」へ
     # 置いて実測し終了する（その値を SIM_BASKET_TORSO="X,Y,Z" として収穫ランナへ渡す）。
     if basket_path is not None:
@@ -563,19 +606,24 @@ def main() -> None:
     grasp_target_file = os.getenv("SIM_GRASP_TARGET_FILE", "/tmp/sim_grasp_target.txt")  # graph がここに次の対象を書く
     _go = [float(x) for x in os.getenv("SIM_GRASP_OFFSET", "0,0,0").split(",")]  # 把持位置オフセット
 
-    # base 横移動（cmd_vel/reposition）: SIM_BASE_MOVE=1（既定OFF）でオプトイン。skills が
-    # base_move_file に world 累積オフセット "x,y" を書き、ここで set_world_pose で base を平行移動
-    # （g1bag は base-fix なのでキネマティック=台ごとテレポート。nav_bridge の積分と同方式）。
-    # 既定OFFなので並行 nav トラックや従来挙動には無影響。
+    # base 移動（cmd_vel 歩行/reposition）: SIM_BASE_MOVE=1（既定OFF）でオプトイン。
+    # 設計書 SS-07 準拠＝LocoClient は「速度指令で連続移動する（足は選べない＝ルンバ）」。これを
+    # 再現: skills が base_move_file に **world 速度 "vx,vy" を 10Hz でストリーム**、bridge は毎ステップ
+    # `base_xy += v*dt` で積分し set_world_pose（g1bag は base-fix なのでキネマティック平行移動＝脚は
+    # 動かさない。脚の二足歩行物理は LocoClient/実機の責務で sim 対象外）。watchdog: 指令が
+    # SIM_BASE_CMD_TIMEOUT 秒来なければ停止（nav_bridge と同方式）。既定OFFで並行 nav/従来に無影響。
     base_move = os.getenv("SIM_BASE_MOVE", "0") == "1"
     base_move_file = os.getenv("SIM_BASE_MOVE_FILE", "/tmp/sim_base_move.txt")
-    base_xy = [0.0, 0.0]  # world 累積 base オフセット [m]
+    base_cmd_timeout = float(os.getenv("SIM_BASE_CMD_TIMEOUT", "0.3"))  # [s] 指令途切れで停止
+    base_xy = [0.0, 0.0]   # world 累積 base 位置 [m]
+    base_last_t = time.time()  # 積分用の前回時刻
     if base_move:
         try:  # 起動時に古いファイルを消す（前回の残骸でいきなり動かないように）
             os.remove(base_move_file)
         except OSError:
             pass
-        print(f"[bridge] base-move ON（SIM_BASE_MOVE=1）: {base_move_file} の world x,y へ base を平行移動", flush=True)
+        print(f"[bridge] base-move ON（SIM_BASE_MOVE=1）: {base_move_file} の world 速度 vx,vy を "
+              f"10Hz ストリーム→積分移動（LocoClient 風・watchdog {base_cmd_timeout}s）", flush=True)
 
     def _world_xyz(path):
         """prim の現在のワールド座標 (x,y,z) を実測（籠は左腕で動くので毎回読む）。"""
@@ -596,18 +644,27 @@ def main() -> None:
         if os.path.exists(stop_file):
             print("[bridge] stop file -> stop", flush=True)
             break
-        # 0) base 横移動（reposition/cmd_vel）: skills が書いた world 累積 x,y へ base を平行移動。
+        # 0) base 移動（cmd_vel 歩行/reposition）: file の world 速度 vx,vy を読み、鮮度(mtime)が
+        #    watchdog 内なら base_xy += v*dt を積分→set_world_pose（LocoClient 風の連続移動）。
         if base_move:
+            _now = time.time()
+            _dt = max(0.0, min(0.1, _now - base_last_t))  # 実時間 dt（暴れ防止に上限0.1s）
+            base_last_t = _now
+            _vx = _vy = 0.0
             try:
-                with open(base_move_file) as _bf:
-                    _bx, _by = (float(v) for v in _bf.read().strip().split(",")[:2])
-                if abs(_bx - base_xy[0]) > 1e-6 or abs(_by - base_xy[1]) > 1e-6:
-                    base_xy = [_bx, _by]
-                    robot.set_world_pose(position=np.array([_bx, _by, lift]),
-                                         orientation=np.array([1.0, 0.0, 0.0, 0.0]))
-                    print(f"[bridge] base move → world=({_bx:.3f},{_by:.3f})", flush=True)
+                if _now - os.path.getmtime(base_move_file) <= base_cmd_timeout:  # 鮮度内のみ採用
+                    with open(base_move_file) as _bf:
+                        _vx, _vy = (float(v) for v in _bf.read().strip().split(",")[:2])
             except (OSError, ValueError):
-                pass
+                _vx = _vy = 0.0  # ファイル無し/古い=停止（watchdog）
+            if _vx != 0.0 or _vy != 0.0:
+                base_xy[0] += _vx * _dt
+                base_xy[1] += _vy * _dt
+                try:
+                    robot.set_world_pose(position=np.array([base_xy[0], base_xy[1], lift]),
+                                         orientation=np.array([1.0, 0.0, 0.0, 0.0]))
+                except Exception:  # noqa: BLE001
+                    pass
         # 1) arm_sdk 受信 → 腕適用（InvalidSample 等 motor_cmd を持たない物は除外）
         try:
             samples = [s for s in reader.take(N=20) if hasattr(s, "motor_cmd")]
@@ -849,8 +906,8 @@ def main() -> None:
                 if step % 250 == 0:
                     print(f"[bridge] cam pub err: {e}", flush=True)
 
-        # 4) ログ（測定値: 右肩pitch/右肘が指令に追従しているか）
-        if time.time() - last_log > 2.0:
+        # 4) ログ（測定値: 右肩pitch/右肘が指令に追従しているか）。間隔は SIM_LOG_EVERY[s] で調整。
+        if time.time() - last_log > float(os.getenv("SIM_LOG_EVERY", "2.0")):
             qm = np.asarray(robot.get_joint_positions(), dtype=float)
             mq22 = qm[ii22] if ii22 is not None else float("nan")
             mq25 = qm[ii25] if ii25 is not None else float("nan")
@@ -870,6 +927,19 @@ def main() -> None:
                             _bi, _bz, _bd = _i, float(_ow[2]), _dd
                     _fg = [round(float(qm[gi]), 4) for gi in gripper_isaac_idx]
                     _fr = f" | hand_z={_hz:.3f} nearest=Okra_{_bi} okra_z={_bz:.3f} dist={_bd**0.5:.3f} finger={_fg}"
+                    # ジョー隙間の中心 vs オクラ（torso 系）。delta = okra - gap = IK 目標に足す補正量。
+                    if jaw_link_paths and torso_path and _bi >= 0:
+                        _xc2 = UsdGeom.XformCache(Usd.TimeCode.Default())
+                        _gc = np.mean([np.asarray(_xc2.GetLocalToWorldTransform(
+                            stage.GetPrimAtPath(_jp)).ExtractTranslation(), dtype=float)
+                            for _jp in jaw_link_paths], axis=0)
+                        _ok = np.asarray(_xc2.GetLocalToWorldTransform(
+                            stage.GetPrimAtPath(okra_paths[_bi])).ExtractTranslation(), dtype=float)
+                        _Tti = _xc2.GetLocalToWorldTransform(stage.GetPrimAtPath(torso_path)).GetInverse()
+                        _gct = _Tti.Transform(Gf.Vec3d(*_gc.tolist()))
+                        _okt = _Tti.Transform(Gf.Vec3d(*_ok.tolist()))
+                        _delta = (round(_okt[0]-_gct[0], 3), round(_okt[1]-_gct[1], 3), round(_okt[2]-_gct[2], 3))
+                        _fr += f" gap_torso=({_gct[0]:.3f},{_gct[1]:.3f},{_gct[2]:.3f}) okra_torso=({_okt[0]:.3f},{_okt[1]:.3f},{_okt[2]:.3f}) Δ(okra-gap)={_delta}"
                 except Exception:  # noqa: BLE001
                     pass
             print(f"[bridge] step={step} cmds_rx={cmd_count} measured r_shoulder_pitch={mq22:.3f} r_elbow={mq25:.3f} grip_q={grip_q:.2f} grasped={sorted(grasped_set)}{_fr}", flush=True)
