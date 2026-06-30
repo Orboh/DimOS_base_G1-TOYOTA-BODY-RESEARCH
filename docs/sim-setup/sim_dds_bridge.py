@@ -145,6 +145,22 @@ def main() -> None:
     else:
         print("[bridge] self-collision OFF（SIM_SELF_COLLISION=1 で実機同様に有効化）", flush=True)
 
+    # 摩擦把持モード（SIM_GRASP_FRICTION=1）: 磁石(kinematic/FixedJoint)を使わず、Dex1 の指
+    # prismatic 関節を grip_q で実際に閉じ、指↔オクラの摩擦で掴む（B / Phase2・§3/§4-3）。
+    # 薄物の接触は不安定になりやすいので、ソルバ反復を上げて貫通/滑りを抑える。
+    grasp_friction = os.getenv("SIM_GRASP_FRICTION", "0") == "1"
+    if grasp_friction and art_root is not None:
+        try:
+            from pxr import PhysxSchema
+
+            _pa = PhysxSchema.PhysxArticulationAPI.Apply(stage.GetPrimAtPath(art_root))
+            _pa.CreateSolverPositionIterationCountAttr(int(os.getenv("SIM_SOLVER_POS_ITERS", "32")))
+            _pa.CreateSolverVelocityIterationCountAttr(int(os.getenv("SIM_SOLVER_VEL_ITERS", "4")))
+            print(f"[bridge] 摩擦把持モード ON（solver pos/vel iters="
+                  f"{os.getenv('SIM_SOLVER_POS_ITERS','32')}/{os.getenv('SIM_SOLVER_VEL_ITERS','4')}）", flush=True)
+        except Exception as _e:  # noqa: BLE001
+            print(f"[bridge] friction solver 設定 warn: {_e}", flush=True)
+
     # 重力ON時は per-body 制御: 「ロボット各リンク=重力OFF（弱PDでも指令角を保持して腕が垂れない）／
     # オクラ=重力ON（籠コライダーへ物理落下）」。world 重力は既定(-9.81)のまま、ロボットだけ無効化する。
     # これで F-07 を「本番の腕モーションで運ぶ＋物理で着籠」させつつ弱PD腕の垂れを回避できる。
@@ -210,6 +226,62 @@ def main() -> None:
     arm_isaac_idx = [canon_to_isaac[ci] for ci in ARM_CANON_IDX if ci in canon_to_isaac]
     print(f"[bridge] num_dof={robot.num_dof} mapped {len(canon_to_isaac)}/29 canon joints; "
           f"arm mapped={len(arm_isaac_idx)}", flush=True)
+
+    # 摩擦把持: 非canon DOF = Dex1 の指 prismatic（num_dof-29）。grip_q で駆動するため
+    # index / limits / drive gains を取得し診断出力。close 方向は env(SIM_GRIP_SIGN)で反転可。
+    gripper_isaac_idx = [i for i, nm in enumerate(dof_names) if nm not in set(CANON_G1_29)]
+    dof_lower = dof_upper = None
+    grip_finger_kp = float(os.getenv("SIM_GRIP_KP", "800.0"))     # 指 prismatic drive stiffness
+    grip_finger_kd = float(os.getenv("SIM_GRIP_KD", "40.0"))
+    grip_close_full = float(os.getenv("SIM_GRIP_CLOSE_FULL", "4.4"))  # grip_q がこの値で全閉
+    grip_sign = float(os.getenv("SIM_GRIP_SIGN", "1.0"))         # +1: upper側が閉じ / -1: lower側が閉じ
+    if grasp_friction:
+        # DOF limits 取得（Isaac の版差を吸収）: dof_properties → articulation_view → USD prim の順。
+        for _how, _fn in (
+            ("dof_properties",
+             lambda: (np.asarray(robot.dof_properties["lower"], dtype=float).reshape(-1),
+                      np.asarray(robot.dof_properties["upper"], dtype=float).reshape(-1))),
+            ("articulation_view",
+             lambda: (lambda L: (np.asarray(L).reshape(-1, 2)[:, 0],
+                                 np.asarray(L).reshape(-1, 2)[:, 1]))(robot._articulation_view.get_dof_limits())),
+        ):
+            try:
+                dof_lower, dof_upper = _fn()
+                print(f"[bridge] dof limits via {_how}", flush=True)
+                break
+            except Exception as _e:  # noqa: BLE001
+                print(f"[bridge] dof limits {_how} 不可: {_e}", flush=True)
+        if dof_lower is None:
+            # USD フォールバック: prismatic joint prim の lower/upper を dof 名で引く（stage単位=m）。
+            dof_lower = np.full(robot.num_dof, -0.05)
+            dof_upper = np.full(robot.num_dof, 0.05)
+            for gi in gripper_isaac_idx:
+                for _pp in Usd.PrimRange(g1):
+                    if _pp.GetName() == dof_names[gi]:
+                        _lo, _hi = _pp.GetAttribute("physics:lowerLimit"), _pp.GetAttribute("physics:upperLimit")
+                        if _lo and _lo.HasValue():
+                            dof_lower[gi] = float(_lo.Get())
+                        if _hi and _hi.HasValue():
+                            dof_upper[gi] = float(_hi.Get())
+                        break
+            print("[bridge] dof limits = USD フォールバック", flush=True)
+        print(f"[bridge] gripper DOF(非canon)={[(i, dof_names[i]) for i in gripper_isaac_idx]}", flush=True)
+        if dof_lower is not None:
+            for gi in gripper_isaac_idx:
+                print(f"[bridge]   dof[{gi}] {dof_names[gi]} limit=({dof_lower[gi]:.4f},{dof_upper[gi]:.4f})", flush=True)
+        # 指 prismatic に drive gains を設定（位置目標で押し込み＝把持力を出すため）
+        try:
+            _ctrl = robot.get_articulation_controller()
+            _g = _ctrl.get_gains()
+            _kps = np.asarray(_g[0], dtype=float).reshape(-1)
+            _kds = np.asarray(_g[1], dtype=float).reshape(-1)
+            for gi in gripper_isaac_idx:
+                _kps[gi] = grip_finger_kp
+                _kds[gi] = grip_finger_kd
+            _ctrl.set_gains(kps=_kps, kds=_kds)
+            print(f"[bridge]   指 drive gains set kp={grip_finger_kp} kd={grip_finger_kd}", flush=True)
+        except Exception as _e:  # noqa: BLE001
+            print(f"[bridge] gripper gains warn: {_e}", flush=True)
 
     # 籠の torso 座標（F-07 IK 投入のターゲット GT）。SIM_DUMP_BASKET=1 なら左腕を「提示姿勢(L字)」へ
     # 置いて実測し終了する（その値を SIM_BASKET_TORSO="X,Y,Z" として収穫ランナへ渡す）。
@@ -491,6 +563,20 @@ def main() -> None:
     grasp_target_file = os.getenv("SIM_GRASP_TARGET_FILE", "/tmp/sim_grasp_target.txt")  # graph がここに次の対象を書く
     _go = [float(x) for x in os.getenv("SIM_GRASP_OFFSET", "0,0,0").split(",")]  # 把持位置オフセット
 
+    # base 横移動（cmd_vel/reposition）: SIM_BASE_MOVE=1（既定OFF）でオプトイン。skills が
+    # base_move_file に world 累積オフセット "x,y" を書き、ここで set_world_pose で base を平行移動
+    # （g1bag は base-fix なのでキネマティック=台ごとテレポート。nav_bridge の積分と同方式）。
+    # 既定OFFなので並行 nav トラックや従来挙動には無影響。
+    base_move = os.getenv("SIM_BASE_MOVE", "0") == "1"
+    base_move_file = os.getenv("SIM_BASE_MOVE_FILE", "/tmp/sim_base_move.txt")
+    base_xy = [0.0, 0.0]  # world 累積 base オフセット [m]
+    if base_move:
+        try:  # 起動時に古いファイルを消す（前回の残骸でいきなり動かないように）
+            os.remove(base_move_file)
+        except OSError:
+            pass
+        print(f"[bridge] base-move ON（SIM_BASE_MOVE=1）: {base_move_file} の world x,y へ base を平行移動", flush=True)
+
     def _world_xyz(path):
         """prim の現在のワールド座標 (x,y,z) を実測（籠は左腕で動くので毎回読む）。"""
         if not path:
@@ -510,6 +596,18 @@ def main() -> None:
         if os.path.exists(stop_file):
             print("[bridge] stop file -> stop", flush=True)
             break
+        # 0) base 横移動（reposition/cmd_vel）: skills が書いた world 累積 x,y へ base を平行移動。
+        if base_move:
+            try:
+                with open(base_move_file) as _bf:
+                    _bx, _by = (float(v) for v in _bf.read().strip().split(",")[:2])
+                if abs(_bx - base_xy[0]) > 1e-6 or abs(_by - base_xy[1]) > 1e-6:
+                    base_xy = [_bx, _by]
+                    robot.set_world_pose(position=np.array([_bx, _by, lift]),
+                                         orientation=np.array([1.0, 0.0, 0.0, 0.0]))
+                    print(f"[bridge] base move → world=({_bx:.3f},{_by:.3f})", flush=True)
+            except (OSError, ValueError):
+                pass
         # 1) arm_sdk 受信 → 腕適用（InvalidSample 等 motor_cmd を持たない物は除外）
         try:
             samples = [s for s in reader.take(N=20) if hasattr(s, "motor_cmd")]
@@ -542,6 +640,18 @@ def main() -> None:
                 grip_q = float(gsm[-1].cmds[0].q)
             except Exception:  # noqa: BLE001
                 pass
+        # 1c) 摩擦把持: grip_q を Dex1 指 prismatic の位置目標へ写像し毎ステップ駆動（磁石なし）。
+        #     frac=0(開)..1(閉)。閉じ側 limit は SIM_GRIP_SIGN で選ぶ。okra は指↔莢の摩擦だけで保持。
+        if grasp_friction and gripper_isaac_idx and dof_lower is not None:
+            frac = max(0.0, min(1.0, (grip_q / grip_close_full) if grip_close_full else 0.0))
+            base = (last_q_target.copy() if last_q_target is not None
+                    else np.asarray(robot.get_joint_positions(), dtype=float).reshape(-1).copy())
+            for gi in gripper_isaac_idx:
+                lo, hi = float(dof_lower[gi]), float(dof_upper[gi])
+                closed = hi if grip_sign > 0 else lo
+                opened = lo if grip_sign > 0 else hi
+                base[gi] = opened + frac * (closed - opened)
+            robot.apply_action(ArticulationAction(joint_positions=base))
         # 把持対象 index の決定:
         #  (a) SIM_GRASP_NEAREST=1: 閉じる瞬間、右手リンク world 位置に最も近い未把持オクラ prim を
         #      自動選択（YOLO 検出は prim index を知らないため＝実検出ループ用）。
@@ -572,6 +682,10 @@ def main() -> None:
                     gt_idx = int(_f.read().strip())
             except Exception:  # noqa: BLE001
                 pass
+        # 摩擦把持モード: 磁石（アンカー削除/kinematic/FixedJoint）は一切使わない。指の摩擦だけで
+        # 掴み、持ち上げの引張でオクラの破断 FixedJoint(SIM_OKRA_BREAK_N) が切れて収穫＝物理のみ。
+        if grasp_friction:
+            gt_idx = -1  # 以降の磁石ブロックを不活性化（grasped_set は空のまま）
         # 閉じ かつ 未把持の対象 → world アンカー除去＋手リンクへ FixedJoint（複数可, ユニーク joint）
         if grasp_close <= grip_q < grip_open_q and hand_path and gt_idx not in grasped_set and 0 <= gt_idx < len(okra_paths):
             okp = okra_paths[gt_idx]
@@ -740,7 +854,25 @@ def main() -> None:
             qm = np.asarray(robot.get_joint_positions(), dtype=float)
             mq22 = qm[ii22] if ii22 is not None else float("nan")
             mq25 = qm[ii25] if ii25 is not None else float("nan")
-            print(f"[bridge] step={step} cmds_rx={cmd_count} measured r_shoulder_pitch={mq22:.3f} r_elbow={mq25:.3f} grip_q={grip_q:.2f} grasped={sorted(grasped_set)}", flush=True)
+            _fr = ""
+            if grasp_friction and gripper_isaac_idx and hand_path and okra_paths:
+                # 摩擦把持の客観診断: 手z・最近傍オクラz・指DOF実測。lift で okra z が上がれば把持成立。
+                try:
+                    _hz = float(_world_xyz(hand_path)[2])
+                    _hw = UsdGeom.XformCache(Usd.TimeCode.Default()).GetLocalToWorldTransform(
+                        stage.GetPrimAtPath(hand_path)).ExtractTranslation()
+                    _bi, _bz, _bd = -1, float("nan"), 1e9
+                    for _i, _op in enumerate(okra_paths):
+                        _ow = UsdGeom.XformCache(Usd.TimeCode.Default()).GetLocalToWorldTransform(
+                            stage.GetPrimAtPath(_op)).ExtractTranslation()
+                        _dd = (_hw[0]-_ow[0])**2 + (_hw[1]-_ow[1])**2 + (_hw[2]-_ow[2])**2
+                        if _dd < _bd:
+                            _bi, _bz, _bd = _i, float(_ow[2]), _dd
+                    _fg = [round(float(qm[gi]), 4) for gi in gripper_isaac_idx]
+                    _fr = f" | hand_z={_hz:.3f} nearest=Okra_{_bi} okra_z={_bz:.3f} dist={_bd**0.5:.3f} finger={_fg}"
+                except Exception:  # noqa: BLE001
+                    pass
+            print(f"[bridge] step={step} cmds_rx={cmd_count} measured r_shoulder_pitch={mq22:.3f} r_elbow={mq25:.3f} grip_q={grip_q:.2f} grasped={sorted(grasped_set)}{_fr}", flush=True)
             last_log = time.time()
 
     sim_app.close()

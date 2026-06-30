@@ -33,6 +33,15 @@ from dimos.robot.unitree.g1.harvest.ollama_vlm import CAPTION_PROMPT
 DEFAULT_HOST = os.getenv("SIM_VLM_HOST", "http://100.113.43.64:11434")  # Jetson moondream (tailscale)
 DEFAULT_MODEL = os.getenv("SIM_VLM_MODEL", "moondream")
 
+# 切断可否(§3.1)の問い。sim では応答の有無(liveness)のみ見る（sim 画像は OOD で判定は当てに
+# ならない＝§10）。実機ではこの yes/no を切断手前の安全ゲート判定に使う。プロンプトを「切断可否」に
+# 寄せておくことで、sim→実機で文言を流用できる。
+CUT_OK_PROMPT = (
+    "Look at the okra pod and the robot gripper. Is the gripper positioned to cut the thin "
+    "pedicel (the stem connecting the pod), WITHOUT cutting the plant's main stalk? "
+    "Briefly describe."
+)
+
 
 def _to_jpeg_b64(frame: Any) -> str:
     """frame を JPEG base64 に。bytes(画像) / dimos frame(to_opencv) / numpy(cv2) を受ける。"""
@@ -81,6 +90,54 @@ def make_cut_ok_liveness(
         except Exception:
             return False  # ollama 停止 → 切らない
     return cut_ok
+
+
+def make_verify_vlm(
+    frame_getter: Callable[[], Any], *, mode: str = "liveness",
+    host: str = DEFAULT_HOST, model: str = DEFAULT_MODEL,
+) -> Callable[[], bool]:
+    """``verify_harvest`` 用の VLM 判定を返す（F-02 把持成否）。
+
+    - ``mode="liveness"``（既定）: 画像送信→**非空応答で True**。sim 画像は OOD で内容判定は
+      当てにならない（§10）ため、sim では「VLM が在ループで応答した」配管だけを確認する。
+    - ``mode="caption"``: ``ollama_vlm.make_ollama_verify`` に委譲（caption→keyword。把持物が
+      okra/green/holding 等か）。実機寄りの判定を sim で試したいとき用。
+
+    どちらも frame無し / ollama停止 / エラー → False（採れたと偽らない＝安全側）。
+    frame は numpy(BGR) / bytes(JPEG) / dimos frame(to_opencv) を受ける（``_to_jpeg_b64``）。
+    """
+    if mode == "caption":
+        # ollama_vlm 側の encode は frame.to_opencv() 前提なので、numpy も扱える _to_jpeg_b64 を注入。
+        from dimos.robot.unitree.g1.harvest.ollama_vlm import make_ollama_verify
+        return make_ollama_verify(frame_getter, model=model, host=host, encode=_to_jpeg_b64)
+
+    def verify() -> bool:
+        frame = frame_getter()
+        if frame is None:
+            return False
+        try:
+            resp = ollama_caption(frame, host=host, model=model)
+            return len(resp.strip()) > 0  # ★ 非空応答 → 採れたとみなす（liveness）
+        except Exception:
+            return False  # ollama 停止 → 採れたと偽らない
+    return verify
+
+
+def ollama_reachable(host: str = DEFAULT_HOST, *, timeout: float = 5.0) -> bool:
+    """起動時プリフライト: ``GET {host}/api/tags`` が 200 を返すか（VLM 配線の事前確認）。"""
+    import requests
+
+    try:
+        r = requests.get(host.rstrip("/") + "/api/tags", timeout=timeout)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
+__all__ = [
+    "ollama_caption", "make_cut_ok_liveness", "make_verify_vlm", "ollama_reachable",
+    "CUT_OK_PROMPT",
+]
 
 
 # ----------------------------- 検証 -----------------------------

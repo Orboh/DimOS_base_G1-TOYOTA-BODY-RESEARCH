@@ -4,9 +4,20 @@
 `sim_harvest_skills.SimHarvestSkills`（GT 座標注入版）の **detect だけ実 YOLO に置換**した版:
   - detect_okra : bridge の ego_view を実 YOLO-seg(okra11n-seg.pt) で検出→torso 3D（`sim_yolo_lib`）。
                   GT 注入なし＝知覚も本物。near クリップ修正で sim 検出が動く（exp 記録参照）。
-  - grasp_okra  : IkApproachSkill(pinocchio)→`rt/arm_sdk` reach→`rt/dex1/right/cmd` close→lift。
+  - grasp_okra  : IkApproachSkill(pinocchio)→`rt/arm_sdk` reach→**cut_ok VLM ゲート**→
+                  `rt/dex1/right/cmd` close→lift→（把持中フレームを verify 用に保持）→籠収納。
                   把持対象 prim は bridge 側の最近傍自動把持(SIM_GRASP_NEAREST=1)が選ぶ＝index 不要。
-  - verify=True / record / relative_move,swap_basket=no-op。
+  - verify_harvest : **moondream（Jetson, tailscale）で把持成否を判定**（既定 liveness=非空応答→True）。
+  - record / relative_move,swap_basket=no-op。
+
+VLM 統合（F-02・SS-02・計画書 §5/§8 7-C）:
+  - **cut_ok ゲート**（grasp 内・閉じる直前）: ego_view を moondream に送り、応答が返れば切断/把持へ。
+    ollama 停止/未到達なら **False＝切らない**（安全側, §3.1）。
+  - **verify**（verify ノード）: 把持中に取得したフレームを moondream で判定。
+  - sim 画像は OOD ＝ **判定の正しさは実機**（§10）。sim では「VLM が在ループで応答する」配管を確認。
+  - env: ``SIM_VLM``(既定1=有効, 0で従来 verify=True/ゲート無し), ``SIM_VLM_HOST``
+    (既定 http://100.113.43.64:11434), ``SIM_VLM_MODEL``(moondream),
+    ``SIM_VLM_VERIFY_MODE``(liveness|caption), ``SIM_VLM_GRAB_SECS``(既定1.5)。
 座標系は torso_link 相対 [X前,Y左,Z上]（IkApproachSkill 入力系・YOLO の torso 出力と同系）。
 """
 from __future__ import annotations
@@ -28,6 +39,12 @@ import numpy as np
 from dimos.robot.unitree.g1.harvest.blackboard import Okra
 from dimos.robot.unitree.g1.harvest.ik_approach import IkApproachSkill
 import sim_yolo_lib
+from sim_vlm_liveness import (
+    CUT_OK_PROMPT,
+    make_cut_ok_liveness,
+    make_verify_vlm,
+    ollama_reachable,
+)
 
 # arm14 の並び（_send と一致）: 左7 + 右7、各 [shoulder_pitch, shoulder_roll, shoulder_yaw,
 # elbow, wrist_roll, wrist_pitch, wrist_yaw]。drop_poses.json のキー（_joint 無し）に対応。
@@ -46,13 +63,19 @@ def _pose14(d_right: dict, d_left: dict) -> list[float]:
     return [float(merged.get(k, 0.0)) for k in _CANON14]
 
 
+def _graph_to_ik(p_graph) -> "np.ndarray":
+    """graph 系 [x=右, y=前, z=上] → IkApproachSkill 入力系 [Xf=前, Yl=左, Zu=上]。
+    Xf=graph.y, Yl=-graph.x, Zu=graph.z（detect の逆変換）。"""
+    return np.array([float(p_graph[1]), -float(p_graph[0]), float(p_graph[2])], dtype=float)
+
+
 _WEIGHT_IDX = 29
 _ARM_START = 15
 _Q_CLOSE = 4.4
 
 
 class SimYoloHarvestSkills:
-    """detect=実YOLO / grasp=IK+dex1（bridge最近傍把持）/ verify=True の HarvestSkills。"""
+    """detect=実YOLO / grasp=IK+dex1（cut_ok VLM ゲート付き）/ verify=moondream の HarvestSkills。"""
 
     def __init__(self, *, iface: str = "lo", peers: list[str] | None = None,
                  cam_host: str = "127.0.0.1", cam_port: int = 5555,
@@ -65,8 +88,36 @@ class SimYoloHarvestSkills:
         self._cam_host, self._cam_port, self._conf = cam_host, cam_port, conf
         self._dedup_m = dedup_m
         self._save_dir = save_dir
-        self._picked_pos: list[np.ndarray] = []  # 収穫済みオクラの torso 位置（再検出の重複除外）
+        self._picked_pos: list[np.ndarray] = []   # 収穫済みオクラの torso 位置（再検出の重複除外）
+        self._skipped_pos: list[np.ndarray] = []  # cut_ok ゲートで見送ったオクラ（再試行ループ防止）
         self.records: list[dict] = []
+        # base 横移動（reposition）: world 累積オフセットを file で bridge(SIM_BASE_MOVE=1)へ渡す
+        self._base_xy = [0.0, 0.0]
+        self._base_move_file = os.getenv("SIM_BASE_MOVE_FILE", "/tmp/sim_base_move.txt")
+
+        # ---- VLM（moondream）配線: cut_ok ゲート + 把持成否 verify（F-02 / SS-02 / §8 7-C）----
+        self._vlm = os.getenv("SIM_VLM", "1") not in ("0", "false", "False", "")
+        self._vlm_host = os.getenv("SIM_VLM_HOST", "http://100.113.43.64:11434")
+        self._vlm_model = os.getenv("SIM_VLM_MODEL", "moondream")
+        self._verify_mode = os.getenv("SIM_VLM_VERIFY_MODE", "liveness")
+        self._vlm_grab_secs = float(os.getenv("SIM_VLM_GRAB_SECS", "1.5"))
+        self._verify_frame = None  # grasp が把持中に確保し verify_harvest が判定するフレーム
+        if self._vlm:
+            self._cut_ok = make_cut_ok_liveness(
+                self._grab_bgr, host=self._vlm_host, model=self._vlm_model, prompt=CUT_OK_PROMPT)
+            self._verify_fn = make_verify_vlm(
+                lambda: self._verify_frame, mode=self._verify_mode,
+                host=self._vlm_host, model=self._vlm_model)
+            reachable = ollama_reachable(self._vlm_host)
+            print(f"[yolo-skills] VLM=ON host={self._vlm_host} model={self._vlm_model} "
+                  f"verify={self._verify_mode} reachable={reachable}", flush=True)
+            if not reachable:
+                print("[yolo-skills] ⚠️ ollama 未到達: cut_ok は安全側 False＝切らない（picks=0 になる）。"
+                      "tailscale と Jetson moondream を確認。VLM 無効化は SIM_VLM=0", flush=True)
+        else:
+            self._cut_ok = None
+            self._verify_fn = None
+            print("[yolo-skills] VLM=OFF（SIM_VLM=0）: cut_ok ゲート無し・verify=True 固定（従来挙動）", flush=True)
 
         peers = peers or []
         import unitree_sdk2py.core.channel as ch
@@ -136,15 +187,27 @@ class SimYoloHarvestSkills:
             self._send(self._cur_arm, 1.0, grip_q)
             time.sleep(0.02)
 
+    def _grab_bgr(self):
+        """bridge の ego_view を1フレーム取得し BGR(numpy) を返す（VLM 入力用）。無ければ None。"""
+        fr = sim_yolo_lib.grab_frame(self._cam_host, self._cam_port, secs=self._vlm_grab_secs)
+        return fr[0] if fr else None  # grab_frame は (bgr, depth, K, c2t)
+
     # ---- HarvestSkills ----
     def detect_okra(self) -> list[Okra]:
         dets = sim_yolo_lib.detect_okra_torso(
             self._cam_host, self._cam_port, conf=self._conf, secs=3.0, save_dir=self._save_dir)
         out = []
         for i, d in enumerate(dets):
-            p = np.array(d.torso, dtype=float)
-            # 収穫済み位置の近傍は除外（再検出の重複防止）
-            if any(np.linalg.norm(p - q) < self._dedup_m for q in self._picked_pos):
+            # YOLO の torso 出力は IK 系 (Xf=前, Yl=左, Zu=上)。graph の空間モデルは
+            # x=lateral(+右), y=depth(+前), z=高さ（blackboard §spatial）。両者の軸ねじれが
+            # reposition の誤移動(後退)の原因だったため、**pos_3d は graph 系で持つ**ことに統一する。
+            #   graph.x(右) = -Yl,  graph.y(前) = Xf,  graph.z = Zu
+            xf, yl, zu = float(d.torso[0]), float(d.torso[1]), float(d.torso[2])
+            p = np.array([-yl, xf, zu], dtype=float)  # graph 系
+            # 収穫済み / cut_ok 見送り位置の近傍は除外（再検出の重複・再試行ループ防止）。
+            # YOLO の id は検出毎に変わるためグラフの excluded_ids では弾けず、位置で除外する。
+            if any(np.linalg.norm(p - q) < self._dedup_m
+                   for q in (*self._picked_pos, *self._skipped_pos)):
                 continue
             out.append(Okra(id=f"y{i}_{d.conf:.2f}",
                             pos_3d={"x": float(p[0]), "y": float(p[1]), "z": float(p[2])},
@@ -153,16 +216,30 @@ class SimYoloHarvestSkills:
         return out
 
     def grasp_okra(self, okra: Okra, force: float) -> None:
-        p = np.array([okra.pos_3d["x"], okra.pos_3d["y"], okra.pos_3d["z"]], dtype=float)
-        res = self._ik.solve(p, [0.0] * 29)
+        self._verify_frame = None  # 今回の把持で取り直す（前回フレームの取り違え防止）
+        p = np.array([okra.pos_3d["x"], okra.pos_3d["y"], okra.pos_3d["z"]], dtype=float)  # graph 系
+        p_ik = _graph_to_ik(p)  # IK 入力系 [前,左,上] へ変換
+        res = self._ik.solve(p_ik, [0.0] * 29)
         if res is None:
             print(f"[yolo-skills] {okra.id} IK 解けず（skip）", flush=True)
             return
-        print(f"[yolo-skills] GRASP {okra.id} torso={np.round(p,3)} IK err={res.err:.4f}", flush=True)
-        self._ramp(list(res.arm14), 2.0, grip_q=0.0, weight_to=1.0)   # reach
+        print(f"[yolo-skills] GRASP {okra.id} graph={np.round(p,3)} ik={np.round(p_ik,3)} err={res.err:.4f}", flush=True)
+        self._ramp(list(res.arm14), 2.0, grip_q=0.0, weight_to=1.0)   # reach（grip 開で寄せる）
+        # ③ 切断可否ゲート（SS-02 §3.1）: 閉じる(=切断+把持)直前に moondream へ問う。
+        #    応答が返れば把持へ。ollama 停止/未到達は False＝切らない（安全側, §10）。
+        if self._cut_ok is not None:
+            ok = self._cut_ok()
+            print(f"[yolo-skills] {okra.id} cut_ok VLM(moondream) → {ok}", flush=True)
+            if not ok:
+                print(f"[yolo-skills] {okra.id} → 把持中止（安全側・このオクラは見送り）", flush=True)
+                self._skipped_pos.append(p)  # 再検出時に同じオクラを再試行しない
+                return
         self._ramp(list(res.arm14), 1.0, grip_q=_Q_CLOSE)            # close（bridge最近傍把持）
         self._hold(0.6, grip_q=_Q_CLOSE)
-        r_lift = self._ik.solve(p + np.array([-0.05, 0.0, 0.18]), [0.0] * 29)  # lift
+        # F-02 把持成否 verify 用フレーム: 把持中（閉じ・reach 姿勢＝カメラ中央にオクラ）に確保し、
+        # verify ノードで moondream 判定する。籠投入後だとグリッパが空なので、ここで取る。
+        self._verify_frame = self._grab_bgr()
+        r_lift = self._ik.solve(p_ik + np.array([-0.05, 0.0, 0.18]), [0.0] * 29)  # lift（IK系: 手前へ引き＋上）
         if r_lift is not None:
             self._ramp(list(r_lift.arm14), 1.5, grip_q=_Q_CLOSE)
         self._hold(0.4, grip_q=_Q_CLOSE)
@@ -182,14 +259,36 @@ class SimYoloHarvestSkills:
         self._ramp(self._body14, 1.5, grip_q=0.0)        # ④ body center 復帰（次の検出を妨げない）
 
     def verify_harvest(self) -> bool:
-        return True
+        # VLM 無効時は従来どおり True 固定。有効時は把持中フレームを moondream で判定。
+        if self._verify_fn is None:
+            return True
+        ok = self._verify_fn()  # frame 無し（cut_ok 見送り 等）→ False
+        print(f"[yolo-skills] verify(VLM {self._verify_mode}) → {ok}", flush=True)
+        return ok
 
     def record_harvest(self, record: dict[str, Any]) -> None:
         self.records.append(record)
         print(f"[yolo-skills] record: {record}", flush=True)
 
     def relative_move(self, lateral: float, forward: float = 0.0, yaw: float = 0.0) -> None:
-        print(f"[yolo-skills] relative_move（sim no-op）", flush=True)
+        """reposition/advance_left の base 移動。graph フレーム(lateral=+右, forward=+前)を
+        world(+x=前, +y=左)へ変換し world 累積オフセットを bridge へ渡す（bridge が set_world_pose）。
+        SIM_BASE_MOVE=1 の bridge が反映。base 移動後、次の detect(YOLO) が新 torso 相対で再検出する。
+        """
+        # graph: lateral(+右), forward(+前) → world: dx=前=forward, dy=左=-lateral
+        self._base_xy[0] += float(forward)
+        self._base_xy[1] += -float(lateral)
+        try:
+            with open(self._base_move_file, "w") as f:
+                f.write(f"{self._base_xy[0]:.4f},{self._base_xy[1]:.4f}")
+        except OSError as e:
+            print(f"[yolo-skills] base_move file write fail: {e}", flush=True)
+        # base が動くと収穫済み/見送りの torso 相対位置も変わる＝dedup をリセット（新フレームで再評価）
+        self._picked_pos.clear()
+        self._skipped_pos.clear()
+        print(f"[yolo-skills] relative_move(lat={lateral:+.2f},fwd={forward:+.2f}) "
+              f"→ base world=({self._base_xy[0]:+.2f},{self._base_xy[1]:+.2f})", flush=True)
+        time.sleep(1.0)  # base 移動の整定待ち（bridge が set_world_pose→数ステップ）
 
     def go_to_next_station(self) -> bool:
         return False

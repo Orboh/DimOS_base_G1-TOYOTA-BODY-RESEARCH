@@ -22,7 +22,11 @@ OKRA_LAT_N = 5       # 横(y)方向に並べる本数（横移動収穫の主方
 OKRA_LAT_MIN, OKRA_LAT_MAX = -0.16, 0.14   # 横(y)範囲 [m]（右腕 reach 内＝全数到達, やや右寄せ）
 OKRA_DEPTH_OFF_MIN, OKRA_DEPTH_OFF_MAX = -0.08, -0.02  # 奥行(x, TCX基準)＝0.42..0.48（浅く全て reach 内）
 OKRA_Z_OFF = 0.05    # オクラ中心 z = 天板 + これ（長さ10cm→base=天板）
-OKRA_BREAK_FORCE = 8.0  # [N] 引張でこれ超→破断＝収穫（自重0.12Nでは外れない）
+# [N] 引張でこれ超→破断＝収穫（自重0.12Nでは外れない）。磁石把持(既定)は bridge が
+# アンカーを能動的に削除するため値は無関係だが、摩擣把持(SIM_GRASP_FRICTION=1)では
+# 「指の摩擦で実際に引き抜く」ので低め(例 1.0N)に下げる＝SIM_OKRA_BREAK_N で上書き。
+import os as _os_break
+OKRA_BREAK_FORCE = float(_os_break.getenv("SIM_OKRA_BREAK_N", "8.0"))
 _FLT_MAX = 3.4028234663852886e+38
 
 # 天井照明（収穫シーン統一照明。view_chinou / bridge 共用の単一ソース）
@@ -57,15 +61,21 @@ def build_table_okra(stage, *, table_h: float = 0.72, table_cx: float = TABLE_CX
     okra_paths: list[str] = []
     if n_okra <= 0:
         return okra_paths
-    # 横(y)主・奥行(x)浅。横に OKRA_LAT_N 本、足りない分だけ奥行に薄く段を足す（全て reach 内）。
-    ys = np.linspace(OKRA_LAT_MIN, OKRA_LAT_MAX, OKRA_LAT_N)        # 横(y) 主方向
-    depth_rows = (n_okra + OKRA_LAT_N - 1) // OKRA_LAT_N
+    # 横(y)主・奥行(x)浅。横に lat_n 本、足りない分だけ奥行に薄く段を足す（既定は全て reach 内）。
+    # cmd_vel/reposition 検証用に「届かない広い畝」を作るなら env で横範囲/本数を上書き:
+    #   SIM_OKRA_LAT_MIN/MAX（横範囲[m]）, SIM_OKRA_LAT_N（横の本数）。
+    import os as _os
+    lat_min = float(_os.getenv("SIM_OKRA_LAT_MIN", str(OKRA_LAT_MIN)))
+    lat_max = float(_os.getenv("SIM_OKRA_LAT_MAX", str(OKRA_LAT_MAX)))
+    lat_n = int(_os.getenv("SIM_OKRA_LAT_N", str(OKRA_LAT_N)))
+    ys = np.linspace(lat_min, lat_max, lat_n)        # 横(y) 主方向
+    depth_rows = (n_okra + lat_n - 1) // lat_n
     xs = (np.linspace(TCX + OKRA_DEPTH_OFF_MIN, TCX + OKRA_DEPTH_OFF_MAX, depth_rows)
           if depth_rows > 1 else np.array([TCX + 0.5 * (OKRA_DEPTH_OFF_MIN + OKRA_DEPTH_OFF_MAX)]))
     zc = TH + OKRA_Z_OFF
     k = 0
     for d in range(depth_rows):       # 奥行(x) 浅い段
-        for c in range(OKRA_LAT_N):   # 横(y) に並べる
+        for c in range(lat_n):        # 横(y) に並べる
             if k >= n_okra:
                 break
             xi, yi = float(xs[d]), float(ys[c])
