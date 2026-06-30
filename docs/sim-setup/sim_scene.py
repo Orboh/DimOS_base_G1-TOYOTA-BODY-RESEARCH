@@ -11,11 +11,16 @@ import numpy as np
 REPO = "/home/kota-ueda/Desktop/dimos-hackathon"
 OKRA_USD = f"{REPO}/usd_file/okra.usd"
 
-# A 配置の定数（view_chinou.py と一致させること）
+# 配置の定数。本番＝苗列に対し横移動(y)で収穫し基本手が届く → 机は「横長(y)・奥行き小(x)」、
+# オクラは全て reach 内に置く（取れないオクラは置かない）。x=前方(奥行), y=横(横移動方向)。
 TABLE_CX = 0.50      # 机中心 x（前方）[m]
-OKRA_COLS = 5
-OKRA_X_MIN_OFF, OKRA_X_MAX_OFF = -0.16, 0.12   # 列の x オフセット（TCX 基準）
-OKRA_Y_MIN, OKRA_Y_MAX = -0.15, 0.15           # 行の y
+# 机寸法 [m]: 横長・奥行き小（旧 0.65×0.55 → 奥行0.30×横1.00）
+TABLE_DEPTH = 0.30   # x（奥行）方向の天板長
+TABLE_WIDTH = 1.00   # y（横）方向の天板長
+# オクラ配置: 横(y)に並べ、奥行(x)は浅く全て reach 内。
+OKRA_LAT_N = 5       # 横(y)方向に並べる本数（横移動収穫の主方向）
+OKRA_LAT_MIN, OKRA_LAT_MAX = -0.16, 0.14   # 横(y)範囲 [m]（右腕 reach 内＝全数到達, やや右寄せ）
+OKRA_DEPTH_OFF_MIN, OKRA_DEPTH_OFF_MAX = -0.08, -0.02  # 奥行(x, TCX基準)＝0.42..0.48（浅く全て reach 内）
 OKRA_Z_OFF = 0.05    # オクラ中心 z = 天板 + これ（長さ10cm→base=天板）
 OKRA_BREAK_FORCE = 8.0  # [N] 引張でこれ超→破断＝収穫（自重0.12Nでは外れない）
 _FLT_MAX = 3.4028234663852886e+38
@@ -40,26 +45,30 @@ def build_table_okra(stage, *, table_h: float = 0.72, table_cx: float = TABLE_CX
     table_mat = PhysicsMaterial("/World/PM/table", static_friction=0.8,
                                 dynamic_friction=0.7, restitution=0.0)
     FixedCuboid(prim_path="/World/Table_top", name="table_top",
-                position=np.array([TCX, 0.0, TH - 0.02]), scale=np.array([0.65, 0.55, 0.04]),
+                position=np.array([TCX, 0.0, TH - 0.02]),
+                scale=np.array([TABLE_DEPTH, TABLE_WIDTH, 0.04]),  # 奥行(x)小・横(y)長
                 color=np.array([0.55, 0.40, 0.25]), physics_material=table_mat)
     _bh = TH - 0.04
     FixedCuboid(prim_path="/World/Table_base", name="table_base",
-                position=np.array([TCX, 0.0, _bh / 2.0]), scale=np.array([0.38, 0.32, _bh]),
+                position=np.array([TCX, 0.0, _bh / 2.0]),
+                scale=np.array([TABLE_DEPTH * 0.6, TABLE_WIDTH * 0.4, _bh]),  # 台座は一回り小さく
                 color=np.array([0.45, 0.32, 0.20]), physics_material=table_mat)
 
     okra_paths: list[str] = []
     if n_okra <= 0:
         return okra_paths
-    xs = np.linspace(TCX + OKRA_X_MIN_OFF, TCX + OKRA_X_MAX_OFF, OKRA_COLS)
-    rows = (n_okra + OKRA_COLS - 1) // OKRA_COLS
-    ys = np.linspace(OKRA_Y_MIN, OKRA_Y_MAX, rows) if rows > 1 else np.array([0.0])
+    # 横(y)主・奥行(x)浅。横に OKRA_LAT_N 本、足りない分だけ奥行に薄く段を足す（全て reach 内）。
+    ys = np.linspace(OKRA_LAT_MIN, OKRA_LAT_MAX, OKRA_LAT_N)        # 横(y) 主方向
+    depth_rows = (n_okra + OKRA_LAT_N - 1) // OKRA_LAT_N
+    xs = (np.linspace(TCX + OKRA_DEPTH_OFF_MIN, TCX + OKRA_DEPTH_OFF_MAX, depth_rows)
+          if depth_rows > 1 else np.array([TCX + 0.5 * (OKRA_DEPTH_OFF_MIN + OKRA_DEPTH_OFF_MAX)]))
     zc = TH + OKRA_Z_OFF
     k = 0
-    for r in range(rows):
-        for c in range(OKRA_COLS):
+    for d in range(depth_rows):       # 奥行(x) 浅い段
+        for c in range(OKRA_LAT_N):   # 横(y) に並べる
             if k >= n_okra:
                 break
-            xi, yi = float(xs[c]), float(ys[r])
+            xi, yi = float(xs[d]), float(ys[c])
             pth = f"/Okra_{k}"
             add_reference_to_stage(usd_path=okra_usd, prim_path=pth)
             # 直立: 先端(+Y)を上(rotX+90°)→鉛直まわりに少し振る（順序重要）
