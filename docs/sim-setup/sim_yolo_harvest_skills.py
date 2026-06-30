@@ -21,11 +21,30 @@ sys.path.insert(0, REPO)
 sys.path.insert(0, "/home/kota-ueda/Desktop/unitree_sdk2_python")
 sys.path.insert(0, os.path.join(REPO, "docs/sim-setup"))
 
+import json
+
 import numpy as np
 
 from dimos.robot.unitree.g1.harvest.blackboard import Okra
 from dimos.robot.unitree.g1.harvest.ik_approach import IkApproachSkill
 import sim_yolo_lib
+
+# arm14 の並び（_send と一致）: 左7 + 右7、各 [shoulder_pitch, shoulder_roll, shoulder_yaw,
+# elbow, wrist_roll, wrist_pitch, wrist_yaw]。drop_poses.json のキー（_joint 無し）に対応。
+_CANON14 = [
+    "left_shoulder_pitch", "left_shoulder_roll", "left_shoulder_yaw", "left_elbow",
+    "left_wrist_roll", "left_wrist_pitch", "left_wrist_yaw",
+    "right_shoulder_pitch", "right_shoulder_roll", "right_shoulder_yaw", "right_elbow",
+    "right_wrist_roll", "right_wrist_pitch", "right_wrist_yaw",
+]
+_DROP_POSES = os.path.join(REPO, "docs/sim-setup/drop_poses.json")
+
+
+def _pose14(d_right: dict, d_left: dict) -> list[float]:
+    """右腕 dict + 左腕 dict（drop_poses.json の姿勢）→ arm14（左7+右7）。未指定キーは 0。"""
+    merged = {**d_left, **d_right}
+    return [float(merged.get(k, 0.0)) for k in _CANON14]
+
 
 _WEIGHT_IDX = 29
 _ARM_START = 15
@@ -38,8 +57,11 @@ class SimYoloHarvestSkills:
     def __init__(self, *, iface: str = "lo", peers: list[str] | None = None,
                  cam_host: str = "127.0.0.1", cam_port: int = 5555,
                  conf: float = 0.25, dedup_m: float = 0.06,
-                 save_dir: str | None = None) -> None:
+                 save_dir: str | None = None,
+                 basket_torso: tuple[float, float, float] = (0.23, 0.011, -0.072)) -> None:
         self._ik = IkApproachSkill()
+        _bt = os.getenv("SIM_BASKET_TORSO")
+        self._basket_torso = tuple(float(x) for x in _bt.split(",")) if _bt else basket_torso
         self._cam_host, self._cam_port, self._conf = cam_host, cam_port, conf
         self._dedup_m = dedup_m
         self._save_dir = save_dir
@@ -82,8 +104,13 @@ class SimYoloHarvestSkills:
         for _ in range(80):  # DDS discovery warm-up
             self._send([0.0] * 14, 0.0, 0.0)
             time.sleep(0.02)
+        # F-07 籠収納の姿勢（参照 dex1_1_service drop_to_basket_isaac と同じ「実測固定角の再生」）。
+        # IK で籠を解くと手と籠が衝突したため、body_center 経由で記録済み固定角へ補間する方式に変更。
+        _dp = json.load(open(_DROP_POSES))
+        self._body14 = _pose14(_dp["right_arm_body_center"], _dp["left_arm_body_center"])
+        self._drop14 = _pose14(_dp["right_arm_drop_pose"], _dp["left_basket_pose"])
         print(f"[yolo-skills] DDS up iface={iface} peers={peers or 'mcast'} (warmup); "
-              f"cam={cam_host}:{cam_port} conf>={conf}", flush=True)
+              f"cam={cam_host}:{cam_port} conf>={conf}; F-07=記録固定角(body_center→drop)", flush=True)
 
     def _send(self, arm14, weight, grip_q):
         self._lc.motor_cmd[_WEIGHT_IDX].q = weight
@@ -139,7 +166,20 @@ class SimYoloHarvestSkills:
         if r_lift is not None:
             self._ramp(list(r_lift.arm14), 1.5, grip_q=_Q_CLOSE)
         self._hold(0.4, grip_q=_Q_CLOSE)
+        # F-07 籠収納（参照 drop_to_basket_isaac と同方式＝記録固定角の再生・現在角から補間）:
+        #   把持後(開始姿勢はオクラ毎に違う) → ① body center へ集約（手と籠の衝突回避）
+        #   → ② 右腕 drop_pose / 左腕 basket_pose（固定角）へ → ③ 開いて離す（重力で籠へ落下）→ ④ center 復帰
+        self._place_to_basket()
+        print(f"[yolo-skills] F-07 籠収納 OK（body_center→drop 固定角再生）", flush=True)
         self._picked_pos.append(p)
+
+    def _place_to_basket(self) -> None:
+        """記録済み固定角で籠投入（IK 不使用。開始姿勢が毎回違っても body center 経由で安全）。"""
+        self._ramp(self._body14, 1.8, grip_q=_Q_CLOSE)   # ① 両腕→body center（持ち上げ集約）
+        self._ramp(self._drop14, 2.0, grip_q=_Q_CLOSE)   # ② 右腕drop/左腕basket（固定角）
+        self._hold(0.4, grip_q=_Q_CLOSE)
+        self._hold(1.2, grip_q=0.0)                       # ③ 開いて離す→重力で籠へ落下
+        self._ramp(self._body14, 1.5, grip_q=0.0)        # ④ body center 復帰（次の検出を妨げない）
 
     def verify_harvest(self) -> bool:
         return True

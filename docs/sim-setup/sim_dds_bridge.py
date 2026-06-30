@@ -479,6 +479,10 @@ def main() -> None:
     # M3/M4 机上ピック状態（複数把持対応: 把持対象 index はファイル or env から）
     grip_q = 0.0
     grasped_set: set[int] = set()
+    # 把持方式: SIM_GRASP_KINEMATIC=1(既定) はオクラを kinematic 化し毎ステップ手に追従させる
+    # （手に反力ゼロ＝手が引っ張られない）。=0 で従来の FixedJoint 接着（双方向＝手が引かれる）。
+    grasp_kinematic = os.getenv("SIM_GRASP_KINEMATIC", "1") == "1"
+    grasped_kin: dict[int, "Gf.Matrix4d"] = {}  # {okra idx: rel = okraW * handW^-1}（追従用）
     basket_count = 0   # F-07: 籠に投入済みの本数（積み重ねオフセット用）
     placed_at: dict[int, int] = {}   # F-07 物理落下: {okra idx: 投入した step}（着籠判定用）
     grasp_target = int(os.getenv("SIM_GRASP_OKRA", "1"))   # 既定 /Okra_1（単発時）
@@ -574,13 +578,27 @@ def main() -> None:
             wj = f"/World/OkraJoints/joint_{gt_idx}"
             if stage.GetPrimAtPath(wj):
                 stage.RemovePrim(wj)
-            gj = UsdPhysics.FixedJoint.Define(stage, f"/World/GraspJoint_{gt_idx}")
-            gj.CreateBody0Rel().SetTargets([hand_path])
-            gj.CreateBody1Rel().SetTargets([okp])
-            gj.CreateLocalPos0Attr(Gf.Vec3f(_go[0], _go[1], _go[2]))
-            gj.CreateLocalPos1Attr(Gf.Vec3f(0.0, 0.0, 0.0))
+            if grasp_kinematic:
+                # kinematic 追従: オクラを kinematic 化（外力で動かない＝手に反力ゼロ）し、相対変換
+                # rel = okraW * handW^-1 を記録。毎ステップ okraW = rel * handW で手に追従させる。
+                _xc = UsdGeom.XformCache(Usd.TimeCode.Default())
+                _hw = _xc.GetLocalToWorldTransform(stage.GetPrimAtPath(hand_path))
+                _ow = _xc.GetLocalToWorldTransform(stage.GetPrimAtPath(okp))
+                grasped_kin[gt_idx] = _ow * _hw.GetInverse()
+                try:
+                    UsdPhysics.RigidBodyAPI.Apply(stage.GetPrimAtPath(okp)).CreateKinematicEnabledAttr(True)
+                except Exception as _e:  # noqa: BLE001
+                    print(f"[bridge] okra kinematic 設定 warn: {_e}", flush=True)
+            else:
+                # 従来: FixedJoint 接着（双方向＝オクラの質量/慣性が手を引っ張る）
+                gj = UsdPhysics.FixedJoint.Define(stage, f"/World/GraspJoint_{gt_idx}")
+                gj.CreateBody0Rel().SetTargets([hand_path])
+                gj.CreateBody1Rel().SetTargets([okp])
+                gj.CreateLocalPos0Attr(Gf.Vec3f(_go[0], _go[1], _go[2]))
+                gj.CreateLocalPos1Attr(Gf.Vec3f(0.0, 0.0, 0.0))
             grasped_set.add(gt_idx)
-            print(f"[bridge] GRASP {okp} → {hand_path}（idx={gt_idx}, grip_q={grip_q:.2f}, 計{len(grasped_set)}本）", flush=True)
+            print(f"[bridge] GRASP {okp} → {hand_path}（idx={gt_idx}, grip_q={grip_q:.2f}, "
+                  f"{'kinematic追従' if grasp_kinematic else 'FixedJoint'}, 計{len(grasped_set)}本）", flush=True)
         # 開き かつ 把持中 → リリース（手リンクの GraspJoint を外す）＝F-07。
         #   重力ON: 手を離すだけ→重力ONのオクラが籠コライダーへ物理落下（本番の腕モーションで運んだ上で着籠）。
         #   重力OFF: 従来どおり world アンカーで籠位置へ収める（弱PD回避の運動学デモ）。
@@ -590,6 +608,14 @@ def main() -> None:
                 gjp = f"/World/GraspJoint_{_idx}"
                 if stage.GetPrimAtPath(gjp):
                     stage.RemovePrim(gjp)
+                if _idx in grasped_kin:
+                    # kinematic を解除し dynamic に戻す（重力ON なら手を離した位置から物理落下）
+                    grasped_kin.pop(_idx, None)
+                    try:
+                        UsdPhysics.RigidBodyAPI.Apply(
+                            stage.GetPrimAtPath(okra_paths[_idx])).CreateKinematicEnabledAttr(False)
+                    except Exception:  # noqa: BLE001
+                        pass
                 if _grav_on:
                     placed_at[_idx] = step
                     print(f"[bridge] PLACE okra idx={_idx} → 手を離す（重力で物理落下）｜"
@@ -611,6 +637,23 @@ def main() -> None:
         # 2) sim 1step
         world.step(render=render_on)
         step += 1
+
+        # 2b) kinematic 把持の追従: 把持中オクラの world 姿勢 = rel * hand_world（手に反力ゼロで追従）
+        if grasped_kin:
+            _xc = UsdGeom.XformCache(Usd.TimeCode.Default())
+            _hw = _xc.GetLocalToWorldTransform(stage.GetPrimAtPath(hand_path))
+            for _idx, _rel in grasped_kin.items():
+                _m = _rel * _hw  # 目標 world 変換
+                _t = _m.ExtractTranslation()
+                _q = _m.ExtractRotationQuat()
+                _xf = UsdGeom.Xformable(stage.GetPrimAtPath(okra_paths[_idx]))
+                _ops = {op.GetOpName(): op for op in _xf.GetOrderedXformOps()}
+                _to = _ops.get("xformOp:translate")
+                _oo = _ops.get("xformOp:orient")
+                if _to is not None:
+                    _to.Set(Gf.Vec3d(_t[0], _t[1], _t[2]))
+                if _oo is not None:
+                    _oo.Set(Gf.Quatd(_q.GetReal(), _q.GetImaginary()))
 
         # F-07 物理落下の着籠判定（投入から ~1.5s 後に1回, 重力ON時のみ）。籠は左腕で動くので
         # 籠の現在ワールド座標を実測し、それを中心に±半径/高さで内外を判定する。
