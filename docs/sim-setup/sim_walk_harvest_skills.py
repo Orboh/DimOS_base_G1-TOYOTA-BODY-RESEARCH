@@ -74,12 +74,22 @@ class WalkHarvestSkills(SimHarvestSkills):
         p = self._base_pose()
         return (p[0], p[1])
 
-    def _pulse(self, vx: float, vy: float, secs: float) -> None:
+    def _pulse(self, vx: float, vy: float, secs: float, dist: float | None = None) -> None:
+        """base 速度パルス。dist[m] 指定時は**変位ベース**: その距離動くまで指令を出し続ける
+        （GUI は描画で実時間が遅く、時間ベースだとシム内歩行が1/3以下になり接近が破綻する）。"""
+        bx0, by0 = self._base_xy()
         t0 = time.time()
-        while time.time() - t0 < secs:
+        timeout = max(secs, (dist / 0.25 + 2.0) if dist else secs) + 8.0  # 実時間の安全上限
+        while time.time() - t0 < timeout:
             with open(_BASE_MOVE_FILE, "w") as f:
                 f.write(f"{vx},{vy}")
             self._hold(0.1, grip_q=self._grip_q)  # 歩行中も腕目標を保持し続ける
+            if dist is not None:
+                bx, by = self._base_xy()
+                if ((bx - bx0) ** 2 + (by - by0) ** 2) ** 0.5 >= dist:
+                    break
+            elif time.time() - t0 >= secs:
+                break
         try:
             os.remove(_BASE_MOVE_FILE)
         except OSError:
@@ -113,9 +123,9 @@ class WalkHarvestSkills(SimHarvestSkills):
     def relative_move(self, lateral: float, forward: float = 0.0, yaw: float = 0.0) -> None:
         """graph からの相対移動（lateral>0=左）。デッドバンド回避のため v=0.3 の時間パルスで実現。"""
         if abs(lateral) > 0.02:
-            self._pulse(0.0, 0.3 if lateral > 0 else -0.3, min(2.0, abs(lateral) / 0.3))
+            self._pulse(0.0, 0.3 if lateral > 0 else -0.3, abs(lateral) / 0.3, dist=abs(lateral))
         if abs(forward) > 0.02:
-            self._pulse(0.3 if forward > 0 else -0.3, 0.0, min(2.0, abs(forward) / 0.3))
+            self._pulse(0.3 if forward > 0 else -0.3, 0.0, abs(forward) / 0.3, dist=abs(forward))
         print(f"[walk-skills] relative_move(lat={lateral:+.2f},fwd={forward:+.2f}) → base={self._base_xy()}", flush=True)
 
     def _align_to(self, oid: str, max_moves: int = 8) -> np.ndarray:
@@ -128,8 +138,8 @@ class WalkHarvestSkills(SimHarvestSkills):
             if dx == 0.0 and dy == 0.0:
                 print(f"[walk-skills]   位置合わせ完了 okra_now={tuple(round(float(v),3) for v in p)}", flush=True)
                 return p
-            # 横歩きはデッドバンドが広く短パルスでは始動しない → 横は 0.55s / 前後は 0.3s
-            self._pulse(dx, dy, 0.55 if dy != 0.0 else 0.3)
+            # 変位ベース1歩（GUI/headless の実時間差に不変）。横はデッドバンド対策で長め上限
+            self._pulse(dx, dy, 0.55 if dy != 0.0 else 0.3, dist=0.06)
         p = self._okra_now(oid)
         print(f"[walk-skills]   位置合わせ打ち切り okra_now={tuple(round(float(v),3) for v in p)}", flush=True)
         return p
@@ -174,7 +184,7 @@ class WalkHarvestSkills(SimHarvestSkills):
             tgt[2] += 1.0 * float(np.clip(dd[2], -0.06, 0.06))  # z は倒す前に一気に合わせる
             if tgt[0] > X_CMD_MAX:
                 tgt[0] = X_CMD_MAX
-                self._pulse(0.3, 0.0, 0.25)  # 半歩前進で x 不足を詰める
+                self._pulse(0.3, 0.0, 0.25, dist=0.04)  # 半歩前進で x 不足を詰める（変位ベース）
             tgt[1] = float(np.clip(tgt[1], -0.30, 0.05))
             tgt[2] = float(np.clip(tgt[2], 0.00, 0.16))  # 下限0: 莢先端でなく中央を掴む（0.05だと先端でノックダウン）
             r = self._ik.solve(tgt, [0.0] * 29)
