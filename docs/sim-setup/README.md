@@ -22,7 +22,7 @@ dimos の収穫スキル／オーケストレータ（LangGraph）を、**実機
   - tailscale: `SIM_DDS_IFACE=tailscale0 SIM_DDS_PEERS=<相手の 100.x>`
 - IK は dimos 側（`.venv`：pinocchio+unitree_sdk2py 完備）で実行＝実機と同じ分担。
 
-到達状況: **M0 配管 → M1 音声 → S3/S4 ロジック → 7-C VLM → M2 検出→IK → M3 机上ピック → M4 LangGraph 自律収穫 → F-07 籠収納（収穫サイクル完結）**。
+到達状況: **M0 配管 → M1 音声 → S3/S4 ロジック → 7-C VLM → M2 検出→IK → M3 机上ピック → M4 LangGraph 自律収穫 → F-07 籠収納（収穫サイクル完結）→ 本物ポリシー歩行（2026-07-11、§2.5）**。
 
 ---
 
@@ -66,6 +66,59 @@ SIM_DDS_IFACE=lo SIM_DDS_PEERS=127.0.0.1 \
 | **M4/F-07** | LangGraph 自律収穫＋籠収納 | §1 のとおり（`sim_harvest_run.py`）|
 
 > 物理（落下/把持の動力学）系の単体検証: `verify_physics_drop.py` / `verify_basket_catch.py`（物理トラック）。
+
+---
+
+## 2.5 歩行モード（`SIM_WALK_POLICY=1`）— base 移動が本物の脚歩行に
+
+2026-07-11 達成。従来のキネマ移動（`set_world_pose`）を `unitree_rl_lab` g1_29dof velocity policy
+（50Hz, obs[480]→act[29]）による物理歩行に置換。**従来モードは無変更（オプトイン）**。
+
+- 実装の正本 = `sim_walk_lib.py`（floating base 化の罠と正解手順・SDK順 gains・per-term obs・`PolicyWalker`。詳細はファイル docstring）。
+- 指令プロトコルは従来と同一：`SIM_BASE_MOVE_FILE`（既定 `/tmp/sim_base_move.txt`）に `"vx,vy[,wz]"`（body系 m/s, rad/s）を10Hzでストリーム。watchdog 0.3s 途切れで cmd=0＝立位保持（把持フェーズ）。**収穫 skills 側は無変更で載る**。
+- 腕：`arm_sdk` が来ている間は policy 出力を上書き（レート制限ブレンド `SIM_WALK_ARM_RATE` 既定3rad/s）。obs 上は腕14関節を常時マスク。
+
+### 単体検証（歩くだけ）
+```bash
+PYTHONNOUSERSITE=1 OMNI_KIT_ACCEPT_EULA=YES \
+WALK_ROOM=1 WALK_VX=0.3 WALK_SECS=20 \
+  ~/miniconda3/envs/isaac-sim/bin/python docs/sim-setup/sim_walk_policy.py [--gui]
+```
+実績: 立位20s転倒0 / 前進6.9m/20s（部屋なし）/ chinou 部屋内3.9m / GUI 5.5m。
+
+### bridge 歩行モード（収穫シーンで）
+```bash
+PYTHONNOUSERSITE=1 OMNI_KIT_ACCEPT_EULA=YES \
+PYTHONPATH=/home/kota-ueda/Desktop/unitree_sdk2_python \
+SIM_DDS_IFACE=lo SIM_DDS_PEERS=127.0.0.1 \
+SIM_WALK_POLICY=1 SIM_LOAD_ROOM=1 SIM_TABLE=1 SIM_OKRA=10 SIM_GRASP_FRICTION=1 \
+SIM_OKRA_BREAK_N=1.0 SIM_WALK_SPAWN_X=-0.30 SIM_WALK_LOG_TICKS=25 SIM_LOG_EVERY=1 \
+  ~/miniconda3/envs/isaac-sim/bin/python docs/sim-setup/sim_dds_bridge.py
+```
+
+### 歩行モードの env（bridge 追加分）
+
+| env | 既定 | 意味 |
+|---|---|---|
+| `SIM_WALK_POLICY` | `0` | `1` で歩行モード（重力ON固定・selfColl OFF固定・physics 1/200×4substep=50Hz） |
+| `SIM_WALK_SPAWN_X` / `SIM_WALK_SPAWN_Y` | `0` | スポーン位置 [m]（歩行接近の検証は `-0.30` から） |
+| `SIM_WALK_ARM_RATE` | `3.0` | 腕上書きの最大変化率 [rad/s] |
+| `SIM_WALK_BASE_Z` | `0.80` | 直立配置の pelvis 高さ [m] |
+| `SIM_WALK_LOG_TICKS` | `100` | base 位置ログ周期 [tick]（接近の閉ループ監視は `25`=0.5s） |
+
+### 歩行接近×把持の統合制御器（WIP）
+```bash
+BRIDGE_LOG=<bridgeのログパス> SIM_DDS_IFACE=lo SIM_DDS_PEERS=127.0.0.1 \
+AP_STOP_MIN=0.11 AP_STOP_MAX=0.15 \
+  .venv/bin/python docs/sim-setup/walk_approach_pick.py
+```
+接近（停止窓・ジャム回復）→ via リーチ → Δサーボ → close → 運搬 → 投入。転倒0。
+既知の未解決：リーチ後ずさりクリープ（把持は未成立、詳細はスクリプト docstring とコミット `cc82ce1f` 参照）。
+
+### ハマりどころ（歩行モード）
+- **GUI と headless の tick 不一致に注意**：GUI では `step(render=True)` が4サブステップ進む＝policy 1tick と一致（headless は×4回）。この整合は bridge/lib が処理済み。
+- **部屋ありで吹っ飛ぶ場合**：配置後速度零化（`sim_walk_lib` が処理済み）の退行を疑う。
+- **腕を大きく前へ伸ばすと policy が後退する**（重心移動を外乱と解釈）。指令 x≲0.52 に抑える。
 
 ---
 
