@@ -106,19 +106,22 @@ SIM_OKRA_BREAK_N=1.0 SIM_WALK_SPAWN_X=-0.30 SIM_WALK_LOG_TICKS=25 SIM_LOG_EVERY=
 | `SIM_WALK_BASE_Z` | `0.80` | 直立配置の pelvis 高さ [m] |
 | `SIM_WALK_LOG_TICKS` | `100` | base 位置ログ周期 [tick]（接近の閉ループ監視は `25`=0.5s） |
 
-### 歩行接近×把持の統合制御器（WIP）
+### 歩行接近×把持の統合制御器 — ✅ 把持成立（2026-07-11, `a68291e9`）
 ```bash
 BRIDGE_LOG=<bridgeのログパス> SIM_DDS_IFACE=lo SIM_DDS_PEERS=127.0.0.1 \
 AP_STOP_MIN=0.11 AP_STOP_MAX=0.15 \
   .venv/bin/python docs/sim-setup/walk_approach_pick.py
 ```
-接近（停止窓・ジャム回復）→ via リーチ → Δサーボ → close → 運搬 → 投入。転倒0。
-既知の未解決：リーチ後ずさりクリープ（把持は未成立、詳細はスクリプト docstring とコミット `cc82ce1f` 参照）。
+**事前挙手（Phase 0, `AP_PRERAISE=1` 既定ON）**→ 歩行接近（停止窓・ジャム回復）→ リーチ →
+Δサーボ＋半歩前進 → close → lift 検証（okra_z>0.82）→ 運搬 → 投入。
+実績: okra_z 0.770→1.083 の把持リフト、全工程 転倒0・終了時も直立。
 
 ### ハマりどころ（歩行モード）
 - **GUI と headless の tick 不一致に注意**：GUI では `step(render=True)` が4サブステップ進む＝policy 1tick と一致（headless は×4回）。この整合は bridge/lib が処理済み。
 - **部屋ありで吹っ飛ぶ場合**：配置後速度零化（`sim_walk_lib` が処理済み）の退行を疑う。
-- **腕を大きく前へ伸ばすと policy が後退する**（重心移動を外乱と解釈）。指令 x≲0.52 に抑える。
+- **リーチ後ずさりクリープ**：静止立位から腕を大きく前へ伸ばす（指令 x≳0.44）と、重心前移動を
+  policy が外乱と解釈してゆっくり後退し続ける。対策＝**接近の前に腕を机より高い前方位置へ
+  上げておく（事前挙手）**。歩行中の重心移動は歩容として吸収され、到着後は「小さく降ろすだけ」になる。
 
 ---
 
