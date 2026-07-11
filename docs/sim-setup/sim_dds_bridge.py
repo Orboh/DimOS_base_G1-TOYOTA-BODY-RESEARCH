@@ -17,6 +17,11 @@ CYCLONEDDS_URI 無視・config 固定のため）。env で interface/peers/mult
   SIM_G1_USD     : ロボットUSD（既定 g1bag.usd=収穫構成。旧 base-fix に差替可）
   SIM_GRAVITY    : "1" で重力ON（動力学検証）。既定OFF=弱PDのg1bag腕を指令角で保持（運動学確認）
   SIM_HEADLESS   : "0" で GUI（既定 1 = headless）
+  SIM_WALK_POLICY: "1" で本物歩行モード（既定 0 = 従来）。base 移動を set_world_pose の
+                   キネマ移動ではなく unitree_rl_lab velocity policy の脚歩行で行う。
+                   floating base 化＋重力ON＋50Hz policy ループ。腕は arm_sdk が来ている間
+                   だけ policy 出力を上書き（rad repo の arm_override と同型）。指令は
+                   SIM_BASE_MOVE_FILE の "vx,vy[,wz]"（watchdog 途切れで cmd=0＝立位保持）。
 
 実行:
   PYTHONNOUSERSITE=1 OMNI_KIT_ACCEPT_EULA=YES \
@@ -78,6 +83,9 @@ def build_cyclonedds_config() -> str:
 def main() -> None:
     headless = os.getenv("SIM_HEADLESS", "1") != "0"
     load_room = os.getenv("SIM_LOAD_ROOM", "0") == "1"
+    # 本物歩行モード: velocity policy で base 移動（キネマ set_world_pose の置換）。
+    # 実装の正本は sim_walk_lib.py（floating base 化・SDK順 gains・per-term obs の6大要点）。
+    walk_mode = os.getenv("SIM_WALK_POLICY", "0") == "1"
     domain_id = int(os.getenv("SIM_DDS_DOMAIN", "0"))
     cfg = build_cyclonedds_config()
     print(f"[bridge] cyclonedds config:\n{cfg}", flush=True)
@@ -101,13 +109,26 @@ def main() -> None:
     # --- シーン構築 ---
     if load_room:
         open_stage(ROOM_USD)
-    world = World(stage_units_in_meters=1.0)  # fix_base G1 は地面不要（cloud asset 取得を避ける）
+    if walk_mode:
+        # 歩行モード: physics 1/200s × 4substep = policy 50Hz（1/60 のままだと ≈15Hz で転倒）
+        import sim_walk_lib as wl  # 同ディレクトリ（実装の正本）
+        world = World(stage_units_in_meters=1.0, physics_dt=wl.PHYS_DT, rendering_dt=4 * wl.PHYS_DT)
+    else:
+        world = World(stage_units_in_meters=1.0)  # fix_base G1 は地面不要（cloud asset 取得を避ける）
     stage = omni.usd.get_context().get_stage()
 
     # 重力: 既定OFF。g1bag は関節 PD が弱く重力下で腕が垂れて指令角を保持できないため、
     # 運動学の追従確認（S0/IK）では重力OFFで腕を指令角に固定する。SIM_GRAVITY=1 で
     # 通常重力（把持/籠/切断の動力学を物理検証する時）。view_chinou.py と同じ方針。
-    if os.getenv("SIM_GRAVITY", "0") != "1":
+    # 歩行モードは重力ON必須（policy が全身バランスを取る）＝OFF指定は無視する。
+    if walk_mode:
+        print("[bridge] walk_mode: 重力ON固定（policy が全身バランス。SIM_GRAVITY 指定は無視）", flush=True)
+        try:  # 部屋なし検証でも立てる足場を保証（chinou 床コライダーは z=0）
+            world.scene.add_default_ground_plane(z_position=0.0)
+            print("[bridge] walk_mode: ground plane @z=0 追加", flush=True)
+        except Exception as _e:  # noqa: BLE001
+            print(f"[bridge] ground plane warn: {_e}", flush=True)
+    elif os.getenv("SIM_GRAVITY", "0") != "1":
         try:
             world.get_physics_context().set_gravity(0.0)  # [m/s^2]
             print("[bridge] gravity OFF（弱PDのg1bag腕を指令角で保持。SIM_GRAVITY=1で重力ON）", flush=True)
@@ -118,13 +139,21 @@ def main() -> None:
     g1 = stage.GetPrimAtPath("/G1")
     bbc = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_, UsdGeom.Tokens.render])
     lift = -float(bbc.ComputeWorldBound(g1).ComputeAlignedRange().GetMin()[2])
-    UsdGeom.XformCommonAPI(g1).SetTranslate(Gf.Vec3d(0.0, 0.0, lift))
-
-    art_root = None
-    for p in Usd.PrimRange(g1):
-        if p.HasAPI(UsdPhysics.ArticulationRootAPI):
-            art_root = p.GetPath().pathString
-            break
+    if walk_mode:
+        # 歩行モード: base-fix → floating base 化（root=pelvis, solver 32/4, armature, selfColl OFF）。
+        # /G1 の xform は触らない（xformOpOrder 競合で NaN の罠）→配置は reset 後 place_upright で。
+        art_root = wl.make_floating_base(stage, g1)
+        if art_root is None:
+            print("[bridge] ERROR: pelvis が見つからない（walk_mode 不成立）", flush=True)
+            sim_app.close()
+            return
+    else:
+        UsdGeom.XformCommonAPI(g1).SetTranslate(Gf.Vec3d(0.0, 0.0, lift))
+        art_root = None
+        for p in Usd.PrimRange(g1):
+            if p.HasAPI(UsdPhysics.ArticulationRootAPI):
+                art_root = p.GetPath().pathString
+                break
     robot = ArtCls(prim_path=art_root or "/G1", name="g1")
     world.scene.add(robot)
 
@@ -132,7 +161,10 @@ def main() -> None:
     # 「実機で暴れる前に sim で自己干渉を捕まえる」ため既定ON。隣接(親子)リンクは PhysX が自動除外する
     # ので通常は非隣接リンクのめり込みだけ検出する。SIM_SELF_COLLISION=0 で従来(OFF)に戻せる。
     # ※ 静止姿勢で非隣接リンクが既にめり込んでいると起動時に震える/弾かれることがある（その場合は要 collision filter）。
-    if os.getenv("SIM_SELF_COLLISION", "1") == "1" and art_root is not None:
+    if walk_mode:
+        # 歩行 policy の実証条件は selfColl=False（sim_walk_lib が設定済み）。ON だと未検証。
+        print("[bridge] walk_mode: self-collision OFF 固定（policy 実証条件）", flush=True)
+    elif os.getenv("SIM_SELF_COLLISION", "1") == "1" and art_root is not None:
         try:
             from pxr import PhysxSchema
 
@@ -164,7 +196,8 @@ def main() -> None:
     # 重力ON時は per-body 制御: 「ロボット各リンク=重力OFF（弱PDでも指令角を保持して腕が垂れない）／
     # オクラ=重力ON（籠コライダーへ物理落下）」。world 重力は既定(-9.81)のまま、ロボットだけ無効化する。
     # これで F-07 を「本番の腕モーションで運ぶ＋物理で着籠」させつつ弱PD腕の垂れを回避できる。
-    if os.getenv("SIM_GRAVITY", "0") == "1":
+    if os.getenv("SIM_GRAVITY", "0") == "1" and not walk_mode:
+        # ※歩行モードでは無効: policy が全身重力下でバランスするため robot の disableGravity は禁止。
         try:
             from pxr import PhysxSchema
 
@@ -198,12 +231,32 @@ def main() -> None:
         print(f"[bridge] 机+オクラ {len(okra_paths)}本 配置（A配置, 天板{table_h}m）hand={hand_path} basket={basket_path}", flush=True)
 
     world.reset()
-    try:
-        robot.set_world_pose(position=np.array([0.0, 0.0, lift]))
-    except Exception:  # noqa: BLE001
-        pass
-    for _ in range(20):
-        world.step(render=not headless)
+    walker = None
+    if walk_mode:
+        # ★reset 後は一度も step せず先に直立配置（authored 姿勢は足が床を 0.757m 踏み抜いて
+        #   おり、先に step すると射出される罠）。gains は SDK モーター順（policy slot 順ではない）。
+        wdp = wl.load_deploy(f"{REPO}/usd_file/walk_policy/deploy.yaml")
+        w_imap = wl.motor_to_isaac_map(list(robot.dof_names))
+        wl.apply_sdk_gains(robot, wdp, w_imap)
+        walker = wl.PolicyWalker(f"{REPO}/usd_file/walk_policy/policy.onnx", wdp, w_imap)
+        walker.place_upright(robot, world, render=not headless,
+                             base_z=float(os.getenv("SIM_WALK_BASE_Z", str(wl.BASE_Z0))))
+        # 腕は policy の管轄から常時除外（obs マスク）: 腕を IK/arm_sdk で default から大きく
+        # 動かすと policy が訓練分布外の腕状態を見て転倒するため。腕の実目標は
+        # arm_sdk（無ければ deploy の default 姿勢）へのレート制限ブレンドのみ。
+        w_arm_mask = list(range(15, 29))  # SDK motor 15..28 = 腕14関節
+        w_arm_default: dict[int, float] = {}
+        for _slot in range(29):
+            _m = wdp["jmap"][_slot]
+            if 15 <= _m <= 28 and w_imap[_m] is not None:
+                w_arm_default[w_imap[_m]] = float(wdp["default_q"][_slot])
+    else:
+        try:
+            robot.set_world_pose(position=np.array([0.0, 0.0, lift]))
+        except Exception:  # noqa: BLE001
+            pass
+        for _ in range(20):
+            world.step(render=not headless)
 
     # 籠の世界位置（F-07: 離したオクラをここへ world アンカーで固定＝投入）。左腕は rest 保持なので ~固定。
     basket_pos = None
@@ -617,13 +670,29 @@ def main() -> None:
     base_cmd_timeout = float(os.getenv("SIM_BASE_CMD_TIMEOUT", "0.3"))  # [s] 指令途切れで停止
     base_xy = [0.0, 0.0]   # world 累積 base 位置 [m]
     base_last_t = time.time()  # 積分用の前回時刻
-    if base_move:
+    if walk_mode:
+        # 歩行モードは同じファイル/プロトコルを policy の velocity 指令として使う（キネマ積分は無効）。
+        base_move = False
+        try:
+            os.remove(base_move_file)
+        except OSError:
+            pass
+        print(f"[bridge] walk_mode: {base_move_file} の \"vx,vy[,wz]\" を policy 指令に"
+              f"（watchdog {base_cmd_timeout}s 途切れで cmd=0＝立位保持）", flush=True)
+    elif base_move:
         try:  # 起動時に古いファイルを消す（前回の残骸でいきなり動かないように）
             os.remove(base_move_file)
         except OSError:
             pass
         print(f"[bridge] base-move ON（SIM_BASE_MOVE=1）: {base_move_file} の world 速度 vx,vy を "
               f"10Hz ストリーム→積分移動（LocoClient 風・watchdog {base_cmd_timeout}s）", flush=True)
+    # 歩行モードの腕上書き: arm_sdk の最新目標（isaac dof idx → q）。weight<=0.01 で解除＝policy に返す。
+    # walk_arm_cur = 実際に適用中の値（レート制限付きブレンド）。腕14関節を一気にスナップさせると
+    # policy バランスが崩れて転倒する（実測）ため、目標へ SIM_WALK_ARM_RATE [rad/s] で漸近する
+    # （rad repo の arm_override も entry 姿勢ブレンドで同じ対策）。解除時も policy 出力へ滑らかに戻す。
+    walk_arm_tgt: dict[int, float] = {}
+    walk_arm_cur: dict[int, float] = {}
+    walk_arm_rate = float(os.getenv("SIM_WALK_ARM_RATE", "3.0"))  # [rad/s] 腕上書きの最大変化率
 
     def _world_xyz(path):
         """prim の現在のワールド座標 (x,y,z) を実測（籠は左腕で動くので毎回読む）。"""
@@ -678,14 +747,24 @@ def main() -> None:
             except Exception:  # noqa: BLE001
                 weight = 1.0
             if weight > 0.01 and arm_isaac_idx:
-                q_full = np.asarray(robot.get_joint_positions(), dtype=float)
-                tgt = q_full.copy()
-                for ci in ARM_CANON_IDX:
-                    ii = canon_to_isaac.get(ci)
-                    if ii is not None:
-                        tgt[ii] = float(lc.motor_cmd[ci].q)
-                robot.apply_action(ArticulationAction(joint_positions=tgt))
-                last_q_target = tgt
+                if walk_mode:
+                    # 歩行モード: 直接 apply せず「最新の腕目標」を記憶 → walk tick で policy 出力に上書き
+                    # （rad repo の arm_override と同型: 脚腰=policy バランス / 腕=外部指令）。
+                    for ci in ARM_CANON_IDX:
+                        ii = canon_to_isaac.get(ci)
+                        if ii is not None:
+                            walk_arm_tgt[ii] = float(lc.motor_cmd[ci].q)
+                else:
+                    q_full = np.asarray(robot.get_joint_positions(), dtype=float)
+                    tgt = q_full.copy()
+                    for ci in ARM_CANON_IDX:
+                        ii = canon_to_isaac.get(ci)
+                        if ii is not None:
+                            tgt[ii] = float(lc.motor_cmd[ci].q)
+                    robot.apply_action(ArticulationAction(joint_positions=tgt))
+                    last_q_target = tgt
+            elif walk_mode and weight <= 0.01 and walk_arm_tgt:
+                walk_arm_tgt.clear()  # weight=0 ＝腕を policy に返す（default 姿勢へ）
 
         # 1b) グリッパ受信 → 机上ピック（閉じ: world joint 外し→手リンクへ FixedJoint / 開き: 解放）
         try:
@@ -699,6 +778,8 @@ def main() -> None:
                 pass
         # 1c) 摩擦把持: grip_q を Dex1 指 prismatic の位置目標へ写像し毎ステップ駆動（磁石なし）。
         #     frac=0(開)..1(閉)。閉じ側 limit は SIM_GRIP_SIGN で選ぶ。okra は指↔莢の摩擦だけで保持。
+        #     歩行モードでは直接 apply せず walk_grip_tgt に記憶（walk tick で policy 出力に上書き）。
+        walk_grip_tgt: dict[int, float] = {}
         if grasp_friction and gripper_isaac_idx and dof_lower is not None:
             frac = max(0.0, min(1.0, (grip_q / grip_close_full) if grip_close_full else 0.0))
             base = (last_q_target.copy() if last_q_target is not None
@@ -708,7 +789,9 @@ def main() -> None:
                 closed = hi if grip_sign > 0 else lo
                 opened = lo if grip_sign > 0 else hi
                 base[gi] = opened + frac * (closed - opened)
-            robot.apply_action(ArticulationAction(joint_positions=base))
+                walk_grip_tgt[gi] = float(base[gi])
+            if not walk_mode:
+                robot.apply_action(ArticulationAction(joint_positions=base))
         # 把持対象 index の決定:
         #  (a) SIM_GRASP_NEAREST=1: 閉じる瞬間、右手リンク world 位置に最も近い未把持オクラ prim を
         #      自動選択（YOLO 検出は prim index を知らないため＝実検出ループ用）。
@@ -805,8 +888,48 @@ def main() -> None:
                     print(f"[bridge] PLACE okra idx={_idx} → 籠（world アンカー, 投入{basket_count}本目）", flush=True)
             grasped_set.clear()
 
-        # 2) sim 1step
-        world.step(render=render_on)
+        # 2) sim 1step（歩行モード: policy 1tick=20ms=4substep / 従来: 1step）
+        if walk_mode:
+            # velocity 指令: base_move_file の "vx,vy[,wz]"（body系 [m/s, m/s, rad/s]）。
+            # watchdog 途切れ → cmd=0（policy が立位保持）＝把持フェーズ。
+            _cmd = np.zeros(3, dtype=np.float32)
+            try:
+                if time.time() - os.path.getmtime(base_move_file) <= base_cmd_timeout:
+                    with open(base_move_file) as _bf:
+                        _v = [float(x) for x in _bf.read().strip().split(",")[:3]]
+                    _cmd[:len(_v)] = _v
+            except (OSError, ValueError):
+                pass
+            _tgt = walker.tick(robot, _cmd, mask_motors=w_arm_mask)
+            # 腕: policy 出力は使わず、arm_sdk 目標（無ければ default 姿勢）へレート制限ブレンド
+            #（スナップで balance が崩れるのを防ぐ。obs 側は w_arm_mask で常時マスク済み）。
+            _dq_max = walk_arm_rate * 0.02  # [rad/tick] (=rate × 20ms)
+            for _wi in arm_isaac_idx:
+                _des = walk_arm_tgt.get(_wi, w_arm_default.get(_wi, float(_tgt[_wi])))
+                _cur = walk_arm_cur.get(_wi)
+                if _cur is None:
+                    _cur = w_arm_default.get(_wi, float(_tgt[_wi]))  # 初回は default 姿勢から
+                _cur += float(np.clip(_des - _cur, -_dq_max, _dq_max))
+                walk_arm_cur[_wi] = _cur
+                _tgt[_wi] = _cur
+            for _gi, _gq in walk_grip_tgt.items():  # 指: 摩擦把持の目標を上書き
+                _tgt[_gi] = _gq
+            robot.apply_action(ArticulationAction(joint_positions=_tgt))
+            last_q_target = _tgt
+            # 20ms 進める。render 時は rendering_dt=4×physics_dt を1回で（GUI 4倍進む罠）
+            if render_on:
+                world.step(render=True)
+            else:
+                for _ in range(4):
+                    world.step(render=False)
+            if step % 100 == 0:  # ~2s ごとに base 位置（歩行の実測）
+                _bp, _bq = robot.get_world_pose()
+                _bp = np.asarray(_bp, dtype=float).reshape(-1)
+                print(f"[bridge][walk] step={step} cmd=({_cmd[0]:+.2f},{_cmd[1]:+.2f},{_cmd[2]:+.2f}) "
+                      f"base=({_bp[0]:+.2f},{_bp[1]:+.2f},{_bp[2]:.3f}) arm_ovr={len(walk_arm_tgt)}",
+                      flush=True)
+        else:
+            world.step(render=render_on)
         step += 1
 
         # 2b) kinematic 把持の追従: 把持中オクラの world 姿勢 = rel * hand_world（手に反力ゼロで追従）
