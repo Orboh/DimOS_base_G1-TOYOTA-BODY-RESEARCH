@@ -904,7 +904,14 @@ def main() -> None:
                     _cmd[:len(_v)] = _v
             except (OSError, ValueError):
                 pass
-            _tgt = walker.tick(robot, _cmd, mask_motors=w_arm_mask)
+            # FixStand 相当の脚凍結: freeze ファイルがある間 policy を止め、直前の脚目標を保持。
+            # 把持の close 瞬間（~2s）の立位揺れ（±1-2cm）を消すために skills が使う。
+            _frozen = os.path.exists("/tmp/sim_walk_freeze")
+            if _frozen and last_q_target is not None:
+                _tgt = np.asarray(last_q_target, dtype=float).reshape(-1).copy()
+                walker.reset()  # 凍結中に履歴を汚さない（解除時にクリーンな obs で再開）
+            else:
+                _tgt = walker.tick(robot, _cmd, mask_motors=w_arm_mask)
             # 腕: policy 出力は使わず、arm_sdk 目標（無ければ default 姿勢）へレート制限ブレンド
             #（スナップで balance が崩れるのを防ぐ。obs 側は w_arm_mask で常時マスク済み）。
             _dq_max = walk_arm_rate * 0.02  # [rad/tick] (=rate × 20ms)
@@ -929,9 +936,12 @@ def main() -> None:
             if step % int(os.getenv("SIM_WALK_LOG_TICKS", "100")) == 0:  # base 位置ログ（既定~2s。接近の閉ループ監視は 25=0.5s に）
                 _bp, _bq = robot.get_world_pose()
                 _bp = np.asarray(_bp, dtype=float).reshape(-1)
+                _bq = np.asarray(_bq, dtype=float).reshape(-1)  # (w,x,y,z)
+                _yaw = float(np.arctan2(2.0 * (_bq[0] * _bq[3] + _bq[1] * _bq[2]),
+                                        1.0 - 2.0 * (_bq[2] ** 2 + _bq[3] ** 2)))  # [rad]
                 print(f"[bridge][walk] step={step} cmd=({_cmd[0]:+.2f},{_cmd[1]:+.2f},{_cmd[2]:+.2f}) "
-                      f"base=({_bp[0]:+.2f},{_bp[1]:+.2f},{_bp[2]:.3f}) arm_ovr={len(walk_arm_tgt)}",
-                      flush=True)
+                      f"base=({_bp[0]:+.2f},{_bp[1]:+.2f},{_bp[2]:.3f}) yaw={_yaw:+.2f} "
+                      f"arm_ovr={len(walk_arm_tgt)}", flush=True)
         else:
             world.step(render=render_on)
         step += 1

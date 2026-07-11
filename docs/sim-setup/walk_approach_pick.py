@@ -83,6 +83,13 @@ class BridgeLog:
                        self._fresh() if fresh else self._tail())
         return tuple(float(v) for v in m[-1]) if m else None
 
+    def delta_for(self, idx: int) -> tuple[float, float, float] | None:
+        """mark() 以降で nearest=Okra_idx の行だけの最新 Δ（対象以外への誤帰還防止）。"""
+        pat = (rf"nearest=Okra_{idx} okra_z=[0-9.]+ dist=[0-9.]+.*?"
+               r"Δ\(okra-gap\)=\((-?[0-9.]+), (-?[0-9.]+), (-?[0-9.]+)\)")
+        m = re.findall(pat, self._fresh())
+        return tuple(float(v) for v in m[-1]) if m else None
+
     def okra_z_max(self) -> float:
         """mark() 以降の okra_z の最大（持ち上げ検証: >0.82 で把持成立）。"""
         zs = [float(v) for v in re.findall(r"okra_z=([0-9.]+)", self._fresh())]
