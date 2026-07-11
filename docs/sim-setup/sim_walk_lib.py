@@ -180,6 +180,19 @@ class PolicyWalker:
         robot.set_world_pose(position=np.array([xy[0], xy[1], base_z], dtype=np.float32),
                              orientation=np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32))
         robot.set_joint_positions(q_init)
+        # ★速度の完全零化（配置直後・settle 前）: world.reset() 時に authored 姿勢の脚が床の
+        #   体積コライダー（例: chinou の床ボックス厚0.2m）を貫通していると、PhysX の貫通解消で
+        #   articulation に ~4m/s 級の初速が付く。set_world_pose は姿勢しか直さないため、
+        #   零化しないと初速のまま吹っ飛ぶ（部屋モードで実測）。
+        try:
+            robot.set_joint_velocities(np.zeros(robot.num_dof, dtype=np.float32))
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            robot.set_linear_velocity(np.zeros(3, dtype=np.float32))
+            robot.set_angular_velocity(np.zeros(3, dtype=np.float32))
+        except Exception as _e:  # noqa: BLE001
+            print(f"[walklib] base velocity 零化 warn: {_e}", flush=True)
         for _ in range(settle):
             robot.apply_action(ArticulationAction(joint_positions=q_init))
             if render:

@@ -123,11 +123,12 @@ def main() -> None:
     # 歩行モードは重力ON必須（policy が全身バランスを取る）＝OFF指定は無視する。
     if walk_mode:
         print("[bridge] walk_mode: 重力ON固定（policy が全身バランス。SIM_GRAVITY 指定は無視）", flush=True)
-        try:  # 部屋なし検証でも立てる足場を保証（chinou 床コライダーは z=0）
-            world.scene.add_default_ground_plane(z_position=0.0)
-            print("[bridge] walk_mode: ground plane @z=0 追加", flush=True)
-        except Exception as _e:  # noqa: BLE001
-            print(f"[bridge] ground plane warn: {_e}", flush=True)
+        if not load_room:  # 部屋なし検証の足場。部屋ありは chinou の床コライダー(z=0)で立つ
+            try:
+                world.scene.add_default_ground_plane(z_position=0.0)
+                print("[bridge] walk_mode: ground plane @z=0 追加（部屋なし）", flush=True)
+            except Exception as _e:  # noqa: BLE001
+                print(f"[bridge] ground plane warn: {_e}", flush=True)
     elif os.getenv("SIM_GRAVITY", "0") != "1":
         try:
             world.get_physics_context().set_gravity(0.0)  # [m/s^2]
