@@ -113,6 +113,15 @@ def main() -> int:
             send(cur, 1.0, gq)
             time.sleep(0.02)
 
+    # PP_VIA_UP>0: 目標の真上（+z[m]）を経由してから降ろす2段リーチ。休め姿勢（手の高さ~0.66m）
+    # から直線補間すると机の前板(天板0.72m)に手が衝突する。歩行モード（floating base）では
+    # この接触で押されて転倒するため、上空経由で机を越えてから降ろす。0=従来の1段（base-fix互換）。
+    via_up = float(os.getenv("PP_VIA_UP", "0"))
+    if via_up > 0:
+        r_via = ik.solve(np.array([target[0], target[1], target[2] + via_up]), [0.0] * 29)
+        if r_via is not None:
+            print(f"[pp] pre-reach（上空 +{via_up:.2f}m 経由, err={r_via.err:.4f}）", flush=True)
+            ramp(list(r_via.arm14), 2.0, gq=0.0, w=1.0)
     print("[pp] reach（開）", flush=True)
     ramp(a_reach, 2.5, gq=0.0, w=1.0)
     print("[pp] close（指を閉じ＝摩擦把持）", flush=True)

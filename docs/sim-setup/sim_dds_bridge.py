@@ -240,7 +240,10 @@ def main() -> None:
         w_imap = wl.motor_to_isaac_map(list(robot.dof_names))
         wl.apply_sdk_gains(robot, wdp, w_imap)
         walker = wl.PolicyWalker(f"{REPO}/usd_file/walk_policy/policy.onnx", wdp, w_imap)
-        walker.place_upright(robot, world, render=not headless,
+        # スポーン位置（歩行接近の検証用）: 机から離れて生まれ、歩いて接近する＝本番 F-08 と同型。
+        _spawn_xy = (float(os.getenv("SIM_WALK_SPAWN_X", "0.0")),
+                     float(os.getenv("SIM_WALK_SPAWN_Y", "0.0")))
+        walker.place_upright(robot, world, render=not headless, xy=_spawn_xy,
                              base_z=float(os.getenv("SIM_WALK_BASE_Z", str(wl.BASE_Z0))))
         # 腕は policy の管轄から常時除外（obs マスク）: 腕を IK/arm_sdk で default から大きく
         # 動かすと policy が訓練分布外の腕状態を見て転倒するため。腕の実目標は
@@ -923,7 +926,7 @@ def main() -> None:
             else:
                 for _ in range(4):
                     world.step(render=False)
-            if step % 100 == 0:  # ~2s ごとに base 位置（歩行の実測）
+            if step % int(os.getenv("SIM_WALK_LOG_TICKS", "100")) == 0:  # base 位置ログ（既定~2s。接近の閉ループ監視は 25=0.5s に）
                 _bp, _bq = robot.get_world_pose()
                 _bp = np.asarray(_bp, dtype=float).reshape(-1)
                 print(f"[bridge][walk] step={step} cmd=({_cmd[0]:+.2f},{_cmd[1]:+.2f},{_cmd[2]:+.2f}) "
