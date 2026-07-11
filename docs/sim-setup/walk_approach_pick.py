@@ -164,6 +164,18 @@ def main() -> int:
     from dimos.robot.unitree.g1.harvest.ik_approach import IkApproachSkill
     ik = IkApproachSkill()
 
+    # ============ Phase 0: 事前挙手（AP_PRERAISE=1, 既定ON） ============
+    # 接近の**前に**腕を机より高い前方位置へ上げておく。リーチ（大きな重心前移動）を
+    # 静止立位でなく歩行中に持ち込む＝歩行 policy が歩容として吸収し、到着後は
+    # 「小さく降ろすだけ」で済む（後ずさりクリープ・机衝突の両方を回避する狙い）。
+    if os.getenv("AP_PRERAISE", "1") == "1":
+        pre = np.array([float(x) for x in os.getenv("AP_PRERAISE_POSE", "0.40,-0.16,0.20").split(",")])
+        r0 = ik.solve(pre, [0.0] * 29)
+        if r0 is not None:
+            print(f"[ap] Phase 0: 事前挙手 {tuple(float(v) for v in pre)}（机より上・err={r0.err:.4f}）", flush=True)
+            ramp(list(r0.arm14), 2.5, gq=0.0)
+            hold(0.5, gq=0.0)
+
     # ============ Phase A: 歩行接近（粗→1歩ずつ・ヒステリシス停止窓） ============
     print(f"[ap] Phase A: 接近（停止窓 base_x∈[{STOP_WIN[0]},{STOP_WIN[1]}]）", flush=True)
     t0 = time.time()
