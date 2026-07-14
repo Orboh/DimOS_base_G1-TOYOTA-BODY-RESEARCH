@@ -33,9 +33,29 @@ RUN git clone https://github.com/NVlabs/GraspGen.git && cd GraspGen && git check
 RUN conda run -n app pip install --no-cache-dir \
     torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu128
 
-# Install GraspGen package
 WORKDIR /app/GraspGen
-RUN conda run -n app pip install --no-cache-dir -e .
+
+# GraspGen's pyproject.toml still hard-pins torch==2.1.0/torchvision==0.16.0 from before
+# Blackwell (sm_120) support landed upstream in the pointnet++ backbone. Maintainer confirms
+# newer torch works fine, the pin is just stale: https://github.com/NVlabs/GraspGen/issues/61
+# Strip it so `pip install -e .` below doesn't downgrade the CUDA 12.8 torch installed above.
+RUN sed -i '/"torch==2.1.0"/d; /"torchvision==0.16.0"/d' pyproject.toml
+
+# Install torch-scatter/torch-cluster (CUDA compile) BEFORE `pip install -e .`. If installed
+# after, `-e .` pulls them in transitively without --no-build-isolation and their build fails
+# with "ModuleNotFoundError: No module named 'torch'" (isolated build env can't see torch):
+# https://github.com/NVlabs/GraspGen/issues/44
+# FORCE_CUDA=1 is required: no GPU is visible during `docker build`, so without it these
+# packages silently fall back to a CPU-only build and fail at runtime with
+# "RuntimeError: Not compiled with CUDA support".
+RUN conda run -n app bash -c "\
+    export TORCH_CUDA_ARCH_LIST='8.0 8.6 8.9 9.0 12.0' && \
+    export FORCE_CUDA=1 && \
+    export CUDA_HOME=/usr/local/cuda && \
+    pip install --no-cache-dir --no-build-isolation torch-scatter torch-cluster"
+
+# Install GraspGen package
+RUN conda run -n app pip install --no-cache-dir --no-build-isolation -e .
 
 # Build CUDA extensions (pointnet2_ops)
 RUN conda run -n app bash -c "\
@@ -43,9 +63,6 @@ RUN conda run -n app bash -c "\
     export FORCE_CUDA=1 && \
     export CUDA_HOME=/usr/local/cuda && \
     cd pointnet2_ops && pip install --no-build-isolation ."
-
-# Install torch-scatter and torch-cluster (require CUDA compilation)
-RUN conda run -n app pip install --no-cache-dir --no-build-isolation torch-scatter torch-cluster
 
 # Additional dependencies
 RUN conda run -n app pip install --no-cache-dir \

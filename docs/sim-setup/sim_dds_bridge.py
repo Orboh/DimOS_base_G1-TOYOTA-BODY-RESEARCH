@@ -141,9 +141,11 @@ def main() -> None:
     bbc = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_, UsdGeom.Tokens.render])
     lift = -float(bbc.ComputeWorldBound(g1).ComputeAlignedRange().GetMin()[2])
     if walk_mode:
-        # 歩行モード: base-fix → floating base 化（root=pelvis, solver 32/4, armature, selfColl OFF）。
+        # 歩行モード: base-fix → floating base 化（root=pelvis, solver 32/4, armature）。
         # /G1 の xform は触らない（xformOpOrder 競合で NaN の罠）→配置は reset 後 place_upright で。
-        art_root = wl.make_floating_base(stage, g1)
+        # selfColl は既定 OFF（policy 実証条件）。SIM_WALK_SELFCOLL=1 で ON（グリッパ⇄籠すり抜け防止）。
+        _walk_selfcoll = os.getenv("SIM_WALK_SELFCOLL", "0") == "1"
+        art_root = wl.make_floating_base(stage, g1, self_collision=_walk_selfcoll)
         if art_root is None:
             print("[bridge] ERROR: pelvis が見つからない（walk_mode 不成立）", flush=True)
             sim_app.close()
@@ -163,8 +165,11 @@ def main() -> None:
     # ので通常は非隣接リンクのめり込みだけ検出する。SIM_SELF_COLLISION=0 で従来(OFF)に戻せる。
     # ※ 静止姿勢で非隣接リンクが既にめり込んでいると起動時に震える/弾かれることがある（その場合は要 collision filter）。
     if walk_mode:
-        # 歩行 policy の実証条件は selfColl=False（sim_walk_lib が設定済み）。ON だと未検証。
-        print("[bridge] walk_mode: self-collision OFF 固定（policy 実証条件）", flush=True)
+        # selfColl は make_floating_base で設定済み（SIM_WALK_SELFCOLL）。ON は policy 未検証で
+        # 歩行が不安定化しうる（暴れたら 0 に戻す）。
+        print(f"[bridge] walk_mode: self-collision "
+              f"{'ON（SIM_WALK_SELFCOLL=1・policy未検証）' if _walk_selfcoll else 'OFF（既定・SIM_WALK_SELFCOLL=1 で ON）'}",
+              flush=True)
     elif os.getenv("SIM_SELF_COLLISION", "1") == "1" and art_root is not None:
         try:
             from pxr import PhysxSchema
@@ -231,6 +236,62 @@ def main() -> None:
                 basket_path = _p.GetPath().pathString
         print(f"[bridge] 机+オクラ {len(okra_paths)}本 配置（A配置, 天板{table_h}m）hand={hand_path} basket={basket_path}", flush=True)
 
+        # 摩擦把持: okra↔指の接触μを実行時に底上げ。okra.usd は物理マテリアル未割当＝PhysX 既定 μ≈0.5
+        # で、弱く握ると滑り・強く握ると剛体オクラを弾き出す（μが低いと保持と非弾き出しが両立しない）。
+        # 接触μは両面の平均なので、オクラ・右手ともに高μ材を bind する。SIM_GRIP_FRICTION で調整。
+        if os.getenv("SIM_GRASP_FRICTION", "0") == "1" and okra_paths:
+            try:
+                from pxr import UsdShade
+
+                _muS = float(os.getenv("SIM_GRIP_FRICTION", "1.6"))
+                _muD = float(os.getenv("SIM_GRIP_FRICTION_DYN", str(round(_muS * 0.85, 3))))
+                _gm = UsdShade.Material.Define(stage, "/World/PhysicsMaterials/grip_runtime")
+                _ga = UsdPhysics.MaterialAPI.Apply(_gm.GetPrim())
+                _ga.CreateStaticFrictionAttr(_muS)
+                _ga.CreateDynamicFrictionAttr(_muD)
+                _ga.CreateRestitutionAttr(0.0)
+                # 接触オフセット: オクラ径(2cm)に対し既定 contactOffset(~2cm)は過大で接触が不安定化する
+                # （NVIDIA 推奨 0.005）。小物体の把持向けに okra+指 collider を縮小。restOffset≈0。
+                from pxr import PhysxSchema as _PxS
+                _co = float(os.getenv("SIM_CONTACT_OFFSET", "0.01"))   # 貫通前に接触を捕まえる（小さすぎると遅接触→弾く）
+                _ro = float(os.getenv("SIM_REST_OFFSET", "0.0"))
+                _nb = 0
+                for _pp in Usd.PrimRange(stage.GetPseudoRoot()):
+                    if not _pp.HasAPI(UsdPhysics.CollisionAPI):
+                        continue
+                    _pth = _pp.GetPath().pathString
+                    if _pth.startswith("/Okra_") or "right_hand" in _pth:
+                        UsdShade.MaterialBindingAPI.Apply(_pp).Bind(
+                            _gm, UsdShade.Tokens.weakerThanDescendants, "physics")
+                        _cx = _PxS.PhysxCollisionAPI.Apply(_pp)
+                        _cx.CreateContactOffsetAttr(_co)
+                        _cx.CreateRestOffsetAttr(_ro)
+                        _nb += 1
+                # 接触インパルスの跳ね返し（「オクラ/グリッパーが弾かれる」現象）を抑える:
+                # okra とグリッパー双方の max_depenetration_velocity を制限（NVIDIA 推奨 objects=3.0/robot=5.0）。
+                # 既定は大きく、貫通時にオクラだけでなく**グリッパー（ロボット側）も弾き飛ばす**。両方に必要。
+                _mdv = float(os.getenv("SIM_MAX_DEPEN_VEL", "3.0"))          # オクラ側
+                _mdvr = float(os.getenv("SIM_MAX_DEPEN_VEL_ROBOT", "5.0"))   # ロボット（右手リンク）側
+                _nd = 0
+                for _pp in Usd.PrimRange(stage.GetPseudoRoot()):
+                    if not _pp.HasAPI(UsdPhysics.RigidBodyAPI):
+                        continue
+                    _p = _pp.GetPath().pathString
+                    if _p.startswith("/Okra_"):
+                        _v = _mdv
+                    elif "right_hand" in _p:
+                        _v = _mdvr
+                    else:
+                        continue
+                    _rb = _PxS.PhysxRigidBodyAPI.Apply(_pp)
+                    _rb.CreateMaxDepenetrationVelocityAttr(_v)
+                    _rb.CreateStabilizationThresholdAttr(0.001)
+                    _nd += 1
+                print(f"[bridge] 摩擦把持: μ(s={_muS}) + contactOffset={_co} + maxDepenVel okra={_mdv}/robot={_mdvr}"
+                      f" を collider{_nb}/rigid{_nd}（okra+右手）へ実行時設定", flush=True)
+            except Exception as _e:  # noqa: BLE001
+                print(f"[bridge] grip friction 割当 warn: {_e}", flush=True)
+
     world.reset()
     walker = None
     if walk_mode:
@@ -245,10 +306,14 @@ def main() -> None:
                      float(os.getenv("SIM_WALK_SPAWN_Y", "0.0")))
         walker.place_upright(robot, world, render=not headless, xy=_spawn_xy,
                              base_z=float(os.getenv("SIM_WALK_BASE_Z", str(wl.BASE_Z0))))
-        # 腕は policy の管轄から常時除外（obs マスク）: 腕を IK/arm_sdk で default から大きく
-        # 動かすと policy が訓練分布外の腕状態を見て転倒するため。腕の実目標は
-        # arm_sdk（無ければ deploy の default 姿勢）へのレート制限ブレンドのみ。
-        w_arm_mask = list(range(15, 29))  # SDK motor 15..28 = 腕14関節
+        # 腕 obs マスク: 旧 policy は腕を default 前提で学習したので、腕を IK/arm_sdk で動かすと
+        # 訓練分布外の腕状態を見て転倒する→腕14関節を obs からマスクしていた。
+        # ★新 policy（2026-07-14 前ならえ対応・折田）は joint_pos_rel を全関節マスクなしで学習し、
+        #   ArmOverride で腕を外部駆動する状況（=arm_sdk 把持）も学習済み＝腕 obs を見て歩く前提。
+        #   その場合は SIM_WALK_ARM_MASK=0 でマスクを外す（外さないと前ならえ対応の利点が消える）。
+        w_arm_mask = list(range(15, 29)) if os.getenv("SIM_WALK_ARM_MASK", "1") == "1" else []
+        if not w_arm_mask:
+            print("[bridge] walk_mode: 腕 obs マスク OFF（新 policy=腕を見て歩く前提）", flush=True)
         w_arm_default: dict[int, float] = {}
         for _slot in range(29):
             _m = wdp["jmap"][_slot]
@@ -382,6 +447,52 @@ def main() -> None:
             print(f"[calib] jaw_link_paths={len(jaw_link_paths)}個", flush=True)
         except Exception as _e:  # noqa: BLE001
             print(f"[calib] warn: {_e}", flush=True)
+
+    # 把持目標エリア（スイートスポット）可視化: SIM_WALK_SHOW_SWEET=1 で torso_link の子として
+    # 緑のワイヤフレーム枠を描く（chest_cam と同じ「torso 追従」手法＝ロボットと一緒に動く）。
+    # GUI で「ロボットがオクラをこの箱に入れようとしている」のが一目で分かる。
+    # ★箱寸法は skills 側 _SWEET_X/_SWEET_Y と同じ env（SIM_WALK_SWEET_X/Y）から読む。既定値は
+    #   ここと sim_walk_harvest_skills.py で二重定義になるので、変える時は必ず両方一致させること。
+    # 注意: 現状 X の接近判定は world base_x（_BASE_X_MAX）で行うため、この箱に okra が入る前に
+    #   把持が発火し得る。枠の外で掴みにいく様子が見えたら、それが「空掴み」バグの視覚的証拠。
+    if os.getenv("SIM_WALK_SHOW_SWEET", "0") == "1" and torso_path is not None:
+        try:
+            def _sweet_pair(_env: str, _d: tuple[float, float]) -> tuple[float, float]:
+                _v = os.getenv(_env)
+                return tuple(float(x) for x in _v.split(",")) if _v else _d  # type: ignore[return-value]
+
+            _sx0, _sx1 = _sweet_pair("SIM_WALK_SWEET_X", (0.24, 0.44))   # 前後窓[m]（torso x）
+            _sy0, _sy1 = _sweet_pair("SIM_WALK_SWEET_Y", (-0.14, -0.02))  # 左右窓[m]（torso y）
+            _szc = float(os.getenv("SIM_WALK_SWEET_Z", "-0.06"))   # 箱中心 z[m]（オクラ中心 torso-z≈-0.06）
+            _szh = float(os.getenv("SIM_WALK_SWEET_ZH", "0.16"))   # 箱の z 高さ[m]
+            _z0, _z1 = _szc - _szh / 2.0, _szc + _szh / 2.0
+            # 8 隅（torso ローカル座標＝calib と同一系）。キー (ix, iy, iz) の 0/1 で min/max を選ぶ。
+            _corner = {(_ix, _iy, _iz): Gf.Vec3f(_x, _y, _z)
+                       for _ix, _x in ((0, _sx0), (1, _sx1))
+                       for _iy, _y in ((0, _sy0), (1, _sy1))
+                       for _iz, _z in ((0, _z0), (1, _z1))}
+            _edges = [((0, 0, 0), (1, 0, 0)), ((1, 0, 0), (1, 1, 0)),   # 底面 4 辺
+                      ((1, 1, 0), (0, 1, 0)), ((0, 1, 0), (0, 0, 0)),
+                      ((0, 0, 1), (1, 0, 1)), ((1, 0, 1), (1, 1, 1)),   # 天面 4 辺
+                      ((1, 1, 1), (0, 1, 1)), ((0, 1, 1), (0, 0, 1)),
+                      ((0, 0, 0), (0, 0, 1)), ((1, 0, 0), (1, 0, 1)),   # 垂直 4 辺
+                      ((1, 1, 0), (1, 1, 1)), ((0, 1, 0), (0, 1, 1))]
+            _pts = []
+            for _e0, _e1 in _edges:
+                _pts.append(_corner[_e0])
+                _pts.append(_corner[_e1])
+            _bp = f"{torso_path}/sweet_box"
+            _curves = UsdGeom.BasisCurves.Define(stage, _bp)
+            _curves.CreateTypeAttr().Set(UsdGeom.Tokens.linear)
+            _curves.CreateCurveVertexCountsAttr().Set([2] * len(_edges))
+            _curves.CreatePointsAttr().Set(_pts)
+            _curves.CreateWidthsAttr().Set([0.008] * len(_pts))  # 線の太さ 8mm
+            _curves.SetWidthsInterpolation(UsdGeom.Tokens.vertex)
+            _curves.CreateDisplayColorAttr().Set([Gf.Vec3f(0.1, 0.95, 0.2)])  # 緑
+            print(f"[bridge] sweet-box viz ON: torso 箱 x[{_sx0},{_sx1}] y[{_sy0},{_sy1}] "
+                  f"z[{_z0:.3f},{_z1:.3f}] → {_bp}", flush=True)
+        except Exception as _e:  # noqa: BLE001
+            print(f"[bridge] sweet-box viz warn: {_e}", flush=True)
 
     # 籠の torso 座標（F-07 IK 投入のターゲット GT）。SIM_DUMP_BASKET=1 なら左腕を「提示姿勢(L字)」へ
     # 置いて実測し終了する（その値を SIM_BASKET_TORSO="X,Y,Z" として収穫ランナへ渡す）。
@@ -696,7 +807,18 @@ def main() -> None:
     # （rad repo の arm_override も entry 姿勢ブレンドで同じ対策）。解除時も policy 出力へ滑らかに戻す。
     walk_arm_tgt: dict[int, float] = {}
     walk_arm_cur: dict[int, float] = {}
-    walk_arm_rate = float(os.getenv("SIM_WALK_ARM_RATE", "3.0"))  # [rad/s] 腕上書きの最大変化率
+    walk_arm_rate = float(os.getenv("SIM_WALK_ARM_RATE", "1.5"))  # [rad/s] 通常時の腕最大変化率（挙手/歩行中は穏やかに＝足元の外乱を減らす）
+    # 把持中（脚凍結＝骨盤ピン中）は足が固定されているので腕を速くできる。遅いと Δサーボの
+    # 1.8s hold 内に腕が狙いへ届かず gap がラグ→把持がオクラを「なぞって」滑る。凍結中のみ高レート。
+    walk_arm_rate_hold = float(os.getenv("SIM_WALK_ARM_RATE_HOLD", "3.0"))
+    # 把持中の骨盤ピン留め（仮想ハーネス）: SIM_WALK_GRASP_HOLD=1 のとき、凍結中
+    # （/tmp/sim_walk_freeze あり）に骨盤 world pose をキネマティックに固定＋速度ゼロ化する。
+    # 物理が base を積分できなくなる＝倒れない。歩行接近は通常どおり policy、把持フェーズだけ
+    # 「倒れない土台」にする（実機立ち上げのガントリー支持相当。発表では sim アシストと明記）。
+    walk_grasp_hold = os.getenv("SIM_WALK_GRASP_HOLD", "0") == "1"
+    _hold_pose = None  # 凍結開始時に捕捉した (pos, quat)。凍結解除で None に戻す。
+    if walk_mode and walk_grasp_hold:
+        print("[bridge] walk_mode: SIM_WALK_GRASP_HOLD=1（把持中=凍結中は骨盤をピン留め＝倒れない）", flush=True)
 
     def _world_xyz(path):
         """prim の現在のワールド座標 (x,y,z) を実測（籠は左腕で動くので毎回読む）。"""
@@ -910,11 +1032,27 @@ def main() -> None:
             if _frozen and last_q_target is not None:
                 _tgt = np.asarray(last_q_target, dtype=float).reshape(-1).copy()
                 walker.reset()  # 凍結中に履歴を汚さない（解除時にクリーンな obs で再開）
+                if walk_grasp_hold:
+                    # 骨盤をキネマティックにピン留め（把持中は倒れない仮想ハーネス）。
+                    # 凍結開始時の pose を捕捉し、毎tick その pose へ戻し＋速度ゼロ化して
+                    # 物理が base を倒す/流すのを止める（毎tickの微小サグ ~2mm は無視できる）。
+                    if _hold_pose is None:
+                        _hp, _hq = robot.get_world_pose()
+                        _hold_pose = (np.asarray(_hp, dtype=float).reshape(-1).copy(),
+                                      np.asarray(_hq, dtype=float).reshape(-1).copy())
+                    try:
+                        robot.set_world_pose(position=_hold_pose[0], orientation=_hold_pose[1])
+                        robot.set_linear_velocity(np.zeros(3, dtype=float))
+                        robot.set_angular_velocity(np.zeros(3, dtype=float))
+                    except Exception as _e:  # noqa: BLE001
+                        print(f"[bridge] grasp-hold pin warn: {_e}", flush=True)
             else:
                 _tgt = walker.tick(robot, _cmd, mask_motors=w_arm_mask)
+                _hold_pose = None  # 凍結解除→次回の凍結で pose を捕捉し直す
             # 腕: policy 出力は使わず、arm_sdk 目標（無ければ default 姿勢）へレート制限ブレンド
             #（スナップで balance が崩れるのを防ぐ。obs 側は w_arm_mask で常時マスク済み）。
-            _dq_max = walk_arm_rate * 0.02  # [rad/tick] (=rate × 20ms)
+            # 凍結中（骨盤ピン中）は足が固定なので腕を速く（サーボ収束のため）。通常時は穏やか。
+            _dq_max = (walk_arm_rate_hold if _frozen else walk_arm_rate) * 0.02  # [rad/tick] (=rate × 20ms)
             for _wi in arm_isaac_idx:
                 _des = walk_arm_tgt.get(_wi, w_arm_default.get(_wi, float(_tgt[_wi])))
                 _cur = walk_arm_cur.get(_wi)

@@ -49,7 +49,16 @@ def load_deploy(path: str) -> dict:
 
     注意: stiffness/damping は SDK モーター順、default/scale/offset は policy slot 順。
     """
-    dp = yaml.safe_load(open(path))
+    # 折田 policy(2026-07-14) の deploy.yaml は !!python/tuple タグ（keyframe_time_range /
+    # arm_pose_ranges 等・いずれも学習専用で本関数は未使用）を含む。yaml.safe_load はこのタグを
+    # 読めず落ちるので、tuple を許可する専用ローダーで読む（グローバル SafeLoader は汚さない）。
+    class _DeployLoader(yaml.SafeLoader):
+        pass
+    _DeployLoader.add_constructor(
+        "tag:yaml.org,2002:python/tuple",
+        lambda ldr, node: tuple(ldr.construct_sequence(node)),
+    )
+    dp = yaml.load(open(path), Loader=_DeployLoader)
     return {
         "jmap": list(dp["joint_ids_map"]),  # policy slot i -> SDK motor index
         "default_q": np.array(dp["default_joint_pos"], dtype=np.float32),      # slot順
@@ -65,10 +74,12 @@ def load_deploy(path: str) -> dict:
 
 
 def make_floating_base(stage, g1_prim, armature: float = 0.01,
-                       solver_pos: int = 32, solver_vel: int = 4) -> str | None:
+                       solver_pos: int = 32, solver_vel: int = 4,
+                       self_collision: bool = False) -> str | None:
     """base-fix の g1bag（参照読み込み）を floating base 化し、pelvis prim path を返す。
 
-    要点1/2/5 を一括適用。self-collision は False（歩行 policy の検証条件）。
+    要点1/2/5 を一括適用。self-collision は既定 False（歩行 policy の検証条件）。
+    ``self_collision=True`` で右グリッパ⇄左手首の籠のすり抜けを止められるが policy 未検証。
     ArtCls(prim_path=返り値) で articulation を作ること。
     """
     from pxr import PhysxSchema, Usd, UsdPhysics
@@ -93,7 +104,7 @@ def make_floating_base(stage, g1_prim, armature: float = 0.01,
     pa = PhysxSchema.PhysxArticulationAPI.Apply(pelvis)
     pa.CreateSolverPositionIterationCountAttr(solver_pos)
     pa.CreateSolverVelocityIterationCountAttr(solver_vel)
-    pa.CreateEnabledSelfCollisionsAttr(False)
+    pa.CreateEnabledSelfCollisionsAttr(bool(self_collision))
     # (5) armature を全29関節へ
     n_arm = 0
     for p in Usd.PrimRange(g1_prim):
@@ -101,7 +112,7 @@ def make_floating_base(stage, g1_prim, armature: float = 0.01,
             PhysxSchema.PhysxJointAPI.Apply(p).CreateArmatureAttr(armature)
             n_arm += 1
     print(f"[walklib] floating base 化: root={pelvis_path} solver={solver_pos}/{solver_vel} "
-          f"selfColl=False armature={armature}×{n_arm}関節", flush=True)
+          f"selfColl={bool(self_collision)} armature={armature}×{n_arm}関節", flush=True)
     return pelvis_path.pathString
 
 
@@ -257,6 +268,17 @@ class PolicyWalker:
         dp, jmap = self.dp, self.dp["jmap"]
         q = np.asarray(robot.get_joint_positions(), dtype=np.float32).reshape(-1)
         dq = np.asarray(robot.get_joint_velocities(), dtype=np.float32).reshape(-1)
+        # 防御: physics が一時的に壊れて get_joint_positions が異常な要素数（例: 1）を返すことがある
+        # （長時間実行で articulation state が劣化）。そのまま q[ii] すると IndexError で bridge が
+        # 落ちるので、直近の有効目標を返してクラッシュを回避し、次フレームの回復を待つ。
+        _maxidx = max((i for i in self.map if i is not None), default=0)
+        if q.size <= _maxidx or dq.size <= _maxidx:
+            # 絶対に None を返さない（bridge の apply_action が None で落ちる）。直近の有効目標→
+            # 無ければ有効な現在角→それも無ければ安全な zeros。
+            _lt = getattr(self, "_last_tgt", None)
+            if _lt is not None:
+                return _lt
+            return q if q.size > _maxidx else np.zeros(_maxidx + 1, dtype=np.float32)
         mq = np.zeros(29, dtype=np.float32)
         mdq = np.zeros(29, dtype=np.float32)
         for m in range(29):
@@ -297,4 +319,5 @@ class PolicyWalker:
             ii = self.map[jmap[i]]
             if ii is not None:
                 tgt[ii] = q_tgt_motor[i]
+        self._last_tgt = tgt  # クラッシュ防止ガードの復帰用に直近の有効目標を保持
         return tgt

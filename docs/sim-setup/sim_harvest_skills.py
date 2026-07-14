@@ -24,10 +24,20 @@ import numpy as np
 
 from dimos.robot.unitree.g1.harvest.blackboard import Okra
 from dimos.robot.unitree.g1.harvest.ik_approach import IkApproachSkill
+from dimos.robot.unitree.g1.harvest.place_basket import make_place_basket_fn
 
 _WEIGHT_IDX = 29
 _ARM_START = 15
 _Q_CLOSE = 4.4
+
+# F-07 カゴ投入の教示角。外部リポ Orboh/dex1_1_service feat/drop-to-basket の
+# drop_to_basket_mujoco.py の LOCKED poses（左=L字提示 2026-06-25 / 右=drop 2026-06-29更新）
+# と一致させたもの。正準順 [shoulder_pitch, roll, yaw, elbow, wrist_roll, pitch, yaw] [rad]。
+# ※ 参照の角度のみ移植（「閉じたまま2s保持」等のタイミング・退避復帰は移植しない）。
+_PLACE_LEFT_PRESENT = [0.0037, 0.2527, -0.0478, 1.1991, -0.1714, -1.0626, -1.0144]
+_PLACE_RIGHT_DROP = [-0.11606722325086594, -0.35777705907821655, 0.5581882281249830,
+                     -0.23972046375274658, -0.0300226437634435, -0.2594746064536180,
+                     0.8287091851234436]
 
 
 class SimHarvestSkills:
@@ -40,6 +50,7 @@ class SimHarvestSkills:
         iface: str = "lo",
         peers: list[str] | None = None,
         target_file: str = "/tmp/sim_grasp_target.txt",
+        basket_torso: tuple[float, float, float] = (0.230, 0.011, -0.072),
     ) -> None:
         # okra_torso: [(okra_prim_index, (X,Y,Z) torso), ...]
         self._okra = {str(idx): (idx, np.array(p, dtype=float)) for idx, p in okra_torso}
@@ -47,6 +58,12 @@ class SimHarvestSkills:
         self._ik = IkApproachSkill()
         self._target_file = target_file
         self.records: list[dict] = []
+        # F-07 籠位置(torso, GT)。既定値は g1bag を SIM_DUMP_BASKET=1 で実測した値（左腕提示後）。
+        # シーン/籠を変えたら再実測し、SIM_BASKET_TORSO="X,Y,Z" で上書きする。
+        _bt = os.getenv("SIM_BASKET_TORSO")
+        self._basket_torso = (
+            tuple(float(x) for x in _bt.split(",")) if _bt else basket_torso
+        )
 
         peers = peers or []
         import unitree_sdk2py.core.channel as ch
@@ -89,6 +106,24 @@ class SimHarvestSkills:
             self._send([0.0] * 14, 0.0, 0.0)
             time.sleep(0.02)
         print(f"[sim-skills] DDS up iface={iface} peers={peers or 'mcast'} (warmup done); okra={sorted(int(k) for k in self._okra)}", flush=True)
+        # F-07 投入動作（本番）。送信は本クラスのランプ/ホールドへ注入＝sim も実機も同一ロジック。
+        #   send_arm: 閉じ保持(_Q_CLOSE)のまま arm14 を補間（オクラを落とさない）
+        #   open_gripper: 腕を保持したままグリッパを開く（=リリース）
+        self._place = make_place_basket_fn(
+            basket_torso=self._basket_torso,
+            send_arm=lambda arm14, secs: self._ramp(arm14, secs, grip_q=_Q_CLOSE, weight_to=1.0),
+            open_gripper=lambda q, secs: self._hold(secs, grip_q=q),
+            get_measured=lambda: [0.0] * 15 + list(self._cur_arm),
+            # C: カゴ投入は参照 dex1_1_service の教示角に合わせる（左提示＋右dropを固定角で）。
+            left_present=_PLACE_LEFT_PRESENT,
+            right_drop=_PLACE_RIGHT_DROP,
+            # ★sim の開放角は 0.0。place_basket 既定 5.2 は実機 Dex1 の「開放」規約だが、bridge は
+            #   grip_q を frac=grip_q/4.4 を[0,1]クランプして指駆動＝5.2 は frac=1.0=全閉にマップされ
+            #   リリースされない。sim では 0.0 が開放（friction_pick_place も gq=0.0 で離す）。
+            q_open=float(os.getenv("SIM_GRIP_OPEN_Q", "0.0")),
+        )
+        print(f"[sim-skills] F-07 籠位置(torso)={tuple(round(v,3) for v in self._basket_torso)}"
+              " （SIM_BASKET_TORSO で上書き可）", flush=True)
 
     # ---- 低レベル送信 ----
     def _send(self, arm14: list[float], weight: float, grip_q: float) -> None:
@@ -154,8 +189,11 @@ class SimHarvestSkills:
         if r_lift is not None:
             self._ramp(list(r_lift.arm14), 1.5, grip_q=_Q_CLOSE)
         self._hold(0.5, grip_q=_Q_CLOSE)
-        # F-07: グリッパを開く → bridge が掴んだオクラを籠へ投入（重力OFFなので world アンカーでテレポート）
-        self._hold(0.8, grip_q=0.0)
+        # F-07（本番）: 左腕で籠提示 → 右腕IKで籠上空 → 開いてリリース。
+        #   重力ON+籠コライダー時は bridge 側でオクラが物理落下（テレポートではない）。
+        #   重力OFF時は従来どおり bridge の world アンカーで籠位置へ収める。
+        ok = self._place()
+        print(f"[sim-skills] F-07 籠収納 {'OK' if ok else 'FAIL（IK解けず・要 SIM_BASKET_TORSO 調整）'}", flush=True)
         self._picked.add(okra.id)
 
     def verify_harvest(self) -> bool:

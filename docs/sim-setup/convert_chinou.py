@@ -14,6 +14,7 @@ env:
   OUT_USD     出力 USD パス
   TARGET_TRIS 目標三角数（0=decimationしない）。既定 2,000,000
   SCALE       単位係数（既定 0.001 = mm→m）
+  MESH_PATH   出力メッシュ prim パス（既定 /World/ChinouCenter。畑は /World/OkraField 等）
 """
 import os, glob, sys, time
 import numpy as np
@@ -22,6 +23,7 @@ IN_DIR = os.environ["IN_DIR"]
 OUT_USD = os.environ["OUT_USD"]
 TARGET_TRIS = int(os.environ.get("TARGET_TRIS", "2000000"))
 SCALE = float(os.environ.get("SCALE", "0.001"))
+MESH_PATH = os.environ.get("MESH_PATH", "/World/ChinouCenter")
 
 t0 = time.time()
 def log(*a): print(f"[{time.time()-t0:6.1f}s]", *a, flush=True)
@@ -136,7 +138,7 @@ if up != 2:
 
 xf = UsdGeom.Xform.Define(stage, "/World")
 stage.SetDefaultPrim(xf.GetPrim())
-mesh_p = UsdGeom.Mesh.Define(stage, "/World/ChinouCenter")
+mesh_p = UsdGeom.Mesh.Define(stage, MESH_PATH)
 mesh_p.CreatePointsAttr(Vt.Vec3fArray.FromNumpy(V.astype(np.float32)))
 mesh_p.CreateFaceVertexCountsAttr(Vt.IntArray.FromNumpy(np.full(len(F), 3, dtype=np.int32)))
 mesh_p.CreateFaceVertexIndicesAttr(Vt.IntArray.FromNumpy(F.astype(np.int32).reshape(-1)))

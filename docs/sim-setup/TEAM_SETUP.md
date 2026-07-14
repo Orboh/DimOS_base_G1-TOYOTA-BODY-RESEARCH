@@ -44,14 +44,19 @@ pip install "torch==2.5.1" "torchvision==0.20.1" --index-url https://download.py
 ## 3. USD アセットを S3 から取得（★git に無い）
 
 ```bash
-# 知能センター室 + 収穫構成G1 + バスケット を usd_file/ にミラー展開
-aws s3 sync s3://orboh-datasets/g1-okra-sim/usd_file/ usd_file/
+# 知能センター室 + オクラ畑 + 収穫構成G1 + バスケット を usd_file/ にミラー展開
+# 巨大なフル解像度畑(okra_field_full.usd 1.15GB, 16GB+ GPU機専用)は既定で除外。
+aws s3 sync s3://orboh-datasets/g1-okra-sim/usd_file/ usd_file/ --exclude "okra_field_full.usd"
+# フル解像度版が要る場合のみ個別取得:
+#   aws s3 cp s3://orboh-datasets/g1-okra-sim/usd_file/okra_field_full.usd usd_file/
 ```
 
 取得物（`usd_file/`）:
 | ファイル | 中身 |
 |---|---|
 | `chinou_center.usd` | FARO 実測の知能センター室（8.24×8.40×2.73m, 床z=0, 床/壁コライダー + 照明 + 床に floor_mat） |
+| `okra_field.usd` | FARO 実測のオクラ畑（鹿児島県農業総合開発センター, 13.14×7.60×2.30m, 床z=0, **屋外＝地面コライダーのみ + Dome+Sun照明**, 頂点色, 2M面） |
+| `okra_field_full.usd` | 上記の**間引きなしフル解像度版**（63M面 / 1.15GB）。⚠️ **8GB機では開けない・16GB+ GPU機用**。通常は 2M 版を使う。詳細 [`OKRA_FIELD.md`](OKRA_FIELD.md) |
 | `g1-29dof-dex1-base-fix-usd/g1bag.usd` | 収穫構成 G1（左手首バスケット直付け / 右手 Dex1 / 足・指に物理マテリアル / GroundPlane無効） |
 | `g1-29dof-dex1-base-fix-usd/basket_physics.usd` | バスケット形状（g1bag が相対参照。**同ディレクトリ必須**） |
 | `usd_file/basket.3mf` | バスケット元データ（mm, 3MF） |
@@ -71,6 +76,12 @@ PYTHONNOUSERSITE=1 OMNI_KIT_ACCEPT_EULA=YES \
 - 知能センター室に G1 が床に接地して立ち、左手首にバスケット、右手 Dex1、天井照明 3×3 が点く。
 - 視点操作（Omniverse）: 右ドラッグ=見回す / Alt+左ドラッグ=旋回 / 中ドラッグ=パン / ホイール=ズーム。
 - フラグ: `--gravity`（通常重力で動力学）/ `--ceil-lights N` `--ceil-intensity V`（天井照明）/ なしで重力OFF・初期姿勢固定表示。
+
+**オクラ畑を見る場合**（同じ `view_chinou.py` を環境変数で畑に向ける。畑は Sun+Dome 焼き込み済なので天井灯 OFF）:
+```bash
+PYTHONNOUSERSITE=1 OMNI_KIT_ACCEPT_EULA=YES ROOM_USD="$PWD/usd_file/okra_field.usd" \
+  ~/miniconda3/envs/isaac-sim/bin/python docs/sim-setup/view_chinou.py --gui --ceil-lights 0
+```
 
 ## 5. （任意）物理マテリアルを作り直す場合
 

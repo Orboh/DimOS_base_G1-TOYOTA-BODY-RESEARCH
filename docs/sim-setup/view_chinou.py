@@ -17,7 +17,10 @@ import argparse, os
 os.environ.setdefault("OMNI_KIT_ACCEPT_EULA", "YES")
 
 REPO = "/home/kota-ueda/Desktop/dimos-hackathon"
-ROOM_USD = f"{REPO}/usd_file/chinou_center.usd"
+# 既定は知能センター室内。屋外オクラ畑を見るときは環境変数で差し替え:
+#   ROOM_USD=$PWD/usd_file/okra_field.usd ... view_chinou.py --ceil-lights 0
+# （畑は Sun+Dome を USD に焼き込み済みなので天井 SphereLight は不要 → --ceil-lights 0）
+ROOM_USD = os.environ.get("ROOM_USD", f"{REPO}/usd_file/chinou_center.usd")
 # 収穫構成モデル = 左手首にバスケット + 右手 Dex1（g1bag.usd）。
 # 旧 g1_29dof_with_dex1_base_fix1.usd は両手 Dex1・バスケット無しなので使わない。
 G1_USD = f"{REPO}/usd_file/g1-29dof-dex1-base-fix-usd/g1bag.usd"
@@ -79,9 +82,14 @@ def main() -> None:
     elif args.table:
         print("[chinou] gravity ON（--table: オクラを机に落とすため）", flush=True)
 
-    # 室メッシュの実寸を確認（スケール検証の主目的）
+    # 室/畑メッシュの実寸を確認（スケール検証の主目的）
     bbc = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_, UsdGeom.Tokens.render])
-    room_prim = stage.GetPrimAtPath("/World/ChinouCenter") or stage.GetPrimAtPath("/World")
+    # メッシュ prim を汎用検出（chinou=/World/ChinouCenter, 畑=/World/OkraField, 他は最初の Mesh）
+    room_prim = (stage.GetPrimAtPath("/World/ChinouCenter")
+                 or stage.GetPrimAtPath("/World/OkraField"))
+    if not (room_prim and room_prim.IsValid()):
+        room_prim = next((p for p in stage.TraverseAll() if p.IsA(UsdGeom.Mesh)), None) \
+            or stage.GetPrimAtPath("/World")
     rng = bbc.ComputeWorldBound(room_prim).ComputeAlignedRange()
     rmn, rmx = rng.GetMin(), rng.GetMax()
     rsz = tuple(round(rmx[i] - rmn[i], 3) for i in range(3))
@@ -210,7 +218,8 @@ def main() -> None:
     for _ in range(8):
         world.step(render=True)
     vp = vpu.get_active_viewport()
-    out = f"{OUT_DIR}/chinou_scale_check.png"
+    _stem = os.path.splitext(os.path.basename(ROOM_USD))[0]
+    out = f"{OUT_DIR}/{_stem}_scale_check.png"
     vpu.capture_viewport_to_file(vp, out)
     for _ in range(12):
         sim_app.update()

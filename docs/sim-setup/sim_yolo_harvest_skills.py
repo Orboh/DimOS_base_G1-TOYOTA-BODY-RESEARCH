@@ -72,6 +72,8 @@ def _graph_to_ik(p_graph) -> "np.ndarray":
 _WEIGHT_IDX = 29
 _ARM_START = 15
 _Q_CLOSE = 4.4
+_BASE_SPEED = float(os.getenv("SIM_BASE_SPEED", "0.30"))    # [m/s] base 移動速度（LocoClient 風, SS-07）
+_BASE_RATE_HZ = float(os.getenv("SIM_BASE_RATE_HZ", "10"))  # cmd_vel ストリーム周波数（watchdog 対策）
 
 
 class SimYoloHarvestSkills:
@@ -271,24 +273,42 @@ class SimYoloHarvestSkills:
         print(f"[yolo-skills] record: {record}", flush=True)
 
     def relative_move(self, lateral: float, forward: float = 0.0, yaw: float = 0.0) -> None:
-        """reposition/advance_left の base 移動。graph フレーム(lateral=+右, forward=+前)を
-        world(+x=前, +y=左)へ変換し world 累積オフセットを bridge へ渡す（bridge が set_world_pose）。
-        SIM_BASE_MOVE=1 の bridge が反映。base 移動後、次の detect(YOLO) が新 torso 相対で再検出する。
+        """reposition/advance_left の base 移動（設計書 SS-07 準拠＝LocoClient 風 cmd_vel 速度ストリーム）。
+        graph フレーム(lateral=+右, forward=+前)→world(+x=前, +y=左)へ変換し、**world 速度 vx,vy を
+        10Hz で duration 秒ストリーム**（`make_twist_move_cmd` と同じ：指定速度で走って止まる）。bridge が
+        速度を積分して base を連続移動（テレポートではない）。移動後 dedup リセット。
         """
+        import math
         # graph: lateral(+右), forward(+前) → world: dx=前=forward, dy=左=-lateral
-        self._base_xy[0] += float(forward)
-        self._base_xy[1] += -float(lateral)
-        try:
+        dx, dy = float(forward), -float(lateral)
+        dist = math.hypot(dx, dy)
+        if dist < 1e-3:
+            return
+        speed = _BASE_SPEED                       # [m/s] LocoClient 速度（SS-07 BASE_SPEED=0.5 系）
+        vx, vy = dx / dist * speed, dy / dist * speed
+        dur = dist / speed                        # 走る秒数
+        rate, hz = 1.0 / _BASE_RATE_HZ, _BASE_RATE_HZ
+        n = max(1, int(dur * hz))
+        for _ in range(n):                        # 10Hz で速度をストリーム（watchdog 対策）
+            try:
+                with open(self._base_move_file, "w") as f:
+                    f.write(f"{vx:.4f},{vy:.4f}")
+            except OSError:
+                pass
+            time.sleep(rate)
+        try:                                       # 停止（速度0）
             with open(self._base_move_file, "w") as f:
-                f.write(f"{self._base_xy[0]:.4f},{self._base_xy[1]:.4f}")
-        except OSError as e:
-            print(f"[yolo-skills] base_move file write fail: {e}", flush=True)
+                f.write("0,0")
+        except OSError:
+            pass
+        self._base_xy[0] += dx
+        self._base_xy[1] += dy
         # base が動くと収穫済み/見送りの torso 相対位置も変わる＝dedup をリセット（新フレームで再評価）
         self._picked_pos.clear()
         self._skipped_pos.clear()
         print(f"[yolo-skills] relative_move(lat={lateral:+.2f},fwd={forward:+.2f}) "
-              f"→ base world=({self._base_xy[0]:+.2f},{self._base_xy[1]:+.2f})", flush=True)
-        time.sleep(1.0)  # base 移動の整定待ち（bridge が set_world_pose→数ステップ）
+              f"→ cmd_vel({vx:+.2f},{vy:+.2f}) {dur:.1f}s → base world=({self._base_xy[0]:+.2f},{self._base_xy[1]:+.2f})", flush=True)
+        time.sleep(0.3)  # 整定待ち
 
     def go_to_next_station(self) -> bool:
         return False

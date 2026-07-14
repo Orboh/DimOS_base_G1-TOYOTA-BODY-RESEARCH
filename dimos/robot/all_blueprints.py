@@ -97,6 +97,7 @@ all_blueprints = {
     "unitree-g1-nav-laptop-cam": "dimos.robot.unitree.g1.blueprints.navigation.unitree_g1_nav_laptop_cam:unitree_g1_nav_laptop_cam",
     "unitree-g1-nav-onboard": "dimos.robot.unitree.g1.blueprints.navigation.unitree_g1_nav_onboard:unitree_g1_nav_onboard",
     "unitree-g1-nav-sim": "dimos.robot.unitree.g1.blueprints.navigation.unitree_g1_nav_sim:unitree_g1_nav_sim",
+    "unitree-g1-nav-isaac": "dimos.robot.unitree.g1.blueprints.navigation.unitree_g1_nav_isaac:unitree_g1_nav_isaac",
     "unitree-g1-okra-harvest": "dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_okra_harvest:unitree_g1_okra_harvest",
     "unitree-g1-okra-harvest-full": "dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_okra_harvest_full:unitree_g1_okra_harvest_full",
     "unitree-g1-okra-harvest-live": "dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_okra_harvest_live:unitree_g1_okra_harvest_live",

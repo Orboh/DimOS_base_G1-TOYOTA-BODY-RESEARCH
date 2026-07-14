@@ -45,18 +45,22 @@ def build_table_okra(stage, *, table_h: float = 0.72, table_cx: float = TABLE_CX
     from isaacsim.core.api.objects import FixedCuboid
     from isaacsim.core.utils.stage import add_reference_to_stage
 
+    import os as _os0
     TH, TCX = float(table_h), float(table_cx)
-    table_mat = PhysicsMaterial("/World/PM/table", static_friction=0.8,
-                                dynamic_friction=0.7, restitution=0.0)
-    FixedCuboid(prim_path="/World/Table_top", name="table_top",
-                position=np.array([TCX, 0.0, TH - 0.02]),
-                scale=np.array([TABLE_DEPTH, TABLE_WIDTH, 0.04]),  # 奥行(x)小・横(y)長
-                color=np.array([0.55, 0.40, 0.25]), physics_material=table_mat)
-    _bh = TH - 0.04
-    FixedCuboid(prim_path="/World/Table_base", name="table_base",
-                position=np.array([TCX, 0.0, _bh / 2.0]),
-                scale=np.array([TABLE_DEPTH * 0.6, TABLE_WIDTH * 0.4, _bh]),  # 台座は一回り小さく
-                color=np.array([0.45, 0.32, 0.20]), physics_material=table_mat)
+    # SIM_TABLE_NOBODY=1: 机の実体（天板+台座 collider）を作らない。オクラは world テザーで浮くので
+    # 机が無くても直立する。把持だけを切り分けて検証する用（腕が机フチに引っかかるのを排除）。
+    if _os0.getenv("SIM_TABLE_NOBODY", "0") != "1":
+        table_mat = PhysicsMaterial("/World/PM/table", static_friction=0.8,
+                                    dynamic_friction=0.7, restitution=0.0)
+        FixedCuboid(prim_path="/World/Table_top", name="table_top",
+                    position=np.array([TCX, 0.0, TH - 0.02]),
+                    scale=np.array([TABLE_DEPTH, TABLE_WIDTH, 0.04]),  # 奥行(x)小・横(y)長
+                    color=np.array([0.55, 0.40, 0.25]), physics_material=table_mat)
+        _bh = TH - 0.04
+        FixedCuboid(prim_path="/World/Table_base", name="table_base",
+                    position=np.array([TCX, 0.0, _bh / 2.0]),
+                    scale=np.array([TABLE_DEPTH * 0.6, TABLE_WIDTH * 0.4, _bh]),  # 台座は一回り小さく
+                    color=np.array([0.45, 0.32, 0.20]), physics_material=table_mat)
 
     okra_paths: list[str] = []
     if n_okra <= 0:

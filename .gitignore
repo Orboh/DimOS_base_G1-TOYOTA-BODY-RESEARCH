@@ -11,6 +11,9 @@
 __pycache__/
 *.pyc
 
+# Ignore Python wheel build artifacts（pyzed 等は .venv へ install 済み・git に入れない）
+*.whl
+
 # Ignore virtual environment directories
 *venv*/
 .venv*/

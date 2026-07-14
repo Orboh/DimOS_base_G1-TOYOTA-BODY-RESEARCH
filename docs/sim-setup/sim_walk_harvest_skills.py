@@ -29,9 +29,44 @@ from sim_harvest_skills import SimHarvestSkills, _Q_CLOSE
 from walk_approach_pick import BridgeLog, X_CMD_MAX, X_TIP, Z_COMP
 
 _BASE_MOVE_FILE = os.getenv("SIM_BASE_MOVE_FILE", "/tmp/sim_base_move.txt")
-# 把持スイートスポット（okra live torso 座標）[m]
-_SWEET_X = (0.30, 0.35)  # 遠端0.4だとcap干渉でz収束せず把持ミス（実測: 成功は全て0.32-0.33）
-_SWEET_Y = (-0.19, -0.10)
+
+
+def _sweet_env(name: str, default: tuple[float, float]) -> tuple[float, float]:
+    """スイートスポット窓を env `name`="min,max" で上書き（無ければ default）。"""
+    v = os.getenv(name)
+    if v:
+        a, b = (float(x) for x in v.split(","))
+        return (a, b)
+    return default
+
+
+# 把持スイートスポット（okra live torso 座標）[m]。窓が狭いと「十分掴める位置でも把持が
+# 発火せず移動を反復」してしまう。腕は IK ワークスペース(ws_y=-0.75..0.20)的に横へ広く届く
+# ので、横(y)窓を ~60cm に広げて余計な横歩き（=ヨードリフト源）を減らす。残差は reach＋
+# Δサーボが吸収。x は前方リーチ上限(X_CMD_MAX=0.52)で ~24cm が限界。現場調整は env で:
+#   SIM_WALK_SWEET_X="min,max" / SIM_WALK_SWEET_Y="min,max"
+_SWEET_X = _sweet_env("SIM_WALK_SWEET_X", (0.24, 0.44))
+# 横 y は成功帯に絞る（実測: 把持成立は y≈-0.06〜-0.11 に集中。右に寄ると失敗）。中心-0.08・幅12cm。
+# 骨盤ピン留め（GRASP_HOLD）で side-step のヨードリフトを吸収できるので、絞って寄せ直しても倒れない。
+_SWEET_Y = _sweet_env("SIM_WALK_SWEET_Y", (-0.14, -0.02))  # 幅 12cm（成功帯中心 -0.08）
+
+# 把持中の骨盤ピン留めモード（bridge の SIM_WALK_GRASP_HOLD と対で使う）。
+# ON: 位置合わせ後〜lift まで脚凍結を張り続ける → bridge が骨盤をキネマティックにピン留めするので
+#     「倒れない土台」で精密把持できる（骨盤ピン中は歩けないので半歩前進はスキップ＝遠め x スタンス前提）。
+# OFF: 従来どおり reach/servo は policy に踏ん張らせ、close の一瞬だけ凍結。
+_GRASP_HOLD = os.getenv("SIM_WALK_GRASP_HOLD", "0") == "1"
+
+# 実測 base_x の目標スタンス[m]: okra_now.x 推定は spawn 依存でズレる（届かず/近づきすぎ両方を起こす）
+# ため、前後の停止は「壊れた推定」ではなく bridge 実測 base_x を**この値まで詰める**で決める。
+# 単発把持成功は base_x≈0.08（オクラ torso-x≈0.42 に腕が届く）・机の前板(world 0.35)にも当たらない
+# ので既定 0.08。前進(_align_to)も grasp 中の半歩前進も、この値を越えては進めない（机ジャム防止）。
+# 机が近い/遠い現場では SIM_WALK_BASE_X_MAX で調整。
+_BASE_X_MAX = float(os.getenv("SIM_WALK_BASE_X_MAX", "0.08"))
+
+# 倒れ検知の z 閾値[m]: 立位オクラ中心は z≈0.77、把持成功は >0.82。莢が倒される（なぎ倒し/
+# 上から小突き）と z が大きく下がる（実測 0.725）。これを下回る対象は「掴めない」とみなし、
+# 物理接近せずスキップする（倒れたオクラへ再把持しに行って散乱を広げるのを防ぐ）。
+_FALLEN_Z = float(os.getenv("SIM_WALK_FALLEN_Z", "0.74"))
 
 
 def _parse_calib(log_path: str) -> list[tuple[int, tuple[float, float, float]]]:
@@ -111,8 +146,12 @@ class WalkHarvestSkills(SimHarvestSkills):
 
     # ---- HarvestSkills 差し替え ----
     def detect_okra(self) -> list[Okra]:
+        # 収穫順は左端優先（+y=ロボットの左）。左手首に固定のバスケットが未収穫オクラを
+        # なぎ倒すのを防ぐため、左端から取り始めてロボットを右へ進める（バスケットは
+        # 既収穫側=左へ退くので未収穫オクラに当たらない）。並びは calib torso y の降順。
+        # graph の select は熟度同点を検出順で拾う（安定ソート）ため、この順が把持順になる。
         out = []
-        for k in sorted(self._okra, key=int):
+        for k in sorted(self._okra, key=lambda kk: float(self._okra[kk][1][1]), reverse=True):
             if k in self._picked:
                 continue
             p = self._okra_now(k)
@@ -128,12 +167,26 @@ class WalkHarvestSkills(SimHarvestSkills):
             self._pulse(0.3 if forward > 0 else -0.3, 0.0, abs(forward) / 0.3, dist=abs(forward))
         print(f"[walk-skills] relative_move(lat={lateral:+.2f},fwd={forward:+.2f}) → base={self._base_xy()}", flush=True)
 
-    def _align_to(self, oid: str, max_moves: int = 8) -> np.ndarray:
-        """対象オクラをスイートスポットへ（前後 vx / 横 vy の1歩パルスで位置合わせ）。"""
+    def _align_to(self, oid: str, max_moves: int = 12) -> np.ndarray:
+        """対象オクラをスイートスポットへ（前後 vx / 横 vy の1歩パルスで位置合わせ）。
+
+        max_moves=12: 骨盤ピン後は歩けない（半歩前進も無効）ので、ピン前の align で
+        腕の到達域（x 窓 0.28-0.33 = gap が届く最遠）まで**接近し切る**必要がある。歩数を
+        削りすぎると x が届かず「オクラが指の股に入らない＝なぞる」になる（実測）。
+        """
         for _ in range(max_moves):
             p = self._okra_now(oid)
-            dx = 0.0 if _SWEET_X[0] <= p[0] <= _SWEET_X[1] else (0.3 if p[0] > _SWEET_X[1] else -0.3)
-            # オクラが右(y<sweet)にある→ロボットが右へ動く(vy<0)とオクラの相対yは増える
+            bx = self._base_pose()[0]  # bridge 実測 base_x（ground truth・壊れていない数字）
+            # 前後(x): okra_now.x は spawn 依存でズレる（届かず/近づきすぎ両方を起こす）ので使わず、
+            #   実測 base_x を実績スタンス _BASE_X_MAX まで詰める。到達で停止・越えたら後退（机ジャム防止）。
+            if bx < _BASE_X_MAX - 0.03:
+                dx = 0.3
+            elif bx > _BASE_X_MAX + 0.03:
+                dx = -0.3
+            else:
+                dx = 0.0
+            # 横(y): okra_now.y は正確なのでスイートスポットへ寄せる
+            #   オクラが右(y<sweet)にある→ロボットが右へ動く(vy<0)とオクラの相対yは増える
             dy = 0.0 if _SWEET_Y[0] <= p[1] <= _SWEET_Y[1] else (-0.3 if p[1] < _SWEET_Y[0] else 0.3)
             if dx == 0.0 and dy == 0.0:
                 print(f"[walk-skills]   位置合わせ完了 okra_now={tuple(round(float(v),3) for v in p)}", flush=True)
@@ -144,8 +197,33 @@ class WalkHarvestSkills(SimHarvestSkills):
         print(f"[walk-skills]   位置合わせ打ち切り okra_now={tuple(round(float(v),3) for v in p)}", flush=True)
         return p
 
+    # ---- 脚凍結（FixStand 相当）: bridge が /tmp/sim_walk_freeze を見て policy を止め剛PD保持 ----
+    def _freeze_legs(self) -> None:
+        open("/tmp/sim_walk_freeze", "w").close()
+
+    def _unfreeze_legs(self) -> None:
+        try:
+            os.remove("/tmp/sim_walk_freeze")
+        except OSError:
+            pass
+
+    def _okra_z_live(self, idx: int) -> float | None:
+        """bridge ログから対象オクラ(idx)の最新 okra_z を読む（倒れ検知用）。nearest=Okra_idx 行のみ。"""
+        m = re.findall(rf"nearest=Okra_{idx} okra_z=([0-9.]+)", self._blog._tail())
+        return float(m[-1]) if m else None
+
     def grasp_okra(self, okra: Okra, force: float) -> None:  # noqa: ARG002
         idx, _p0 = self._okra[okra.id]
+        # 倒れ検知の分岐: 対象が既に倒れている（z ≤ _FALLEN_Z）なら掴めないので物理接近せずスキップ。
+        # 再把持ループ（route_after_verify が同じ target へ GRASP を繰り返す）で倒れたオクラに
+        # 何度も突っ込む／さらに散らすのを防ぐ。除外に入れて次のオクラへ進ませる。
+        _zl = self._okra_z_live(idx)
+        if _zl is not None and _zl <= _FALLEN_Z:
+            print(f"[walk-skills] okra{okra.id} 倒れ検知 (z={_zl:.3f}≤{_FALLEN_Z}) → 把持スキップ（取れない）",
+                  flush=True)
+            self._last_grasp_ok = False
+            self._picked.add(okra.id)
+            return
         try:
             with open(self._target_file, "w") as f:
                 f.write(str(idx))
@@ -157,63 +235,85 @@ class WalkHarvestSkills(SimHarvestSkills):
         r0 = self._ik.solve(pre, [0.0] * 29)
         if r0 is not None:
             self._ramp(list(r0.arm14), 2.0, grip_q=0.0, weight_to=1.0)
-        # A) 位置合わせ歩行（挙手のまま歩く）
+        # A) 位置合わせ歩行（挙手のまま歩く。ここは歩くので凍結しない）
         print(f"[walk-skills] GRASP okra{okra.id}: 位置合わせ歩行", flush=True)
         p = self._align_to(okra.id)
-        # B) リーチ（実測式: x+X_TIP cap / z+Z_COMP）
-        tgt = np.array([min(p[0] + X_TIP, X_CMD_MAX), p[1] + 0.013, p[2] + Z_COMP])
-        r = self._ik.solve(tgt, [0.0] * 29)
-        if r is None:
-            print(f"[walk-skills] okra{okra.id} reach IK 解けず（skip）", flush=True)
-            self._picked.add(okra.id)
-            return
-        self._ramp(list(r.arm14), 2.0, grip_q=0.0)
-        self._blog.mark()
-        self._hold(1.8, grip_q=0.0)
-        # C) Δサーボ（fresh 観測・ゲイン0.6±4cm・x上限で半歩前進）
-        for it in range(4):
-            d = self._blog.delta_for(idx)
-            if d is None:
-                break
-            print(f"[walk-skills]   servo{it}: Δ={tuple(round(v,3) for v in d)}", flush=True)
-            if abs(d[0]) < 0.02 and abs(d[1]) < 0.02 and abs(d[2]) < 0.03:
-                break
-            dd = np.array(d)
-            tgt[0] += 0.6 * float(np.clip(dd[0], -0.04, 0.04))
-            tgt[1] += 0.6 * float(np.clip(dd[1], -0.04, 0.04))
-            tgt[2] += 1.0 * float(np.clip(dd[2], -0.06, 0.06))  # z は倒す前に一気に合わせる
-            if tgt[0] > X_CMD_MAX:
-                tgt[0] = X_CMD_MAX
-                self._pulse(0.3, 0.0, 0.25, dist=0.04)  # 半歩前進で x 不足を詰める（変位ベース）
-            tgt[1] = float(np.clip(tgt[1], -0.30, 0.05))
-            tgt[2] = float(np.clip(tgt[2], 0.00, 0.16))  # 下限0: 莢先端でなく中央を掴む（0.05だと先端でノックダウン）
+
+        # 位置合わせ後の把持工程（reach→servo→close→lift）。
+        # held(ON): ここで脚凍結を張り続け、bridge が骨盤をピン留め＝倒れない土台で精密把持。
+        #           骨盤ピン中は歩けないので半歩前進はスキップ（遠め x スタンス前提）。
+        # held(OFF): reach/servo は policy に踏ん張らせ（凍結すると転倒）、close の一瞬だけ凍結。
+        # いずれも早期 return で確実に解除するよう try/finally で保護。
+        held = _GRASP_HOLD
+        if held:
+            self._freeze_legs()
+        try:
+            # B) リーチ（実測式: x+X_TIP cap / z+Z_COMP）
+            tgt = np.array([min(p[0] + X_TIP, X_CMD_MAX), p[1] + 0.013, p[2] + Z_COMP])
             r = self._ik.solve(tgt, [0.0] * 29)
             if r is None:
-                break
-            self._ramp(list(r.arm14), 1.2, grip_q=0.0)
+                print(f"[walk-skills] okra{okra.id} reach IK 解けず（skip）", flush=True)
+                self._picked.add(okra.id)
+                return
+            self._ramp(list(r.arm14), 2.0, grip_q=0.0)
             self._blog.mark()
             self._hold(1.8, grip_q=0.0)
-        # D) close → lift → 検証。close の瞬間だけ脚凍結（FixStand 相当）＝立位の揺れ（±1-2cm）を
-        # 消して莢(φ2cm)×ジョー(5cm)の余裕を守る。凍結は ~2.5s（静的保持の準安定限界内）。
-        self._blog.mark()
-        open("/tmp/sim_walk_freeze", "w").close()
-        try:
-            self._ramp(self._cur_arm, 1.5, grip_q=_Q_CLOSE)
-            self._hold(0.8, grip_q=_Q_CLOSE)
-        finally:
+            # C) Δサーボ（fresh 観測・ゲイン0.6±4cm・x上限で半歩前進）。
+            # 反復は既定3（単発成功時2反復で収束。x は _align_to が base_x で先に詰めるので z/y 微調整のみ）。
+            for it in range(int(os.getenv("SIM_WALK_SERVO_ITERS", "3"))):
+                d = self._blog.delta_for(idx)
+                if d is None:
+                    break
+                print(f"[walk-skills]   servo{it}: Δ={tuple(round(v,3) for v in d)}", flush=True)
+                if abs(d[0]) < 0.02 and abs(d[1]) < 0.02 and abs(d[2]) < 0.03:
+                    break
+                dd = np.array(d)
+                tgt[0] += 0.6 * float(np.clip(dd[0], -0.04, 0.04))
+                tgt[1] += 0.6 * float(np.clip(dd[1], -0.04, 0.04))
+                tgt[2] += 1.0 * float(np.clip(dd[2], -0.06, 0.06))  # z は倒す前に一気に合わせる
+                if tgt[0] > X_CMD_MAX:
+                    tgt[0] = X_CMD_MAX
+                    # 半歩前進で x 不足を詰める。ただし実測 base_x が実績スタンスを越えては進めない
+                    #（机ジャム防止）。held(骨盤ピン)中は歩けないのでスキップ。
+                    if not held and self._base_pose()[0] < _BASE_X_MAX:
+                        self._pulse(0.3, 0.0, 0.25, dist=0.04)  # 半歩前進（変位ベース）
+                tgt[1] = float(np.clip(tgt[1], -0.45, 0.15))  # 横窓を追随（IK ws_y 内）
+                # z 下限: オクラ中心は torso z≈-0.066。ここが高いと骨盤ピンで胴体が高く保持される分
+                # ハンドがオクラ上空で空振りする（friction_pick_servo で実証: 下限 -0.08 では隙間が
+                # 莢の 5cm 上で頭打ち＝空を握る。-0.10 まで下げて初めて降下→接触→摩擦保持が通った）。
+                # 既定 -0.12 で莢中心まで確実に降ろす。SIM_WALK_SERVO_Z_MIN で現場調整可。
+                tgt[2] = float(np.clip(tgt[2], float(os.getenv("SIM_WALK_SERVO_Z_MIN", "-0.12")), 0.16))
+                r = self._ik.solve(tgt, [0.0] * 29)
+                if r is None:
+                    break
+                self._ramp(list(r.arm14), 1.2, grip_q=0.0)
+                self._blog.mark()
+                self._hold(1.8, grip_q=0.0)
+            # D) close → lift → 検証。held(OFF) は close の一瞬だけ脚凍結（~2.3s＝準安定限界内）で
+            # 立位の揺れ（±1-2cm）を消す。held(ON) は既に骨盤ピン中なので追加凍結は不要。
+            self._blog.mark()
+            if not held:
+                self._freeze_legs()
             try:
-                os.remove("/tmp/sim_walk_freeze")
-            except OSError:
-                pass
-        lift = np.array([tgt[0] - 0.05, tgt[1], tgt[2] + 0.18])
-        r_l = self._ik.solve(lift, [0.0] * 29)
-        if r_l is not None:
-            self._ramp(list(r_l.arm14), 2.0, grip_q=_Q_CLOSE)
-        self._hold(0.8, grip_q=_Q_CLOSE)
-        okz = self._blog.okra_z_max()
-        self._last_grasp_ok = okz > 0.82
-        print(f"[walk-skills]   lift 後 okra_z(max)={okz:.3f} → {'✅把持' if self._last_grasp_ok else '❌未把持'}", flush=True)
-        # E) 籠投入（既存 F-07 place を流用）
+                self._ramp(self._cur_arm, 2.5, grip_q=_Q_CLOSE)  # close は緩やかに（急閉じで剛体オクラを弾き出さない）
+                self._hold(1.0, grip_q=_Q_CLOSE)
+            finally:
+                if not held:
+                    self._unfreeze_legs()
+            lift = np.array([tgt[0] - 0.05, tgt[1], tgt[2] + 0.18])
+            r_l = self._ik.solve(lift, [0.0] * 29)
+            if r_l is not None:
+                self._ramp(list(r_l.arm14), 2.0, grip_q=_Q_CLOSE)
+            self._hold(0.8, grip_q=_Q_CLOSE)
+            okz = self._blog.okra_z_max()
+            self._last_grasp_ok = okz > 0.82
+            print(f"[walk-skills]   lift 後 okra_z(max)={okz:.3f} → {'✅把持' if self._last_grasp_ok else '❌未把持'}", flush=True)
+        finally:
+            if held:  # 把持工程終了（成功/失敗/早期return）で骨盤ピンを解除→次のオクラへ歩ける
+                self._unfreeze_legs()
+        # E) 籠投入（既存 F-07 place を流用）。
+        # ※後退モーションは廃止: 歩行 policy が弱く後ろ歩きで転倒するため。代わりに遠めの x
+        #   スタンス（SIM_WALK_SWEET_X を届く最遠へ）で最初から机と距離を取り、カゴの引っかかりを避ける。
         ok = self._place()
         print(f"[walk-skills] F-07 籠収納 {'OK' if ok else 'FAIL'}", flush=True)
         self._picked.add(okra.id)
