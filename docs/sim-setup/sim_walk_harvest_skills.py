@@ -259,18 +259,34 @@ class WalkHarvestSkills(SimHarvestSkills):
             self._blog.mark()
             self._hold(1.8, grip_q=0.0)
             # C) Δサーボ（fresh 観測・ゲイン0.6±4cm・x上限で半歩前進）。
-            # 反復は既定3（単発成功時2反復で収束。x は _align_to が base_x で先に詰めるので z/y 微調整のみ）。
-            for it in range(int(os.getenv("SIM_WALK_SERVO_ITERS", "3"))):
+            # 2段化（2026-07-15）: xy が合う前に z を降ろすと、x 過剰リーチ（Δx -4〜-9cm 実測）のまま
+            # ハンドがオクラへ降下して薙ぎ倒す → 倒れ検知で即終了、が picks=0 の主因だった。
+            # phase xy: reach の安全高度を保ったまま xy のみ補正 → |Δxy|<2cm で phase z へ。
+            # phase z : z を降ろして詰める（xy は微修正を継続）。SIM_WALK_SERVO_TWO_STAGE=0 で従来動作。
+            two_stage = os.getenv("SIM_WALK_SERVO_TWO_STAGE", "1") == "1"
+            # x 狙点は Δx=0 でなく **+2.5cm（手前）**。立位の成功例は全て close 時 Δx +2〜3cm
+            # （手前で閉じる→指が莢を抱え込む）、歩行の失敗例は全て Δx 負（行き過ぎ→指が莢を
+            # 前へ弾いて薙ぎ倒す）だった（立位スイープ 2026-07-15）。z 降下中に x が行き過ぎ側へ
+            # 戻るサグ結合も実測されたため、狙点ごと手前に置いて「行き過ぎ側に入らない」を作る。
+            x_aim = float(os.getenv("SIM_WALK_SERVO_X_AIM", "0.025"))
+            descend = not two_stage
+            for it in range(int(os.getenv("SIM_WALK_SERVO_ITERS", "6" if two_stage else "3"))):
                 d = self._blog.delta_for(idx)
                 if d is None:
                     break
-                print(f"[walk-skills]   servo{it}: Δ={tuple(round(v,3) for v in d)}", flush=True)
-                if abs(d[0]) < 0.02 and abs(d[1]) < 0.02 and abs(d[2]) < 0.03:
-                    break
+                print(f"[walk-skills]   servo{it}({'z' if descend else 'xy'}): "
+                      f"Δ={tuple(round(v,3) for v in d)}", flush=True)
+                ex = d[0] - x_aim  # x は狙点(+2.5cm 手前)からの誤差で制御
+                if abs(ex) < 0.02 and abs(d[1]) < 0.02:
+                    if not descend:
+                        descend = True  # xy 整った → 同イテレーションから降下開始
+                    if abs(d[2]) < 0.03:
+                        break  # 全軸収束
                 dd = np.array(d)
-                tgt[0] += 0.6 * float(np.clip(dd[0], -0.04, 0.04))
+                tgt[0] += 0.6 * float(np.clip(ex, -0.04, 0.04))
                 tgt[1] += 0.6 * float(np.clip(dd[1], -0.04, 0.04))
-                tgt[2] += 1.0 * float(np.clip(dd[2], -0.06, 0.06))  # z は倒す前に一気に合わせる
+                if descend:
+                    tgt[2] += 1.0 * float(np.clip(dd[2], -0.06, 0.06))  # z は倒す前に一気に合わせる
                 if tgt[0] > X_CMD_MAX:
                     tgt[0] = X_CMD_MAX
                     # 半歩前進で x 不足を詰める。ただし実測 base_x が実績スタンスを越えては進めない
