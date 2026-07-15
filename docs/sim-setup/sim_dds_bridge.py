@@ -772,6 +772,10 @@ def main() -> None:
     grasp_close = float(os.getenv("SIM_GRASP_CLOSE", "2.0"))  # cmds[0].q がこれ以上で閉じ=把持
     grip_open_q = float(os.getenv("SIM_GRIP_OPEN", "5.0"))    # これ以上=開き(リリース)。close=4.4/open=5.2 を区別
     grasp_target_file = os.getenv("SIM_GRASP_TARGET_FILE", "/tmp/sim_grasp_target.txt")  # graph がここに次の対象を書く
+    try:  # 前回ランの残骸で診断が古い対象にピン留めされないよう起動時に消す（base_move_file と同流儀）
+        os.remove(grasp_target_file)
+    except OSError:
+        pass
     _go = [float(x) for x in os.getenv("SIM_GRASP_OFFSET", "0,0,0").split(",")]  # 把持位置オフセット
 
     # base 移動（cmd_vel 歩行/reposition）: SIM_BASE_MOVE=1（既定OFF）でオプトイン。
@@ -1200,6 +1204,20 @@ def main() -> None:
                         _dd = (_hw[0]-_ow[0])**2 + (_hw[1]-_ow[1])**2 + (_hw[2]-_ow[2])**2
                         if _dd < _bd:
                             _bi, _bz, _bd = _i, float(_ow[2]), _dd
+                    # 対象ピン留め: skills が grasp_target_file に書いた対象を nearest より優先する。
+                    # 倒れ/収穫済みオクラが手の近くに転がると nearest が対象以外を追い、
+                    # delta_for(idx) が None → Δサーボが無言でスキップ → 粗リーチのまま close の
+                    # 誤帰還が起きる（2026-07-15 picks=0 ランで実測）。ファイル無し/無効値は従来どおり。
+                    try:
+                        with open(grasp_target_file) as _tf:
+                            _ti = int(_tf.read().strip())
+                        if 0 <= _ti < len(okra_paths):
+                            _tw = UsdGeom.XformCache(Usd.TimeCode.Default()).GetLocalToWorldTransform(
+                                stage.GetPrimAtPath(okra_paths[_ti])).ExtractTranslation()
+                            _bi, _bz = _ti, float(_tw[2])
+                            _bd = (_hw[0]-_tw[0])**2 + (_hw[1]-_tw[1])**2 + (_hw[2]-_tw[2])**2
+                    except Exception:  # noqa: BLE001
+                        pass
                     _fg = [round(float(qm[gi]), 4) for gi in gripper_isaac_idx]
                     _fr = f" | hand_z={_hz:.3f} nearest=Okra_{_bi} okra_z={_bz:.3f} dist={_bd**0.5:.3f} finger={_fg}"
                     # ジョー隙間の中心 vs オクラ（torso 系）。delta = okra - gap = IK 目標に足す補正量。
