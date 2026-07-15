@@ -94,10 +94,12 @@ class HarvestModuleConfig(ModuleConfig):
     # True: state/action は右腕7関節のみ、画像は手首1枚、グリッパ次元なし（切断は ACT 外）。
     # False（既定）: 旧 8次元右腕+グリッパ / 16次元両腕モデル（後方互換）。
     act_right_arm_only_7d: bool = False
-    # LIVE: 把持を IK 粗アプローチ→ACT 微調整→切断 のシーケンス（GraspSequence）で行う。
-    # use_act_grasp と併用: True なら ActGraspModule を GraspSequence でラップし、
-    # 重心への IK 接近後に ACT で切断点へ寄せ、グリッパを閉じて切断する（[[SS-04/05/06]]）。
-    # False（既定）なら従来どおり ACT 単独（後方互換）。
+    # LIVE: 把持を IK 粗アプローチ→(任意)ACT 微調整→切断可否→切断 のシーケンス
+    # （GraspSequence）で行う。use_act_grasp=True と併用: ActGraspModule を
+    # GraspSequence でラップし、重心への IK 接近後に ACT で切断点へ寄せ、グリッパを
+    # 閉じて切断する（[[SS-04/05/06]]）。use_act_grasp=False と併用: ACT を挟まず、
+    # IK 到達後そのまま切断可否チェック→グリッパを閉じる（ACT無し、スクリプト式）。
+    # False（既定）なら use_act_grasp のみで従来どおり ACT 単独（後方互換）。
     use_ik_grasp_sequence: bool = False
     cut_close_q: float = 4.4   # [rad] 切断時のグリッパ閉じ位置
     blade_max_q: float = 5.2   # [rad] 刃保護の上限（機械限界 5.4 の手前）
@@ -175,7 +177,11 @@ class HarvestModule(Module):
 
     def _build_safety_checks(self) -> list[SafetyCheck]:
         """実機動作が有効な場合は §6 実機チェック; それ以外はダミーの常時安全チェック。"""
-        real_motion = self.config.use_act_grasp or self.config.use_base_move
+        # use_ik_grasp_sequence moves the arm (IK reach + cut) even with use_act_grasp=False
+        # (ACT-free mode, see run()) -- must count as real motion for §6 checks too.
+        real_motion = (
+            self.config.use_act_grasp or self.config.use_ik_grasp_sequence or self.config.use_base_move
+        )
         if not real_motion:
             return [SafetyCheck("dummy_person_clear", lambda: True)]
         from dimos.robot.unitree.g1.harvest.safety_checks import FileEStop, make_torque_check
@@ -314,7 +320,64 @@ class HarvestModule(Module):
 
             grasp_override = None
             grasp_note = "grasp=DUMMY"
-            if self.config.use_act_grasp:
+            if self.config.use_ik_grasp_sequence:
+                # IK 粗アプローチ→(ACTありなら微調整)→切断可否→切断 を1エピソードに束ねる。
+                # act_module=None（use_act_grasp=False）なら②相当: ACT を挟まず、IK到達後
+                # そのまま切断可否チェック→グリッパを閉じる（GraspSequence.run_episode参照）。
+                from dimos.robot.unitree.g1.harvest.grasp_sequence import GraspSequence
+                from dimos.robot.unitree.g1.harvest.ik_approach import IkApproachSkill
+
+                self.register_disposable(Disposable(self.motor_states.subscribe(self._on_state)))
+
+                act_module = None
+                if self.config.use_act_grasp:
+                    from dimos.robot.unitree.g1.harvest.act_grasp import ActGraspModule
+
+                    self.register_disposable(
+                        Disposable(self.cam_right_wrist.subscribe(self._on_wrist))
+                    )
+                    self.register_disposable(
+                        Disposable(self.right_gripper_state.subscribe(self._on_gripper))
+                    )
+                    act_module = ActGraspModule(
+                        image_getter=lambda: self._latest_image,
+                        wrist_getter=lambda: self._latest_wrist,  # 2カメラ / 手首単眼
+                        state_getter=lambda: self._latest_state,
+                        gripper_getter=lambda: self._latest_gripper,
+                        publish_arm=self.arm_target.publish,
+                        publish_gripper=self.gripper_target.publish,
+                        act_endpoint=self.config.act_endpoint,
+                        max_steps=self.config.grasp_max_steps,
+                        right_arm_only_7d=self.config.act_right_arm_only_7d,
+                    )
+
+                ik_skill = IkApproachSkill()
+                cam_to_torso = self._parse_cam_to_torso(self.config.cam_to_torso_xyzquat)
+
+                def _ik_solve(okra: Any) -> Any:
+                    """対象オクラの重心(pos_3d)→torso 3D→右腕 IK。解けなければ None。"""
+                    pos = getattr(okra, "pos_3d", None) or {}
+                    p = [float(pos.get("x", 0.0)), float(pos.get("y", 0.0)), float(pos.get("z", 0.0))]
+                    target_torso = cam_to_torso(p) if cam_to_torso is not None else p
+                    with self._lock:
+                        state = self._latest_state
+                    if state is None:
+                        logger.warning("[ik-grasp] no motor_states yet; cannot solve IK")
+                        return None
+                    return ik_skill.solve(target_torso, list(state.position))
+
+                # 切断可否ゲート: verify_fn（moondream）を流用。未配線なら None=常許可。
+                grasp_override = GraspSequence(
+                    ik_solve=_ik_solve,
+                    publish_arm=self.arm_target.publish,
+                    act_module=act_module,
+                    cut_ok_fn=verify_fn,
+                    publish_gripper=self.gripper_target.publish,
+                    q_close=self.config.cut_close_q,
+                    q_blade_max=self.config.blade_max_q,
+                )
+                grasp_note = "grasp=IK->ACT->cut(seq)" if act_module is not None else "grasp=IK->cut(no-ACT)"
+            elif self.config.use_act_grasp:
                 from dimos.robot.unitree.g1.harvest.act_grasp import ActGraspModule
 
                 self.register_disposable(Disposable(self.cam_right_wrist.subscribe(self._on_wrist)))
@@ -322,7 +385,7 @@ class HarvestModule(Module):
                 self.register_disposable(
                     Disposable(self.right_gripper_state.subscribe(self._on_gripper))
                 )
-                act_module = ActGraspModule(
+                grasp_override = ActGraspModule(
                     image_getter=lambda: self._latest_image,
                     wrist_getter=lambda: self._latest_wrist,  # 2カメラ / 手首単眼
                     state_getter=lambda: self._latest_state,
@@ -333,40 +396,7 @@ class HarvestModule(Module):
                     max_steps=self.config.grasp_max_steps,
                     right_arm_only_7d=self.config.act_right_arm_only_7d,
                 )
-                if self.config.use_ik_grasp_sequence:
-                    # IK 粗アプローチ→ACT 微調整→切断可否→切断 を1エピソードに束ねる。
-                    from dimos.robot.unitree.g1.harvest.grasp_sequence import GraspSequence
-                    from dimos.robot.unitree.g1.harvest.ik_approach import IkApproachSkill
-
-                    ik_skill = IkApproachSkill()
-                    cam_to_torso = self._parse_cam_to_torso(self.config.cam_to_torso_xyzquat)
-
-                    def _ik_solve(okra: Any) -> Any:
-                        """対象オクラの重心(pos_3d)→torso 3D→右腕 IK。解けなければ None。"""
-                        pos = getattr(okra, "pos_3d", None) or {}
-                        p = [float(pos.get("x", 0.0)), float(pos.get("y", 0.0)), float(pos.get("z", 0.0))]
-                        target_torso = cam_to_torso(p) if cam_to_torso is not None else p
-                        with self._lock:
-                            state = self._latest_state
-                        if state is None:
-                            logger.warning("[ik-grasp] no motor_states yet; cannot solve IK")
-                            return None
-                        return ik_skill.solve(target_torso, list(state.position))
-
-                    # 切断可否ゲート: verify_fn（moondream）を流用。未配線なら None=常許可。
-                    grasp_override = GraspSequence(
-                        ik_solve=_ik_solve,
-                        publish_arm=self.arm_target.publish,
-                        act_module=act_module,
-                        cut_ok_fn=verify_fn,
-                        publish_gripper=self.gripper_target.publish,
-                        q_close=self.config.cut_close_q,
-                        q_blade_max=self.config.blade_max_q,
-                    )
-                    grasp_note = "grasp=IK->ACT->cut(seq)"
-                else:
-                    grasp_override = act_module
-                    grasp_note = "grasp=okra-ACT(2cam)"
+                grasp_note = "grasp=okra-ACT(2cam)"
 
             skills, grasp_module = build_live_harvest_skills(
                 frame_getter=lambda: self._latest_image,

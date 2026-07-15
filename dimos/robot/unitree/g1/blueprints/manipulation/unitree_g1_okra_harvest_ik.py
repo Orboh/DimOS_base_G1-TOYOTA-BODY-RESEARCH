@@ -38,6 +38,8 @@
   # ACT_ENDPOINT    : act_service の場所（既定 tcp://127.0.0.1:5701）
   # OLLAMA_HOST     : Ollama ベース URL（空 = Jetson 既定）
   # OKRA_ARM / OKRA_WALK : "0" でアーム / 歩行を個別に無効化（段階ブリングアップ用）
+  # OKRA_ACT        : "0" で ACT 微調整を無効化（IK到達→スクリプト式グリッパ close のみ、
+  #                   ACT不要・act_serviceも不要）。既定 "1"（従来どおり IK->ACT->cut）。
 """
 
 from __future__ import annotations
@@ -61,6 +63,10 @@ _NIC = os.getenv("ROBOT_INTERFACE", "")
 # 段階ブリングアップ: アーム / 歩行を個別に無効化できる（既定は両方 ON）。
 _ARM = os.getenv("OKRA_ARM", "1").strip() != "0"
 _WALK = os.getenv("OKRA_WALK", "1").strip() != "0"
+# ACT 微調整の有無（既定 ON = 従来どおり IK->ACT->cut）。OKRA_ACT=0 で ACT を挟まず
+# IK 到達後そのまま切断可否チェック→グリッパを閉じる（②相当、スクリプト式）。
+# _ARM=0 のときは無関係（アーム自体が無効）。
+_ACT = os.getenv("OKRA_ACT", "1").strip() != "0"
 
 
 unitree_g1_okra_harvest_ik = (
@@ -78,8 +84,9 @@ unitree_g1_okra_harvest_ik = (
             use_zed_depth=True,
             yolo_model=os.getenv("OKRA_YOLO_MODEL", "Kota0612/okra-seg-detector"),
             target_classes=os.getenv("OKRA_TARGET", "okra"),
-            # --- 把持（IK → ACT → 切断 シーケンス, [[SS-04/05/06]]）---
-            use_act_grasp=_ARM,
+            # --- 把持（IK → (任意)ACT → 切断 シーケンス, [[SS-04/05/06]]）---
+            # OKRA_ACT=0 で ACT を無効化（IK到達→スクリプト式グリッパ close のみ）。
+            use_act_grasp=_ARM and _ACT,
             use_ik_grasp_sequence=_ARM,
             # ACT は手首単眼・右腕7次元（sotata/act-okura-kinesthetic-wrist-7d）。
             # act_service を ACT_REPO_ID=sotata/act-okura-kinesthetic-wrist-7d で起動すること。
