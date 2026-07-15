@@ -132,6 +132,12 @@ class HarvestConfig:
     # (Reach stays on the right — the okra-ACT arm/Dex1 is the right one.)
     advance_step: float = 0.30  # lateral step magnitude when sweeping left to discover fruit
     standoff_min: float = 0.25  # never let an okra come closer than this (ridge safety)
+    # Per-move safety cap [m]: reposition/revisit never command a single base move
+    # larger than this on either axis. A corrupted pose estimate once produced an
+    # unbounded chain of >2 m moves that walked the robot 5 m off the work area
+    # (sim, 2026-07-15); clamping per move keeps the "compute once, then verify"
+    # loop convergent — the re-detect after each bounded move corrects the rest.
+    max_move_step: float = 0.40
     max_empty_advances: int = 2  # consecutive empty left-sweeps before done (§8 N)
     max_reposition_attempts: int = 3  # base moves toward one okra before skipping it
     max_revisits: int = 5  # times to go back for left-behind okra before giving up

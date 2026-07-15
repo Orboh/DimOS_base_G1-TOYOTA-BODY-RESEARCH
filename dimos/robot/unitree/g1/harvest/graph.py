@@ -123,6 +123,11 @@ def build_harvest_graph(
             pending.pop(okra_id, None)
         return pending
 
+    def _cap_move(lateral: float, forward: float) -> tuple[float, float]:
+        """Clamp a base move to ±max_move_step per axis (see HarvestConfig)."""
+        cap = cfg.max_move_step
+        return (max(-cap, min(cap, lateral)), max(-cap, min(cap, forward)))
+
     # ---- Nodes ---------------------------------------------------------------
 
     def detect(state: HarvestState) -> HarvestState:
@@ -319,6 +324,7 @@ def build_harvest_graph(
         # Ridge safety: never command a forward move that would bring the target
         # closer than the standoff minimum.
         forward = min(forward, approach.pos_3d.get("y", 0.0) - cfg.standoff_min)
+        lateral, forward = _cap_move(lateral, forward)  # bound each move; re-detect fixes the rest
         skills.relative_move(lateral, forward)
         new_offset = _moved(state, lateral, forward)
         # Announce the dominant direction of the move (depth wins ties).
@@ -386,6 +392,7 @@ def build_harvest_graph(
         lateral = rel_x - cfg.reach.x_center
         forward = rel_y - cfg.reach.y_center
         forward = min(forward, rel_y - cfg.standoff_min)  # ridge safety
+        lateral, forward = _cap_move(lateral, forward)  # bound each move; re-detect fixes the rest
         skills.relative_move(lateral, forward)
         voice.say(announce.revisiting())
         return HarvestState(

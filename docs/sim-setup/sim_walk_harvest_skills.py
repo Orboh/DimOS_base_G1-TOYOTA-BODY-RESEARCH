@@ -155,14 +155,19 @@ class WalkHarvestSkills(SimHarvestSkills):
             if k in self._picked:
                 continue
             p = self._okra_now(k)
-            out.append(Okra(id=k, pos_3d={"x": float(p[0]), "y": float(p[1]), "z": float(p[2])},
+            # pos_3d は blackboard 規約（x=横+右, y=奥行+前）で返す（skills.py の契約）。
+            # torso 系（p[0]=前, p[1]=横+左）のまま返すと graph の move_to_center / standoff
+            # クランプが軸を取り違え、「横ズレ」を「後退指令」に変換して大移動が暴発する
+            # （2026-07-15 の 5m 徘徊の真因。開発ログ追記16）。
+            out.append(Okra(id=k, pos_3d={"x": float(-p[1]), "y": float(p[0]), "z": float(p[2])},
                             ripeness=1.0, reachable=True))
         return out
 
     def relative_move(self, lateral: float, forward: float = 0.0, yaw: float = 0.0) -> None:
-        """graph からの相対移動（lateral>0=左）。デッドバンド回避のため v=0.3 の時間パルスで実現。"""
+        """graph からの相対移動。skills.py の契約どおり **lateral>0=右**（torso vy は+左なので符号反転）。
+        デッドバンド回避のため v=0.3 の時間パルスで実現。"""
         if abs(lateral) > 0.02:
-            self._pulse(0.0, 0.3 if lateral > 0 else -0.3, abs(lateral) / 0.3, dist=abs(lateral))
+            self._pulse(0.0, -0.3 if lateral > 0 else 0.3, abs(lateral) / 0.3, dist=abs(lateral))
         if abs(forward) > 0.02:
             self._pulse(0.3 if forward > 0 else -0.3, 0.0, abs(forward) / 0.3, dist=abs(forward))
         print(f"[walk-skills] relative_move(lat={lateral:+.2f},fwd={forward:+.2f}) → base={self._base_xy()}", flush=True)

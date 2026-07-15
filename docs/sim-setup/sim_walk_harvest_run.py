@@ -32,8 +32,10 @@ def main() -> int:
     skills = WalkHarvestSkills(iface=iface, peers=peers, pick_ids=pick_ids)
 
     # reach box は広く取る（実際の到達可否は skills 内の位置合わせ歩行が担保する）。
+    # 軸は blackboard 規約（x=横±0.6, y=奥行0〜1.5）。旧値は torso 軸のまま
+    # (x=奥行, y=横) になっており、move_to_center の軸取り違えを隠していた（追記16）。
     cfg = HarvestConfig(
-        reach=Box3D(0.0, 1.5, -0.6, 0.6, -0.3, 0.3),
+        reach=Box3D(-0.6, 0.6, 0.0, 1.5, -0.3, 0.3),
         basket_capacity=99,
         max_empty_advances=0,
         ripeness_threshold=0.5,
