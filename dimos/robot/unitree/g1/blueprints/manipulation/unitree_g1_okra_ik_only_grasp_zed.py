@@ -62,6 +62,12 @@ SAFETY (fail-safe by default, same convention as the rest of dimos/):
   write rt/arm_sdk. Absence of the env var is NEVER interpreted as live.
 - ``close_q`` (OKRA_NOACT_CLOSE_Q) has NO known-good value -- untuned Dex1
   motor position. Tune on hardware before a LIVE grasp attempt.
+- Blade guard: ``G1GripperConnection`` clamps the commanded position to
+  ``OKRA_BLADE_MAX_Q`` (default 5.2 rad, mechanical limit ~5.4 rad) so a
+  mistuned/oversized ``close_q`` cannot over-close the Dex1 blade. Same
+  value/convention as ``grasp_sequence.py``'s BladeGuard (YOLO harvest
+  pipeline); this blueprint has no ``GraspSequence`` so it is applied here
+  instead.
 - LIVE runs require a physical e-stop in hand and clear space around the arm.
 
 Run (manual): dimos run unitree-g1-okra-ik-only-grasp-zed   (env vars below)
@@ -129,6 +135,14 @@ _GRIP_LIVE = os.getenv("OKRA_NOACT_GRIP_LIVE", "").strip() == "1"
 
 # ZED depth mode: NEURAL (fewer holes, GPU-heavier) or PERFORMANCE (lighter).
 _ZED_DEPTH_MODE = os.getenv("ZED_DEPTH_MODE", "NEURAL")
+
+# Blade-guard clamp: cap the commanded gripper position so the Dex1 blade never
+# over-closes past its mechanical limit (~5.4 rad). Same value/convention as
+# grasp_sequence.py's BladeGuard (larger q = MORE closed) used by the YOLO
+# harvest pipeline -- this blueprint has no GraspSequence, so the equivalent
+# protection is applied here via G1GripperConnection's own clamp (disabled by
+# default elsewhere in the repo).
+_BLADE_MAX_Q = float(os.getenv("OKRA_BLADE_MAX_Q", "5.2"))
 
 
 def _parse_xyz_or_empty(spec: str) -> list[float]:
@@ -256,6 +270,8 @@ unitree_g1_okra_ik_only_grasp_zed = autoconnect(
     ),
     G1GripperConnection.blueprint(
         network_interface=_NIC,
+        clamp_enabled=True,
+        q_max=_BLADE_MAX_Q,
     ),
 ).transports(
     {
