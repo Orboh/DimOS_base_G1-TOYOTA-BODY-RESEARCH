@@ -81,17 +81,26 @@ _D435_RPY = np.array([0.0, 0.8307767239493009, 0.0])
 _OPTICAL_WXYZ = (0.5, -0.5, 0.5, -0.5)
 
 
-def _default_torso_from_optical() -> pinocchio.SE3:
-    """Static SE3 torso_link <- camera_color_optical_frame (finalize in R1).
+def _torso_from_optical(camera_xyz: np.ndarray, camera_rpy: np.ndarray) -> pinocchio.SE3:
+    """Static SE3 torso_link <- camera_color_optical_frame, for an arbitrary rigid
+    camera mount ``camera_xyz``/``camera_rpy`` (torso_link -> camera_link, URDF fixed-
+    joint convention: meters, radians, applied as ``rpyToMatrix`` then translation).
 
-    Composition: torso->d435_link (URDF d435_joint) then d435_link->color_optical
-    (REP-103 optical rotation). The small color-vs-depth baseline is ignored; R1
-    must confirm the actual click frame and pin the exact transform.
+    Composition: torso->camera_link (the mount) then camera_link->color_optical
+    (fixed REP-103 optical rotation, same for any camera using this convention).
     """
-    t_torso_d435 = pinocchio.SE3(pinocchio.rpy.rpyToMatrix(*_D435_RPY), _D435_XYZ.copy())
+    t_torso_cam = pinocchio.SE3(pinocchio.rpy.rpyToMatrix(*camera_rpy), camera_xyz.copy())
     r_opt = pinocchio.Quaternion(*_OPTICAL_WXYZ).toRotationMatrix()
-    t_d435_optical = pinocchio.SE3(r_opt, np.zeros(3))
-    return t_torso_d435 * t_d435_optical
+    t_cam_optical = pinocchio.SE3(r_opt, np.zeros(3))
+    return t_torso_cam * t_cam_optical
+
+
+def _default_torso_from_optical() -> pinocchio.SE3:
+    """Static SE3 torso_link <- camera_color_optical_frame for the head D435i
+    (finalize in R1). The small color-vs-depth baseline is ignored; R1 must
+    confirm the actual click frame and pin the exact transform.
+    """
+    return _torso_from_optical(_D435_XYZ, _D435_RPY)
 
 
 class IkReachBridgeConfig(ModuleConfig):
@@ -116,6 +125,15 @@ class IkReachBridgeConfig(ModuleConfig):
     # the rubber hand pointed). Verify/fine-tune from the live CALIB log (hand_tip torso pos
     # vs the real okra). A cutting attachment, if fitted, extends this further. Load-time.
     gripper_offset_xyz: list[float] = [0.1845, -0.003, 0.0]
+    # Camera mount override, for a rigidly-mounted camera OTHER than the head D435i
+    # this module was originally calibrated for (e.g. a chest-mounted camera).
+    # torso_link -> camera_link, URDF fixed-joint convention: xyz [m], rpy [rad]
+    # (same shape as _D435_XYZ/_D435_RPY above). Both must be set (3 values each) to
+    # take effect; otherwise falls back to the built-in D435i/head extrinsic
+    # (_default_torso_from_optical(), unchanged behaviour). NO known-good value for
+    # any non-head mount ships with this repo -- measure on hardware before LIVE.
+    camera_xyz: list[float] = []
+    camera_rpy: list[float] = []
     # Handoff standoff [m] along TORSO -X only (Y,Z of the clicked okra preserved).
     # The tip is driven to (click_x - standoff_m, click_y, click_z), leaving a pre-grasp
     # pose ACT closes by advancing +X (design: ① IK reach → handoff → ② ACT grasp).
@@ -206,7 +224,12 @@ class IkReachBridge(Module):
                 "RIGHT_ARM_JOINTS; the index mapping would be silently wrong. "
                 "Implement an explicit permutation before using this bridge."
             )
-        self._T_torso_click = _default_torso_from_optical()
+        if len(self.config.camera_xyz) == 3 and len(self.config.camera_rpy) == 3:
+            self._T_torso_click = _torso_from_optical(
+                np.array(self.config.camera_xyz), np.array(self.config.camera_rpy)
+            )
+        else:
+            self._T_torso_click = _default_torso_from_optical()
         self._lock = threading.Lock()
         self._latest_state: JointState | None = None
         self._pending_click: PointStamped | None = None
