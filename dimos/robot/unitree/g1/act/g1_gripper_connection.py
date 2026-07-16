@@ -73,6 +73,14 @@ class G1GripperConnectionConfig(ModuleConfig):
     q_min: float = 0.0
     q_max: float = 9.0
     frame_id: str = "g1_right_gripper"
+    # DDS topic prefix for the Dex1 service ("<prefix>/cmd" + "<prefix>/state").
+    # Default = the standard right-hand service. Override when the PHYSICALLY
+    # right-mounted Dex1 enumerates under the left service (e.g. its data cable
+    # is plugged into the left-hand port — observed 2026-07-16: hand on the right
+    # wrist, but only rt/dex1/left/state publishing): set "rt/dex1/left". This
+    # only renames the wire topics — the module still represents the RIGHT
+    # gripper (streams/frame_id unchanged).
+    dex1_topic_prefix: str = "rt/dex1/right"
     # DRY-RUN: when False, the loop still reads rt/dex1/right/state and publishes
     # right_gripper_state, but writes NOTHING to rt/dex1/right/cmd — the gripper
     # does not move. Used by the dry-run blueprint.
@@ -118,11 +126,12 @@ class G1GripperConnection(Module):
         # Serialise unitree DDS channel creation vs sibling DDS modules (arm_sdk):
         # concurrent cyclonedds type registration raises "Failed to encode union
         # ... DDS.XTypes.TypeObject".
+        prefix = self.config.dex1_topic_prefix
         with channel_lock:
             ensure_channel_factory(self.config.network_interface)
-            self._publisher = ChannelPublisher("rt/dex1/right/cmd", MotorCmds_)
+            self._publisher = ChannelPublisher(f"{prefix}/cmd", MotorCmds_)
             self._publisher.Init()
-            self._subscriber = ChannelSubscriber("rt/dex1/right/state", MotorStates_)
+            self._subscriber = ChannelSubscriber(f"{prefix}/state", MotorStates_)
             self._subscriber.Init(self._on_state, 10)
 
         # Single-motor gripper command, soft gains (kp=5/kd=0.05).
@@ -134,7 +143,7 @@ class G1GripperConnection(Module):
         self._cmd_msg.cmds[0].kd = self.config.kd
 
         # Wait for the first measured state so we can hold the current position.
-        logger.info("Waiting for first rt/dex1/right/state...")
+        logger.info(f"Waiting for first {prefix}/state...")
         t0 = time.time()
         while time.time() - t0 < _STATE_WAIT_S:
             with self._lock:
@@ -144,8 +153,8 @@ class G1GripperConnection(Module):
         with self._lock:
             if self._measured_q is None:
                 raise RuntimeError(
-                    "No rt/dex1/right/state received; cannot start gripper safely "
-                    "(is the right Dex1 connected and teleimager/robot publishing?)"
+                    f"No {prefix}/state received; cannot start gripper safely "
+                    "(is the Dex1 connected and teleimager/robot publishing?)"
                 )
             self._target_q = self._measured_q  # hold current position until ACT sends a target
             if self.config.hold_target_q is not None:

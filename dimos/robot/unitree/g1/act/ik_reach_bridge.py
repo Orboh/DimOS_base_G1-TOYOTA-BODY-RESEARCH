@@ -81,23 +81,52 @@ _D435_RPY = np.array([0.0, 0.8307767239493009, 0.0])
 _OPTICAL_WXYZ = (0.5, -0.5, 0.5, -0.5)
 
 
-def _default_torso_from_optical() -> pinocchio.SE3:
-    """Static SE3 torso_link <- camera_color_optical_frame (finalize in R1).
+def _torso_from_optical(xyz: Any, rpy: Any) -> pinocchio.SE3:
+    """Static SE3 torso_link <- camera_color_optical_frame for a rigid camera mount.
 
-    Composition: torso->d435_link (URDF d435_joint) then d435_link->color_optical
-    (REP-103 optical rotation). The small color-vs-depth baseline is ignored; R1
-    must confirm the actual click frame and pin the exact transform.
+    Composition: torso->camera_mount (xyz+rpy, URDF convention: +X fwd, +Y left,
+    +Z up, positive pitch = camera nose down) then camera_mount->color_optical
+    (REP-103 optical rotation — camera-model independent). The small
+    color-vs-depth baseline is ignored.
     """
-    t_torso_d435 = pinocchio.SE3(pinocchio.rpy.rpyToMatrix(*_D435_RPY), _D435_XYZ.copy())
+    t_torso_mount = pinocchio.SE3(
+        pinocchio.rpy.rpyToMatrix(*np.asarray(rpy, dtype=float)),
+        np.asarray(xyz, dtype=float).copy(),
+    )
     r_opt = pinocchio.Quaternion(*_OPTICAL_WXYZ).toRotationMatrix()
-    t_d435_optical = pinocchio.SE3(r_opt, np.zeros(3))
-    return t_torso_d435 * t_d435_optical
+    t_mount_optical = pinocchio.SE3(r_opt, np.zeros(3))
+    return t_torso_mount * t_mount_optical
+
+
+def _default_torso_from_optical() -> pinocchio.SE3:
+    """Static SE3 torso_link <- color_optical for the HEAD D435i (URDF d435_joint)."""
+    return _torso_from_optical(_D435_XYZ, _D435_RPY)
 
 
 class IkReachBridgeConfig(ModuleConfig):
     urdf_path: str = str(DEFAULT_URDF)
     # DRY-RUN safe default: log the target, publish nothing. Set False to drive arm_sdk.
     log_only: bool = True
+    # Camera mount pose torso_link <- camera_mount as [x, y, z, roll, pitch, yaw]
+    # ([m], [rad]; URDF convention: +X fwd, +Y left, +Z up, positive pitch = camera
+    # nose down). Describes the camera BODY placement — the REP-103 optical rotation
+    # is composed internally, same as the D435i path. Empty (default) = the head
+    # D435i URDF constants (_D435_XYZ/_D435_RPY), preserving existing behavior for
+    # every current blueprint. Set this when the click source is a DIFFERENT,
+    # rigidly-mounted camera (e.g. the chest ZED Mini).
+    camera_mount_xyzrpy: list[float] = []
+    # Frame convention of the INCOMING click coordinates. False (default): clicks are
+    # raw optical-frame points (X=image right, Y=image down, Z=depth) — true for the
+    # D435i pipeline, whose Jetson publisher sends no TF, so the viewer returns the
+    # cloud's raw coordinates. True: clicks arrive already rotated into the camera
+    # BODY frame (X fwd, Y left, Z up at the camera mount) — true when the camera
+    # module (e.g. in-process ZEDCamera) publishes TF: the Rerun viewer parents the
+    # cloud under the optical TF chain and resolves click positions into that root,
+    # applying the optical rotation BEFORE we see the point (verified empirically
+    # 2026-07-16: a point 40cm in front of the ZED clicked as [0.374,-0.006,0.002]).
+    # With True, the optical rotation must NOT be composed again (it would be
+    # double-applied) — the mount xyz+rpy alone maps click -> torso.
+    click_in_camera_body_frame: bool = False
     # Reach target shaping (torso_link frame).
     approach_offset_xyz: list[float] = [0.0, 0.0, 0.0]  # +X fwd, +Y left, +Z up [m]
     # Gripper-tip offset from the wrist (right_wrist_yaw_joint), in the WRIST/EE frame
@@ -206,7 +235,30 @@ class IkReachBridge(Module):
                 "RIGHT_ARM_JOINTS; the index mapping would be silently wrong. "
                 "Implement an explicit permutation before using this bridge."
             )
-        self._T_torso_click = _default_torso_from_optical()
+        mount = self.config.camera_mount_xyzrpy
+        if mount:
+            # FAIL CLOSED: a malformed mount would silently mis-transform every click.
+            if len(mount) != 6 or not np.all(np.isfinite(np.asarray(mount, dtype=float))):
+                raise ValueError(
+                    f"camera_mount_xyzrpy must be 6 finite floats [x,y,z,roll,pitch,yaw], "
+                    f"got {mount!r}"
+                )
+            if self.config.click_in_camera_body_frame:
+                # Clicks already rotated to the camera BODY frame by the viewer's TF
+                # resolution (see config docstring): mount xyz+rpy alone, NO optical.
+                self._T_torso_click = pinocchio.SE3(
+                    pinocchio.rpy.rpyToMatrix(*np.asarray(mount[3:], dtype=float)),
+                    np.asarray(mount[:3], dtype=float),
+                )
+            else:
+                self._T_torso_click = _torso_from_optical(mount[:3], mount[3:])
+        elif self.config.click_in_camera_body_frame:
+            raise ValueError(
+                "click_in_camera_body_frame=True requires camera_mount_xyzrpy (the "
+                "D435i default constants are optical-frame only)."
+            )
+        else:
+            self._T_torso_click = _default_torso_from_optical()
         self._lock = threading.Lock()
         self._latest_state: JointState | None = None
         self._pending_click: PointStamped | None = None
@@ -236,6 +288,7 @@ class IkReachBridge(Module):
             log_only=self.config.log_only,
             ee_joint_id=self._arm.ee_joint_id,
             approach_offset=self.config.approach_offset_xyz,
+            camera_mount=self.config.camera_mount_xyzrpy or "default (head D435i)",
         )
 
     @rpc
