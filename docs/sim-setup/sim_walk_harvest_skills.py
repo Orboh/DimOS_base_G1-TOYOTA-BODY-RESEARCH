@@ -172,13 +172,17 @@ class WalkHarvestSkills(SimHarvestSkills):
             self._pulse(0.3 if forward > 0 else -0.3, 0.0, abs(forward) / 0.3, dist=abs(forward))
         print(f"[walk-skills] relative_move(lat={lateral:+.2f},fwd={forward:+.2f}) → base={self._base_xy()}", flush=True)
 
-    def _align_to(self, oid: str, max_moves: int = 12) -> np.ndarray:
+    def _align_to(self, oid: str, max_moves: int | None = None) -> np.ndarray:
         """対象オクラをスイートスポットへ（前後 vx / 横 vy の1歩パルスで位置合わせ）。
 
         max_moves=12: 骨盤ピン後は歩けない（半歩前進も無効）ので、ピン前の align で
         腕の到達域（x 窓 0.28-0.33 = gap が届く最遠）まで**接近し切る**必要がある。歩数を
         削りすぎると x が届かず「オクラが指の股に入らない＝なぞる」になる（実測）。
+        SIM_WALK_ALIGN_MOVES で上限を可変（横に離れた okra は 12 手で横収束し切れず
+        「打ち切り」→サーボ開始幾何が悪化する現象への対策。2026-07-16 追記28）。
         """
+        if max_moves is None:
+            max_moves = int(os.getenv("SIM_WALK_ALIGN_MOVES", "12"))
         for _ in range(max_moves):
             p = self._okra_now(oid)
             bx = self._base_pose()[0]  # bridge 実測 base_x（ground truth・壊れていない数字）
@@ -237,11 +241,24 @@ class WalkHarvestSkills(SimHarvestSkills):
 
         # 0) 事前挙手（第11知見: 静止リーチのクリープ回避。机より上・前方）
         pre = np.array([0.40, -0.16, 0.20])
-        r0 = self._ik.solve(pre, [0.0] * 29)
-        if r0 is not None:
-            self._ramp(list(r0.arm14), 2.0, grip_q=0.0, weight_to=1.0)
-        # A) 位置合わせ歩行（挙手のまま歩く。ここは歩くので凍結しない）
-        print(f"[walk-skills] GRASP okra{okra.id}: 位置合わせ歩行", flush=True)
+        # 動作分離（B①, 2026-07-17 追記33）: SIM_WALK_ARM_AFTER_PIN=1 で「挙手を骨盤ピンの後」に回す。
+        # 従来は挙手→腕前方のまま align 歩行で policy が T2（腕前方は訓練分布外→傾く）を毎回踏んでいた。
+        # align 中は腕を下げ姿勢に上書き（重心移動小＝policyへの外乱小＝傾き回避）→ピン→挙手 の順にする。
+        arm_after_pin = os.getenv("SIM_WALK_ARM_AFTER_PIN", "0") == "1"
+        if arm_after_pin:
+            # align 用の下げ姿勢（体近く・低め。前方に出さない）。IK 解けなければ現姿勢のまま。
+            down = np.array([float(os.getenv("SIM_WALK_ARM_DOWN_X", "0.18")), -0.16,
+                             float(os.getenv("SIM_WALK_ARM_DOWN_Z", "-0.12"))])
+            rd = self._ik.solve(down, [0.0] * 29)
+            if rd is not None:
+                self._ramp(list(rd.arm14), 1.5, grip_q=0.0, weight_to=1.0)
+            print(f"[walk-skills] GRASP okra{okra.id}: 位置合わせ歩行（腕下げ・挙手はピン後）", flush=True)
+        else:
+            r0 = self._ik.solve(pre, [0.0] * 29)
+            if r0 is not None:
+                self._ramp(list(r0.arm14), 2.0, grip_q=0.0, weight_to=1.0)
+            print(f"[walk-skills] GRASP okra{okra.id}: 位置合わせ歩行", flush=True)
+        # A) 位置合わせ歩行（下げ or 挙手のまま歩く。ここは歩くので凍結しない）
         p = self._align_to(okra.id)
 
         # 位置合わせ後の把持工程（reach→servo→close→lift）。
@@ -253,6 +270,11 @@ class WalkHarvestSkills(SimHarvestSkills):
         if held:
             self._freeze_legs()
         try:
+            # 動作分離: ピンの後に挙手（ここで初めて腕を前へ。policy は既に凍結＝傾かない）
+            if arm_after_pin:
+                r0 = self._ik.solve(pre, [0.0] * 29)
+                if r0 is not None:
+                    self._ramp(list(r0.arm14), 1.5, grip_q=0.0, weight_to=1.0)
             # B) リーチ（実測式: x+X_TIP cap / z+Z_COMP）
             tgt = np.array([min(p[0] + X_TIP, X_CMD_MAX), p[1] + 0.013, p[2] + Z_COMP])
             r = self._ik.solve(tgt, [0.0] * 29)
