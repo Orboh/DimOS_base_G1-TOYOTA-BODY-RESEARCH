@@ -321,10 +321,16 @@ class WalkHarvestSkills(SimHarvestSkills):
             finally:
                 if not held:
                     self._unfreeze_legs()
-            lift = np.array([tgt[0] - 0.05, tgt[1], tgt[2] + 0.18])
+            # lift 軌道: 従来は持ち上げと同時に x を 5cm 手前へ引いていた（tgt[0]-0.05）。この後ろ引きが
+            # 指の間からオクラをせん断で抜く「滑り型」失敗の疑い（指DOF ~0.019 で挟んでいるのに lift 中に
+            # 抜ける、2026-07-15 追記15）。後ろ引き量 SIM_WALK_LIFT_BACK（既定 0.05）と上げ量
+            # SIM_WALK_LIFT_UP（既定 0.18）を knob 化。まっすぐ上（BACK=0）でせん断仮説を検証できる。
+            lift_back = float(os.getenv("SIM_WALK_LIFT_BACK", "0.05"))
+            lift_up = float(os.getenv("SIM_WALK_LIFT_UP", "0.18"))
+            lift = np.array([tgt[0] - lift_back, tgt[1], tgt[2] + lift_up])
             r_l = self._ik.solve(lift, [0.0] * 29)
             if r_l is not None:
-                self._ramp(list(r_l.arm14), 2.0, grip_q=_Q_CLOSE)
+                self._ramp(list(r_l.arm14), float(os.getenv("SIM_WALK_LIFT_RAMP", "2.0")), grip_q=_Q_CLOSE)
             self._hold(0.8, grip_q=_Q_CLOSE)
             okz = self._blog.okra_z_max()
             self._last_grasp_ok = okz > 0.82
