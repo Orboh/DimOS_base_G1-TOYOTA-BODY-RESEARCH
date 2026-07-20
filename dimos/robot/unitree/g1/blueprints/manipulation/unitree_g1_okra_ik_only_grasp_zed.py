@@ -79,6 +79,17 @@ _CLOSE_Q = float(os.getenv("OKRA_NOACT_CLOSE_Q", "0.0"))
 _DEBOUNCE_S = float(os.getenv("OKRA_NOACT_DEBOUNCE_S", "3.0"))
 _GRIP_LIVE = os.getenv("OKRA_NOACT_GRIP_LIVE", "").strip() == "1"
 
+# Standard pre-grasp opening (raw Dex1 q): every click first restores this
+# opening if the gripper is more closed (previous cycle's basket release /
+# crash / manual state). Rationale (Oda 2026-07-17): the separately-developed
+# basket-place motion (SS-06 F-07) ends by opening the gripper, so cycle-start
+# state varies — standardizing it makes closes reproducible. Default 3.0 =
+# the proven "okra fits" opening; revisit after the cutter open/close range
+# calibration (gripper_range_probe.py). Set empty (OKRA_OPEN_Q="") to disable
+# and return to the manual-open workflow.
+_OPEN_Q_RAW = os.getenv("OKRA_OPEN_Q", "3.0").strip()
+_OPEN_Q = float(_OPEN_Q_RAW) if _OPEN_Q_RAW else None
+
 # No physical Dex1 attached (e.g. hand removed for a reach-only test): skip the
 # gripper modules entirely. Without this, G1GripperConnection fail-safe-refuses
 # to start (no rt/dex1/right/state) and tears the whole app down. Reach-only:
@@ -119,6 +130,20 @@ _DEPTH_TRUNC = float(os.getenv("ZED_DEPTH_TRUNC", "0.8"))
 _ZED_MOUNT = [
     float(v)
     for v in os.getenv("ZED_MOUNT_XYZRPY", "0.109,0.030,0.248,0.0,-0.0209,0.0").split(",")
+]
+
+# Tool-tip offset from the wrist (right_wrist_yaw_joint), WRIST frame [m] —
+# the point IK drives onto the clicked target (IkReachBridgeConfig.
+# gripper_offset_xyz). Default = bare Dex1 fingertip [0.1845, -0.003, 0].
+# With the CUTTER attached, the cutting notch sits FURTHER OUT (+x) and
+# LATERALLY OFF the finger centerline (y) — the 2026-07-17 farm run showed a
+# 2-3cm lateral miss that appeared only after mounting the cutter. Measure the
+# notch relative to the bare fingertip and set e.g.
+# OKRA_TIP_OFFSET_XYZ="0.21,-0.03,0" (sign of y: verify with one reach, flip
+# if the miss doubles).
+_TIP_OFFSET = [
+    float(v)
+    for v in os.getenv("OKRA_TIP_OFFSET_XYZ", "0.1845,-0.003,0.0").split(",")
 ]
 
 
@@ -213,6 +238,7 @@ _MODULES = [
         fire_reach_done=True,
         approach_offset_xyz=[0.0, 0.0, _TARGET_Z_OFFSET - _CUT_BELOW_CENTROID_M],
         standoff_m=_STANDOFF_M,
+        gripper_offset_xyz=_TIP_OFFSET,  # bare Dex1 default; override for the cutter
         # Chest-ZED mount override (torso <- camera body).
         camera_mount_xyzrpy=_ZED_MOUNT,
         # In-process ZEDCamera publishes TF, so the viewer resolves clicks into the
@@ -236,6 +262,7 @@ if not _NO_GRIPPER:
             close_q=_CLOSE_Q,
             debounce_s=_DEBOUNCE_S,
             dry_run=not (_LIVE and _GRIP_LIVE),
+            open_q=_OPEN_Q,  # standardize the opening on every click (None = off)
         ),
         G1GripperConnection.blueprint(
             network_interface=_NIC,
@@ -255,6 +282,8 @@ unitree_g1_okra_ik_only_grasp_zed = autoconnect(*_MODULES).transports(
         ("motor_states", JointState): LCMTransport("/g1/motor_states", JointState),
         ("arm_target", JointState): LCMTransport("/g1/arm_target", JointState),
         ("gripper_target", JointState): LCMTransport("/g1/gripper_target", JointState),
+        # measured Dex1 q -> GripperGraspOnReach's open-standardization check
+        ("right_gripper_state", JointState): LCMTransport("/g1/right_gripper_state", JointState),
         ("reach_done", Bool): LCMTransport("/g1/reach_done", Bool),
         ("okra_target", PointStamped): LCMTransport("/g1/okra_target", PointStamped),
         ("disconnect", Bool): LCMTransport("/g1/arm_sdk_disconnect", Bool),

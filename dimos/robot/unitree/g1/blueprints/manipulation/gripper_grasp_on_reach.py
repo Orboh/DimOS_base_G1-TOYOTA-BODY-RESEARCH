@@ -46,6 +46,7 @@ from reactivex.disposable import Disposable
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
+from dimos.msgs.geometry_msgs.PointStamped import PointStamped
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.msgs.std_msgs.Bool import Bool
 from dimos.utils.logging_config import setup_logger
@@ -68,6 +69,17 @@ class GripperGraspOnReachConfig(ModuleConfig):
     debounce_s: float = 3.0
     # DRY-RUN (default): log the would-be gripper_target, publish nothing.
     dry_run: bool = True
+    # Standard pre-grasp OPEN position (raw Dex1 q). If set, every accepted click
+    # checks the measured gripper q and, when it is more closed than
+    # (open_q - open_tolerance), publishes open_q BEFORE the arm arrives -- so
+    # each grasp cycle starts from the same opening regardless of what the
+    # previous cycle (basket release / crash / manual fiddling) left behind.
+    # None (default) = feature off, preserving the original manual-open workflow.
+    # NOTE: an accepted click while HOLDING an okra will open and drop it -- by
+    # design (a click means "start a new cycle"); the basket-place motion (SS-06
+    # F-07, developed separately) is responsible for releases between cycles.
+    open_q: float | None = None
+    open_tolerance: float = 0.3
 
 
 class GripperGraspOnReach(Module):
@@ -76,27 +88,76 @@ class GripperGraspOnReach(Module):
     config: GripperGraspOnReachConfig
 
     reach_done: In[Bool]              # IK settled at pre-grasp -> close now
+    clicked_point: In[PointStamped]   # new cycle trigger: ensure standard opening
+    right_gripper_state: In[JointState]  # measured Dex1 q (from G1GripperConnection)
     gripper_target: Out[JointState]   # right Dex1 target q (position[0])
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._lock = threading.Lock()
         self._cooldown_until = 0.0
+        self._measured_q: float | None = None
 
     @rpc
     def start(self) -> None:
         super().start()
         self.register_disposable(Disposable(self.reach_done.subscribe(self._on_reach_done)))
+        if self.config.open_q is not None:
+            self.register_disposable(Disposable(self.clicked_point.subscribe(self._on_click)))
+            self.register_disposable(
+                Disposable(self.right_gripper_state.subscribe(self._on_gripper_state))
+            )
         logger.warning(
             f"GripperGraspOnReach started: close_q={self.config.close_q:.3f} is a SCRIPTED, "
             f"UNTUNED value (no learned policy) -- tune via OKRA_NOACT_CLOSE_Q on hardware "
             f"before trusting a LIVE grasp. dry_run={self.config.dry_run}, "
-            f"debounce_s={self.config.debounce_s}."
+            f"debounce_s={self.config.debounce_s}, "
+            f"open_q={'OFF' if self.config.open_q is None else self.config.open_q}."
         )
 
     @rpc
     def stop(self) -> None:
         super().stop()
+
+    def _on_gripper_state(self, msg: JointState) -> None:
+        pos = list(msg.position)
+        if pos:
+            with self._lock:
+                self._measured_q = float(pos[0])
+
+    def _on_click(self, _msg: PointStamped) -> None:
+        """Standardize the opening at the start of each cycle (open_q set only).
+
+        Fires on the raw click (before IkReachBridge validates it) -- opening on
+        a click that later gets rejected is harmless, it just restores the
+        standard pre-grasp opening. The gripper opens while the arm is still
+        slewing, so this adds no cycle time.
+        """
+        open_q = self.config.open_q
+        if open_q is None:
+            return
+        with self._lock:
+            q = self._measured_q
+        if q is not None and q >= open_q - self.config.open_tolerance:
+            return  # already at (or beyond) the standard opening
+        if self.config.dry_run:
+            logger.info(
+                f"GripperGraspOnReach: [DRY-RUN] click -> would open gripper to "
+                f"q={open_q:.3f} (measured {q if q is not None else 'unknown'})."
+            )
+            return
+        logger.info(
+            f"GripperGraspOnReach: click -> opening gripper to q={open_q:.3f} "
+            f"(measured {f'{q:.3f}' if q is not None else 'unknown'}; standard pre-grasp opening)."
+        )
+        self.gripper_target.publish(
+            JointState(
+                name=[_RIGHT_GRIPPER_JOINT],
+                position=[open_q],
+                velocity=[0.0],
+                effort=[0.0],
+            )
+        )
 
     def _on_reach_done(self, msg: Bool) -> None:
         if not msg.data:
