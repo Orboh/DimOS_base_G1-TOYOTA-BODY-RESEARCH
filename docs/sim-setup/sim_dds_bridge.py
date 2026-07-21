@@ -1044,6 +1044,12 @@ def main() -> None:
                         _hp, _hq = robot.get_world_pose()
                         _hold_pose = (np.asarray(_hp, dtype=float).reshape(-1).copy(),
                                       np.asarray(_hq, dtype=float).reshape(-1).copy())
+                        # crouch: ピン z を SIM_WALK_HOLD_CROUCH[m] 下げた高さを目標に、毎tick少しずつ降ろす。
+                        # 骨盤（肩）を下げてワークスペースごと下げ、腕を伸ばし切らずにオクラ高さへ届かせる
+                        # （B①で上体は真っ直ぐでも、立位高ピンだと手がオクラ 4-7cm 上で頭打ち＝追記34の残り壁）。
+                        _crouch_tgt_z = float(_hold_pose[0][2]) - float(os.getenv("SIM_WALK_HOLD_CROUCH", "0.0"))
+                    if _hold_pose[0][2] > _crouch_tgt_z:  # テレポート回避で 3mm/tick ランプダウン
+                        _hold_pose[0][2] = max(_crouch_tgt_z, float(_hold_pose[0][2]) - 0.003)
                     try:
                         robot.set_world_pose(position=_hold_pose[0], orientation=_hold_pose[1])
                         robot.set_linear_velocity(np.zeros(3, dtype=float))
