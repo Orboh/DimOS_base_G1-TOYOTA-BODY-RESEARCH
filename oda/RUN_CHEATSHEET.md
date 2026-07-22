@@ -48,7 +48,7 @@ OKRA_NOACT_CLOSE_Q=1.7 \
 OKRA_GRIP_KP=20 \
 OKRA_NOACT_KP_ARM=160 OKRA_NOACT_KD_ARM=6.0 \
 OKRA_OPEN_Q=3.7 \
-OKRA_TIP_OFFSET_XYZ="0.2245,-0.023,0" \
+OKRA_TIP_OFFSET_XYZ="0.25,-0.003,0" \
 OKRA_APPROACH_ABOVE_M=0.08 \
 bash oda/start_okra_ik_only_grasp.sh --live
 ```
@@ -67,7 +67,7 @@ OKRA_NOACT_CLOSE_Q=1.7 \
 OKRA_GRIP_KP=20 \
 OKRA_NOACT_KP_ARM=160 OKRA_NOACT_KD_ARM=6.0 \
 OKRA_OPEN_Q=3.7 \
-OKRA_TIP_OFFSET_XYZ="0.2245,-0.003,0" \
+OKRA_TIP_OFFSET_XYZ="0.25,-0.003,0" \
 bash oda/start_okra_ik_only_grasp.sh --live
 ```
 - ※工具オフセットのyが**1-Aと違う**ことに注意：`-0.023`は上から降りる姿勢用の暫定校正、
@@ -91,7 +91,7 @@ OKRA_NOACT_KP_ARM=160 OKRA_NOACT_KD_ARM=6.0 \
 IK_REACH_LIVE=1 OKRA_NOACT_GRIP_LIVE=1 \
 OKRA_GRIP_KP=20 OKRA_NOACT_CLOSE_Q=1.7 \
 OKRA_OPEN_Q=3.7 \
-OKRA_TIP_OFFSET_XYZ="0.2245,-0.023,0" \
+OKRA_TIP_OFFSET_XYZ="0.25,-0.003,0" \
 OKRA_APPROACH_ABOVE_M=0.08 \
 .venv/bin/dimos run unitree-g1-okra-ik-only-grasp-zed
 ```
@@ -124,7 +124,7 @@ OKRA_NOACT_STANDOFF_M=0.05 \
 | `OKRA_NOACT_CLOSE_Q` | 切り閉じ位置 | 1.7（刃全閉1.8−0.1） | 0.0＝1.8rad過剰押し込み注意 |
 | `OKRA_GRIP_KP` | 閉じ力（力≒kp×残差） | 20（切断実績値） | 5.0＝弱い保持 |
 | `OKRA_OPEN_Q` | クリック毎の自動開き幅 | 3.7（全開3.85の手前） | 3.0標準開き / `""`で自動開き無効 |
-| `OKRA_TIP_OFFSET_XYZ` | 刃の工具オフセット(手首系) | `"0.2245,-0.023,0"`※ | 素のDex1(18.45cm)＝4cm奥に刺さる |
+| `OKRA_TIP_OFFSET_XYZ` | 刃の工具オフセット(手首系) | `"0.25,-0.003,0"`※(7/22再製作個体・暫定、7/23朝に校正) | 素のDex1(18.45cm)＝4cm奥に刺さる |
 | `OKRA_APPROACH_ABOVE_M` | 上からアプローチ(コの字軌道) | 0.08（株が高ければ0.12） | **消す＝従来の直行リーチ** |
 | `OKRA_TARGET_Z_OFFSET` | クリック点からの上オフセット | （なし＝0、クリック点直狙い） | 0.05で旧「+5cm上」に戻る |
 | `OKRA_CUT_BELOW_CENTROID_M` | クリック点の下を狙う | 必要時のみ（0.03=3cm下） | 0 |
