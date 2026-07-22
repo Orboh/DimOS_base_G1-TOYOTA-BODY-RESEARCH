@@ -72,9 +72,29 @@ _LIVE = os.getenv("IK_REACH_LIVE", "").strip() == "1"
 _ARM_VEL_LIMIT = float(os.getenv("IK_ARM_VEL_LIMIT", "20.0"))
 _KP_ARM = float(os.getenv("OKRA_NOACT_KP_ARM", "80.0"))
 _KD_ARM = float(os.getenv("OKRA_NOACT_KD_ARM", "3.0"))
-_TARGET_Z_OFFSET = float(os.getenv("OKRA_TARGET_Z_OFFSET", "0.05"))
+# 2026-07-21 (Oda): default 0.0 = aim EXACTLY at the clicked point (was 0.05 =
+# +5cm above the click; restore via OKRA_TARGET_Z_OFFSET=0.05). "N cm below the
+# click" = OKRA_CUT_BELOW_CENTROID_M. Kept in sync with the D435i blueprint.
+_TARGET_Z_OFFSET = float(os.getenv("OKRA_TARGET_Z_OFFSET", "0.0"))
 _CUT_BELOW_CENTROID_M = float(os.getenv("OKRA_CUT_BELOW_CENTROID_M", "0.0"))
 _STANDOFF_M = float(os.getenv("OKRA_NOACT_STANDOFF_M", "0.0"))
+# Approach-from-above waypoint height [m] (0 = legacy direct reach). E.g. 0.08 =
+# reach 8cm above the click first, then descend vertically (avoids sweeping up
+# into the plant from the low rest pose). See IkReachBridgeConfig.approach_above_m.
+_APPROACH_ABOVE_M = float(os.getenv("OKRA_APPROACH_ABOVE_M", "0.0"))
+# Two-click confirm guard: 1 = a reach fires only on a second click on the same
+# spot (phantom viewer-drag clicks never confirm). See IkReachBridgeConfig.
+_CONFIRM_CLICK = os.getenv("OKRA_CONFIRM_CLICK", "").strip() == "1"
+# Minimum gap [s] between the two confirming clicks (drag-burst hardening; see
+# TwoClickConfirm). Shared by IkReachBridge (arm) and GripperGraspOnReach (jaw).
+_CONFIRM_MIN_GAP_S = float(os.getenv("OKRA_CONFIRM_MIN_GAP_S", "0.35"))
+# Window [s] for the confirming click (see D435i blueprint: 2.5 s expired 4x in
+# the 2026-07-22 10-trial run; 3.5 s matches the observed human rhythm).
+_CONFIRM_WINDOW_S = float(os.getenv("OKRA_CONFIRM_WINDOW_S", "3.5"))
+# Fixed EE orientation (ROOT frame, "qx,qy,qz,qw"); empty = hold click-time
+# orientation (legacy; pose-dependent tool offset -> first-click misses).
+_FIXED_ORI_RAW = os.getenv("OKRA_FIXED_ORI_XYZW", "").strip()
+_FIXED_ORI = [float(v) for v in _FIXED_ORI_RAW.split(",")] if _FIXED_ORI_RAW else []
 _CLOSE_Q = float(os.getenv("OKRA_NOACT_CLOSE_Q", "0.0"))
 _DEBOUNCE_S = float(os.getenv("OKRA_NOACT_DEBOUNCE_S", "3.0"))
 _GRIP_LIVE = os.getenv("OKRA_NOACT_GRIP_LIVE", "").strip() == "1"
@@ -238,6 +258,11 @@ _MODULES = [
         fire_reach_done=True,
         approach_offset_xyz=[0.0, 0.0, _TARGET_Z_OFFSET - _CUT_BELOW_CENTROID_M],
         standoff_m=_STANDOFF_M,
+        approach_above_m=_APPROACH_ABOVE_M,
+        confirm_click=_CONFIRM_CLICK,
+        confirm_min_gap_s=_CONFIRM_MIN_GAP_S,
+        confirm_window_s=_CONFIRM_WINDOW_S,
+        fixed_orientation_xyzw=_FIXED_ORI,
         gripper_offset_xyz=_TIP_OFFSET,  # bare Dex1 default; override for the cutter
         # Chest-ZED mount override (torso <- camera body).
         camera_mount_xyzrpy=_ZED_MOUNT,
@@ -263,6 +288,14 @@ if not _NO_GRIPPER:
             debounce_s=_DEBOUNCE_S,
             dry_run=not (_LIVE and _GRIP_LIVE),
             open_q=_OPEN_Q,  # standardize the opening on every click (None = off)
+            # Same confirm gate as IkReachBridge (identical params): the jaw opens
+            # only on the confirming click, so lone/phantom clicks move nothing.
+            confirm_click=_CONFIRM_CLICK,
+            confirm_min_gap_s=_CONFIRM_MIN_GAP_S,
+            confirm_window_s=_CONFIRM_WINDOW_S,
+            # Same frame filter as the bridge, so a rejected click (wrong entity,
+            # e.g. the click marker) can never desync the two confirm gates.
+            expected_click_frame="/world/camera/pointcloud",
         ),
         G1GripperConnection.blueprint(
             network_interface=_NIC,

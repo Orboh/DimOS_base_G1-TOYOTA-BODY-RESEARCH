@@ -101,7 +101,11 @@ _KD_ARM = float(os.getenv("OKRA_NOACT_KD_ARM", "3.0"))
 
 # Vertical (torso Z) target compensation [m] -- same empirical correction used by
 # unitree_g1_okra_harvest.py (arm-side droop / FK bias, not a camera error).
-_TARGET_Z_OFFSET = float(os.getenv("OKRA_TARGET_Z_OFFSET", "0.05"))
+# 2026-07-21 (Oda): default 0.0 = the blade tip goes EXACTLY to the clicked
+# point ("クリックしたところを直接狙う"). Was 0.05 (+5cm above the click, the
+# click-pod-cut-stem design) -- restore by launching with OKRA_TARGET_Z_OFFSET=0.05.
+# To aim N cm BELOW the click instead, set OKRA_CUT_BELOW_CENTROID_M (e.g. 0.03).
+_TARGET_Z_OFFSET = float(os.getenv("OKRA_TARGET_Z_OFFSET", "0.0"))
 
 # Click = the okra's CENTROID, but the cut point (stem) sits below it. This is a
 # separate, semantic offset (okra geometry) from _TARGET_Z_OFFSET above (hardware
@@ -116,6 +120,24 @@ _CUT_BELOW_CENTROID_M = float(os.getenv("OKRA_CUT_BELOW_CENTROID_M", "0.0"))
 # it would leave the scripted gripper close 5cm away from the okra. 0.0 = drive the
 # tip exactly onto the clicked centroid (config's own definition of 0.0).
 _STANDOFF_M = float(os.getenv("OKRA_NOACT_STANDOFF_M", "0.0"))
+# Approach-from-above waypoint height [m] (0 = legacy direct reach). E.g. 0.08 =
+# reach 8cm above the click first, then descend vertically (avoids sweeping up
+# into the plant from the low rest pose). See IkReachBridgeConfig.approach_above_m.
+_APPROACH_ABOVE_M = float(os.getenv("OKRA_APPROACH_ABOVE_M", "0.0"))
+# Two-click confirm guard: 1 = a reach fires only on a second click on the same
+# spot (phantom viewer-drag clicks never confirm). See IkReachBridgeConfig.
+_CONFIRM_CLICK = os.getenv("OKRA_CONFIRM_CLICK", "").strip() == "1"
+# Minimum gap [s] between the two confirming clicks (drag-burst hardening; see
+# TwoClickConfirm). Shared by IkReachBridge (arm) and GripperGraspOnReach (jaw).
+_CONFIRM_MIN_GAP_S = float(os.getenv("OKRA_CONFIRM_MIN_GAP_S", "0.35"))
+# Window [s] for the confirming click. 2.5 s expired 4x in the 2026-07-22 10-trial
+# run (operator finds the target, then re-aims) -- 3.5 s matches the observed
+# human rhythm while staying short enough that a stale armed click dies quickly.
+_CONFIRM_WINDOW_S = float(os.getenv("OKRA_CONFIRM_WINDOW_S", "3.5"))
+# Fixed EE orientation (ROOT frame, "qx,qy,qz,qw"); empty = hold click-time
+# orientation (legacy; pose-dependent tool offset -> first-click misses).
+_FIXED_ORI_RAW = os.getenv("OKRA_FIXED_ORI_XYZW", "").strip()
+_FIXED_ORI = [float(v) for v in _FIXED_ORI_RAW.split(",")] if _FIXED_ORI_RAW else []
 
 # Scripted (no-ACT) gripper close target -- a raw Dex1 q, NOT meters. See
 # GripperGraspOnReachConfig.close_q docstring: NO known-good value, must be
@@ -126,6 +148,26 @@ _CLOSE_Q = float(os.getenv("OKRA_NOACT_CLOSE_Q", "0.0"))
 # Ignore a second reach_done within this many seconds of the last one, then
 # re-arm so the operator can retry with a fresh click without restarting.
 _DEBOUNCE_S = float(os.getenv("OKRA_NOACT_DEBOUNCE_S", "3.0"))
+
+# Dex1 DDS topic prefix. Default = the proper right-wrist service (historical
+# behavior, unchanged). On the current rig the physically-RIGHT Dex1 enumerates
+# under the LEFT service (data cable in the left-hand port, confirmed
+# 2026-07-16) -- set OKRA_DEX1_PREFIX=rt/dex1/left there. Same knob as the ZED
+# blueprint (unitree_g1_okra_ik_only_grasp_zed.py).
+_DEX1_PREFIX = os.getenv("OKRA_DEX1_PREFIX", "rt/dex1/right").strip()
+
+# Auto-open on click (parity with the ZED blueprint, 2026-07-21): on every raw
+# click, if the measured jaw q is below open_q - tolerance, publish open_q so
+# each cycle starts from the same standard opening. Empty string disables
+# (OKRA_OPEN_Q="") = the pre-2026-07-17 manual-open behavior.
+_OPEN_Q_RAW = os.getenv("OKRA_OPEN_Q", "3.0").strip()
+_OPEN_Q = float(_OPEN_Q_RAW) if _OPEN_Q_RAW else None
+
+# Gripper position-servo gains (parity with the ZED blueprint). Defaults are the
+# historical soft grip; grip force at stall ~= kp x position error, so raise kp
+# (e.g. OKRA_GRIP_KP=20, the proven cutter-close value) for a firmer squeeze.
+_GRIP_KP = float(os.getenv("OKRA_GRIP_KP", "5.0"))
+_GRIP_KD = float(os.getenv("OKRA_GRIP_KD", "0.05"))
 
 # Separate live-gate for the GRIPPER, independent of IK_REACH_LIVE (arm). close_q has
 # NO known-good value (see above) -- default OFF so the first LIVE runs can verify the
@@ -207,6 +249,11 @@ unitree_g1_okra_ik_only_grasp = autoconnect(
         # +Z is up (approach_offset_xyz docstring): droop compensation UP, cut-point offset DOWN.
         approach_offset_xyz=[0.0, 0.0, _TARGET_Z_OFFSET - _CUT_BELOW_CENTROID_M],
         standoff_m=_STANDOFF_M,  # no ACT to close the default 5cm gap -- reach the centroid itself
+        approach_above_m=_APPROACH_ABOVE_M,
+        confirm_click=_CONFIRM_CLICK,
+        confirm_min_gap_s=_CONFIRM_MIN_GAP_S,
+        confirm_window_s=_CONFIRM_WINDOW_S,
+        fixed_orientation_xyzw=_FIXED_ORI,
     ),
     GripperGraspOnReach.blueprint(
         close_q=_CLOSE_Q,
@@ -215,6 +262,15 @@ unitree_g1_okra_ik_only_grasp = autoconnect(
         # to actually close (see _GRIP_LIVE above) -- lets the first LIVE runs verify the
         # reach alone before trusting the untuned close_q on a real grasp.
         dry_run=not (_LIVE and _GRIP_LIVE),
+        open_q=_OPEN_Q,  # standardize the opening on every click (None = off)
+        # Same confirm gate as IkReachBridge (identical params): the jaw opens only
+        # on the confirming click, so lone/phantom clicks move nothing at all.
+        confirm_click=_CONFIRM_CLICK,
+        confirm_min_gap_s=_CONFIRM_MIN_GAP_S,
+        confirm_window_s=_CONFIRM_WINDOW_S,
+        # Same frame filter as the bridge, so a rejected click (wrong entity, e.g.
+        # the click marker) can never desync the two confirm gates.
+        expected_click_frame="/world/camera/pointcloud",
     ),
     G1ArmSdkConnection.blueprint(
         network_interface=_NIC,
@@ -228,6 +284,9 @@ unitree_g1_okra_ik_only_grasp = autoconnect(
     ),
     G1GripperConnection.blueprint(
         network_interface=_NIC,
+        dex1_topic_prefix=_DEX1_PREFIX,
+        kp=_GRIP_KP,
+        kd=_GRIP_KD,
         # No hold_target_q override: the gripper must obey our gripper_target.
     ),
 ).transports(
@@ -235,6 +294,8 @@ unitree_g1_okra_ik_only_grasp = autoconnect(
         ("motor_states", JointState): LCMTransport("/g1/motor_states", JointState),
         ("arm_target", JointState): LCMTransport("/g1/arm_target", JointState),
         ("gripper_target", JointState): LCMTransport("/g1/gripper_target", JointState),
+        # measured jaw state -> GripperGraspOnReach (auto-open gate) + external tools.
+        ("right_gripper_state", JointState): LCMTransport("/g1/right_gripper_state", JointState),
         ("reach_done", Bool): LCMTransport("/g1/reach_done", Bool),
         # accepted okra position (torso frame) -- logged for calibration/analysis.
         ("okra_target", PointStamped): LCMTransport("/g1/okra_target", PointStamped),

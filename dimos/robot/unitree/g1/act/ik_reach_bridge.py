@@ -57,6 +57,7 @@ from dimos.manipulation.planning.kinematics.pinocchio_ik import (
 from dimos.msgs.geometry_msgs.PointStamped import PointStamped
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.msgs.std_msgs.Bool import Bool
+from dimos.robot.unitree.g1.act.two_click_confirm import TwoClickConfirm
 from dimos.robot.unitree.g1.ik_reach.right_arm_model import (
     DEFAULT_URDF,
     load_g1_right_arm_ik,
@@ -151,6 +152,33 @@ class IkReachBridgeConfig(ModuleConfig):
     # NOT along the gripper approach axis; applied in _reach as a torso-frame offset.
     # 0.0 = drive the tip exactly onto the okra. Effective per-reach (not load-time).
     standoff_m: float = 0.05   # placeholder: tune to ACT's handoff distance once known
+    # Approach-from-above two-phase reach (2026-07-21): >0 = first reach a waypoint
+    # this many meters DIRECTLY ABOVE the target (same x,y), then descend vertically
+    # onto it. Motivation: the one-shot joint-space slew from the low rest pose sweeps
+    # UP INTO the plant and knocks the okra; a vertical last leg avoids that and is
+    # the natural cutting direction. 0.0 = legacy single-phase reach (default,
+    # behavior unchanged). Waypoint infeasible (workspace/IK/limits) -> falls back
+    # to the direct reach with a warning. Wired from env OKRA_APPROACH_ABOVE_M.
+    approach_above_m: float = 0.0
+    # Cartesian streaming of the U-path legs: waypoint spacing [m] and publish
+    # cadence [s]. Tip speed ~= path_step_m / path_cadence_s (~0.19 m/s default).
+    # Only used when approach_above_m > 0.
+    path_step_m: float = 0.035
+    path_cadence_s: float = 0.18
+    # Two-click confirm guard (2026-07-22): viewer camera-drags emit phantom clicks
+    # that drive the arm ("クリックしてないのに勝手に動く"). When True, a reach fires
+    # only when a SECOND click lands within confirm_radius_m of the first inside
+    # confirm_window_s (the first click only arms + logs). Drag artifacts scatter
+    # spatially and never confirm. Default False = legacy single-click behavior.
+    # Wired from env OKRA_CONFIRM_CLICK.
+    confirm_click: bool = False
+    confirm_radius_m: float = 0.03
+    confirm_window_s: float = 2.5
+    # Minimum gap between the two clicks (2026-07-22 hardening): a slow camera-drag
+    # can emit two NEARBY points, defeating the radius check alone. Clicks arriving
+    # faster than this re-arm instead of firing, so drag bursts never confirm while
+    # a deliberate "click ... click" still does. Wired from OKRA_CONFIRM_MIN_GAP_S.
+    confirm_min_gap_s: float = 0.35
     # IK->ACT handoff switch. True (default) = fire reach_done after the reach so ACT
     # takes over. False = do the IK reach and HOLD the pre-grasp (no reach_done, ACT
     # never starts) — for inspecting the reach/standoff without ACT immediately moving
@@ -260,6 +288,13 @@ class IkReachBridge(Module):
         else:
             self._T_torso_click = _default_torso_from_optical()
         self._lock = threading.Lock()
+        # Two-click confirm gate (shared logic with GripperGraspOnReach so the arm
+        # and the jaw always agree on which click fired).
+        self._confirm = TwoClickConfirm(
+            radius_m=self.config.confirm_radius_m,
+            window_s=self.config.confirm_window_s,
+            min_gap_s=self.config.confirm_min_gap_s,
+        )
         self._latest_state: JointState | None = None
         self._pending_click: PointStamped | None = None
         self._click_recv_t: float = 0.0  # laptop-local receive time (clock-skew-safe freshness)
@@ -391,6 +426,17 @@ class IkReachBridge(Module):
             logger.info("IkReachBridge: within debounce interval; ignoring click.")
             return
 
+        # --- two-click confirm guard (phantom-click protection) ----------------
+        if self.config.confirm_click:
+            if not self._confirm.feed(float(click.x), float(click.y), float(click.z), now):
+                logger.info(
+                    "IkReachBridge: click ARMED (confirm mode) — click the SAME point again "
+                    f"within {self.config.confirm_window_s:.1f}s "
+                    f"(>= {self.config.confirm_min_gap_s:.2f}s later, "
+                    f"<= {self.config.confirm_radius_m * 100:.0f} cm) to fire the reach."
+                )
+                return
+
         # Reject if the measured state is stale (warm-start / orientation / delta-gate
         # baseline all depend on a fresh measured pose).
         state_ts = float(getattr(state, "ts", 0.0) or 0.0)
@@ -482,6 +528,102 @@ class IkReachBridge(Module):
         # --- accepted: arm the debounce identically in DRY and LIVE -----------
         self._last_reach_t = now
         self._count += 1
+
+        # --- approach-from-above (0 = legacy direct). U-shaped 3-phase path:
+        # (1) LIFT straight up at the current tip x,y (near the body / clear of the
+        #     plant), (2) TRANSIT horizontally at altitude to above the target,
+        # (3) DESCEND vertically onto it. Each phase falls back gracefully if its
+        # waypoint is infeasible (2026-07-21: the 2-phase version still swept the
+        # plant on the way UP — "上に上げるときにすでに当たる").
+        # Each leg is STREAMED as a dense IK waypoint sequence (path_step_m spacing at
+        # path_cadence_s) so the TIP follows the straight line — a single endpoint
+        # publish only fixes the ends; the joint-space slew between them arcs forward
+        # into the plant ("結局下からカーブする", 2026-07-21).
+        q_start = q_right
+        approach = float(self.config.approach_above_m)
+        if approach > 0.0 and not self.config.log_only:
+            step_m = max(float(self.config.path_step_m), 0.005)
+            cadence = max(float(self.config.path_cadence_s), 0.05)
+
+            def _stream_leg(p_from: np.ndarray, p_to: np.ndarray, q_seed: np.ndarray, label: str):
+                """Stream a straight Cartesian leg as dense IK targets. -> (q_next, ok, abort)."""
+                q_cur_ = q_seed
+                seg = np.asarray(p_to, dtype=float) - np.asarray(p_from, dtype=float)
+                n = max(1, int(np.ceil(float(np.linalg.norm(seg)) / step_m)))
+                for i in range(1, n + 1):
+                    p_i = np.asarray(p_from, dtype=float) + seg * (i / n)
+                    if not (
+                        self.config.ws_x[0] <= p_i[0] <= self.config.ws_x[1]
+                        and self.config.ws_y[0] <= p_i[1] <= self.config.ws_y[1]
+                        and self.config.ws_z[0] <= p_i[2] <= self.config.ws_z[1]
+                    ):
+                        logger.warning(f"IkReachBridge: {label} step {i}/{n} outside workspace; leg stopped.")
+                        return q_cur_, False, False
+                    tgt = pinocchio.SE3(rot, np.asarray(self._arm.torso_to_root(p_i), dtype=float))
+                    qn, cv, er = self._arm.ik.solve(tgt, q_cur_)
+                    qn = np.asarray(qn, dtype=float).flatten()
+                    if not (
+                        (cv or er <= self.config.max_reach_pos_err_m)
+                        and check_joint_delta(qn, q_cur_, self.config.max_joint_delta_deg)
+                        and self._arm.clamp_ok(qn)
+                    ):
+                        logger.warning(f"IkReachBridge: {label} step {i}/{n} infeasible; leg stopped.")
+                        return q_cur_, False, False
+                    self.arm_target.publish(
+                        JointState(
+                            name=list(_ARM_JOINT_NAMES),
+                            position=[float(x) for x in np.concatenate([q_left, qn])],
+                            velocity=[0.0] * _NUM_ARM,
+                            effort=[0.0] * _NUM_ARM,
+                        )
+                    )
+                    q_cur_ = qn
+                    if self._stop_event.wait(cadence):
+                        return q_cur_, False, True  # shutting down: abort the whole reach
+                logger.info(f"IkReachBridge: {label} leg done ({n} steps -> torso{np.round(p_to, 3)})")
+                return q_cur_, True, False
+
+            tip_now = np.asarray(
+                self._arm.root_to_torso_pose(self._arm.fk_tip(q_right)).translation
+            ).flatten()
+            z_transit = max(float(p_torso[2]) + approach, float(tip_now[2]))
+            p_lift = np.array([tip_now[0], tip_now[1], z_transit])
+            p_over = np.array([p_torso[0], p_torso[1], z_transit])
+            q_cur = q_right
+            ok = True
+            abort = False
+            # (1) LIFT: straight up at the current tip x,y (clear of the plant).
+            if float(tip_now[2]) < z_transit - 0.02:
+                q_cur, ok, abort = _stream_leg(tip_now, p_lift, q_cur, "lift")
+                if abort:
+                    return
+            # (2) TRANSIT: horizontal at altitude to directly above the target.
+            if ok:
+                q_cur, ok, abort = _stream_leg(p_lift, p_over, q_cur, "transit")
+                if abort:
+                    return
+            # (3) DESCEND: vertical drop onto the target.
+            if ok:
+                q_cur, ok, abort = _stream_leg(p_over, np.asarray(p_torso, dtype=float), q_cur, "descend")
+                if abort:
+                    return
+            # Adopt the streamed endpoint solution when the path completed; on a
+            # stopped leg fall through to the direct final publish from wherever
+            # the arm is now (q_start=q_cur keeps the handoff wait honest).
+            if q_cur is not q_right:
+                if ok:
+                    q_sol = q_cur
+                else:
+                    q_d, conv_d, err_d = self._arm.ik.solve(target, q_cur)
+                    q_d = np.asarray(q_d, dtype=float).flatten()
+                    if (
+                        (conv_d or err_d <= self.config.max_reach_pos_err_m)
+                        and check_joint_delta(q_d, q_cur, self.config.max_joint_delta_deg)
+                        and self._arm.clamp_ok(q_d)
+                    ):
+                        q_sol, converged, err = q_d, bool(conv_d), float(err_d)
+                q_start = q_cur
+
         arm14 = np.concatenate([q_left, q_sol])  # left7 hold + right7 IK (canonical order)
         if self.config.log_every_n and self._count % self.config.log_every_n == 0:
             tag = "DRY" if self.config.log_only else "LIVE->arm_sdk"
@@ -512,7 +654,7 @@ class IkReachBridge(Module):
             delta = 0.0
             wait_s = self.config.reach_dry_wait_s
         else:
-            delta = float(np.max(np.abs(q_sol - q_right)))
+            delta = float(np.max(np.abs(q_sol - q_start)))
             wait_s = delta / max(self.config.reach_nominal_speed_rad_s, 1e-3) + self.config.reach_margin_s
             wait_s = min(max(wait_s, self.config.reach_min_wait_s), self.config.reach_max_wait_s)
         if self._stop_event.wait(wait_s):

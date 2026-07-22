@@ -9,17 +9,19 @@
   CYCLONEDDS_HOME=~/cyclonedds-noshm LD_LIBRARY_PATH=~/cyclonedds-noshm/lib \
   .venv/bin/python oda/gripper_open.py
 """
+import os
 import time
 from unitree_sdk2py.core.channel import (
     ChannelFactoryInitialize, ChannelPublisher, ChannelSubscriber)
 from unitree_sdk2py.idl.unitree_go.msg.dds_ import MotorCmds_, MotorStates_
 from unitree_sdk2py.idl.default import unitree_go_msg_dds__MotorCmd_
 
-NIC = "enp2s0"
+# 機体側NIC: RTX5050機=enp2s0(既定) / RTX3070ラップトップ=DEX1_NIC=enp46s0 を付けて実行
+NIC = os.getenv("DEX1_NIC", "enp2s0")
 PREFIX = "rt/dex1/left"
-OPEN_Q = 2.5       # 開き位置(検証済みの安全域)
+OPEN_Q = float(os.getenv("DEX1_OPEN_Q", "2.5"))  # 開き位置(刃付き全開は3.7が実測安全値)
 KP = 8.0
-HOLD_S = 8.0       # 開いたまま保持する秒数(この間に葉を抜く)
+HOLD_S = float(os.getenv("DEX1_HOLD_S", "8.0"))  # 開いたまま保持する秒数(この間に葉を抜く)
 
 ChannelFactoryInitialize(0, NIC)
 st = {}

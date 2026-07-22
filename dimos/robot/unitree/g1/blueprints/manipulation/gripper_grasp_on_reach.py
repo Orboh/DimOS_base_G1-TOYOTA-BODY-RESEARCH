@@ -49,6 +49,7 @@ from dimos.core.stream import In, Out
 from dimos.msgs.geometry_msgs.PointStamped import PointStamped
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.msgs.std_msgs.Bool import Bool
+from dimos.robot.unitree.g1.act.two_click_confirm import TwoClickConfirm
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
@@ -80,6 +81,22 @@ class GripperGraspOnReachConfig(ModuleConfig):
     # F-07, developed separately) is responsible for releases between cycles.
     open_q: float | None = None
     open_tolerance: float = 0.3
+    # Two-click confirm gate (2026-07-22), mirroring IkReachBridgeConfig: when True,
+    # the pre-grasp opening fires only on the CONFIRMING (second) click — so a lone
+    # ARMED click / phantom viewer-drag click no longer visibly moves the jaw
+    # ("勝手に動く"). Keep the three parameters identical to IkReachBridge (wired
+    # from the same OKRA_CONFIRM_* envs) so arm and jaw agree on which click fired.
+    confirm_click: bool = False
+    confirm_radius_m: float = 0.03
+    confirm_window_s: float = 2.5
+    confirm_min_gap_s: float = 0.35
+    # Only feed the confirm gate clicks whose frame_id matches (same value as
+    # IkReachBridgeConfig.expected_click_frame). Without this, a click the bridge
+    # REJECTS (e.g. on the '/world/clicked_point' marker entity) still re-arms
+    # OUR gate, desyncing arm and jaw: the bridge fires but the jaw never opens
+    # (observed 2026-07-22 reach #1: blade arrived closed). Empty = accept all
+    # frames (legacy).
+    expected_click_frame: str = ""
 
 
 class GripperGraspOnReach(Module):
@@ -97,6 +114,11 @@ class GripperGraspOnReach(Module):
         self._lock = threading.Lock()
         self._cooldown_until = 0.0
         self._measured_q: float | None = None
+        self._confirm = TwoClickConfirm(
+            radius_m=self.config.confirm_radius_m,
+            window_s=self.config.confirm_window_s,
+            min_gap_s=self.config.confirm_min_gap_s,
+        )
 
     @rpc
     def start(self) -> None:
@@ -131,11 +153,24 @@ class GripperGraspOnReach(Module):
         Fires on the raw click (before IkReachBridge validates it) -- opening on
         a click that later gets rejected is harmless, it just restores the
         standard pre-grasp opening. The gripper opens while the arm is still
-        slewing, so this adds no cycle time.
+        slewing, so this adds no cycle time. In confirm mode only the CONFIRMING
+        click opens (a lone/phantom click must not visibly move the jaw); the
+        arm's reach takes >1 s, ample time for the jaw to open in parallel.
         """
         open_q = self.config.open_q
         if open_q is None:
             return
+        if self.config.expected_click_frame and (
+            str(getattr(_msg, "frame_id", "")) != self.config.expected_click_frame
+        ):
+            return  # click on another entity -- the bridge rejects it too; keep gates in sync
+        if self.config.confirm_click:
+            with self._lock:
+                fire = self._confirm.feed(
+                    float(_msg.x), float(_msg.y), float(_msg.z), time.time()
+                )
+            if not fire:
+                return  # armed only -- IkReachBridge logs the ARMED message
         with self._lock:
             q = self._measured_q
         if q is not None and q >= open_q - self.config.open_tolerance:
