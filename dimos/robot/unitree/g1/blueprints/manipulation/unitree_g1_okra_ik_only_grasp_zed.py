@@ -264,6 +264,11 @@ _MODULES = [
         # delta-based travel estimate is ~0 (arm lags the stream physically), so the
         # default 0.5 s closed the jaw before arrival ("到達する前に閉じる", 7/23).
         reach_margin_s=float(os.getenv("OKRA_REACH_MARGIN_S", "0.5")),
+        # Streamed-leg tip speed = path_step_m / path_cadence_s. Slower = tighter
+        # physical tracking = less gravity sag below the commanded line ("最後
+        # すくい上げる" fix, 7/23: the arm lagged the level push and rose at the end).
+        path_step_m=float(os.getenv("OKRA_PATH_STEP_M", "0.035")),
+        path_cadence_s=float(os.getenv("OKRA_PATH_CADENCE_S", "0.18")),
         confirm_click=_CONFIRM_CLICK,
         confirm_min_gap_s=_CONFIRM_MIN_GAP_S,
         confirm_window_s=_CONFIRM_WINDOW_S,

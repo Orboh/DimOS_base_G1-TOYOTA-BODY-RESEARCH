@@ -263,6 +263,9 @@ unitree_g1_okra_ik_only_grasp = autoconnect(
         approach_front_m=float(os.getenv("OKRA_APPROACH_FRONT_M", "0.0")),
         # Settle margin before reach_done (see ZED blueprint note, 2026-07-23).
         reach_margin_s=float(os.getenv("OKRA_REACH_MARGIN_S", "0.5")),
+        # Streamed-leg tip speed knobs (see ZED blueprint note, 2026-07-23).
+        path_step_m=float(os.getenv("OKRA_PATH_STEP_M", "0.035")),
+        path_cadence_s=float(os.getenv("OKRA_PATH_CADENCE_S", "0.18")),
         confirm_click=_CONFIRM_CLICK,
         confirm_min_gap_s=_CONFIRM_MIN_GAP_S,
         confirm_window_s=_CONFIRM_WINDOW_S,
