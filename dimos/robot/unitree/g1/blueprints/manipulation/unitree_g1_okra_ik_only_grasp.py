@@ -139,6 +139,16 @@ _CONFIRM_WINDOW_S = float(os.getenv("OKRA_CONFIRM_WINDOW_S", "3.5"))
 _FIXED_ORI_RAW = os.getenv("OKRA_FIXED_ORI_XYZW", "").strip()
 _FIXED_ORI = [float(v) for v in _FIXED_ORI_RAW.split(",")] if _FIXED_ORI_RAW else []
 
+# Tool-tip offset from the wrist in the WRIST/EE frame [m] (IkReachBridgeConfig.
+# gripper_offset_xyz). Default = bare Dex1 fingertip [0.1845, -0.003, 0].
+# 2026-07-23: this knob existed ONLY in the ZED blueprint — every D435i run
+# silently used the bare-Dex1 default and the cutter corrections never applied
+# ("補正を入れてもズレが変わらない"事件の正体). Same env name as the ZED app.
+_TIP_OFFSET = [
+    float(v)
+    for v in os.getenv("OKRA_TIP_OFFSET_XYZ", "0.1845,-0.003,0.0").split(",")
+]
+
 # Scripted (no-ACT) gripper close target -- a raw Dex1 q, NOT meters. See
 # GripperGraspOnReachConfig.close_q docstring: NO known-good value, must be
 # tuned on hardware. Larger q = more open (empirical fit in okra_harvest.py:
@@ -254,6 +264,7 @@ unitree_g1_okra_ik_only_grasp = autoconnect(
         confirm_min_gap_s=_CONFIRM_MIN_GAP_S,
         confirm_window_s=_CONFIRM_WINDOW_S,
         fixed_orientation_xyzw=_FIXED_ORI,
+        gripper_offset_xyz=_TIP_OFFSET,  # bare Dex1 default; override for the cutter
     ),
     GripperGraspOnReach.blueprint(
         close_q=_CLOSE_Q,
