@@ -260,6 +260,10 @@ _MODULES = [
         standoff_m=_STANDOFF_M,
         approach_above_m=_APPROACH_ABOVE_M,
         approach_front_m=float(os.getenv("OKRA_APPROACH_FRONT_M", "0.0")),
+        # Settle margin before reach_done -> gripper close. After STREAMED legs the
+        # delta-based travel estimate is ~0 (arm lags the stream physically), so the
+        # default 0.5 s closed the jaw before arrival ("到達する前に閉じる", 7/23).
+        reach_margin_s=float(os.getenv("OKRA_REACH_MARGIN_S", "0.5")),
         confirm_click=_CONFIRM_CLICK,
         confirm_min_gap_s=_CONFIRM_MIN_GAP_S,
         confirm_window_s=_CONFIRM_WINDOW_S,
