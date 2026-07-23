@@ -29,6 +29,11 @@ IkReachBridge 側は一切変更なし(confirm/固定向き/上からアプロ�
   YOLO_BRIDGE_PX_RADIUS: 重心近傍とみなす画素半径(既定 8)
   YOLO_BRIDGE_DOUBLE_S : 2回発行の間隔秒(既定 0.6; confirm窓0.35-3.5s内)
   YOLO_BRIDGE_MAX_M    : これより遠い3D点は拒否(既定 0.8m; 誤検出の背景対策)
+  YOLO_BRIDGE_BODY_FRAME: 1 = ZED用。発行前に光学→ボディ回転(x=z_o, y=-x_o, z=-y_o)。
+                        ZEDパイプラインはビューアのクリックがTF経由でボディ座標に
+                        なるため、IkReachBridge(click_in_camera_body_frame=True)も
+                        ボディ座標を期待する。点群データ自体は両カメラとも光学
+                        フレームなので投影計算は共通(2026-07-23 camera.py確認)
 """
 from __future__ import annotations
 
@@ -49,6 +54,7 @@ _LIVE = os.getenv("YOLO_BRIDGE_LIVE", "").strip() == "1"
 _PX_RADIUS = float(os.getenv("YOLO_BRIDGE_PX_RADIUS", "8"))
 _DOUBLE_S = float(os.getenv("YOLO_BRIDGE_DOUBLE_S", "0.6"))
 _MAX_M = float(os.getenv("YOLO_BRIDGE_MAX_M", "0.8"))
+_BODY_FRAME = os.getenv("YOLO_BRIDGE_BODY_FRAME", "").strip() == "1"
 _CLICK_FRAME = "/world/camera/pointcloud"  # same contract as a human viewer click
 
 
@@ -155,6 +161,9 @@ def main() -> int:
             return False
         print(f"[bridge] okra conf={conf:.2f} centroid=({u:.0f},{v:.0f}) "
               f"-> optical xyz=[{p3[0]:.3f} {p3[1]:.3f} {p3[2]:.3f}]")
+        if _BODY_FRAME:  # ZED: クリック契約はボディ座標(REP-103: x前, y左, z上)
+            p3 = np.array([p3[2], -p3[0], -p3[1]])
+            print(f"[bridge] -> body xyz=[{p3[0]:.3f} {p3[1]:.3f} {p3[2]:.3f}] (ZEDモード)")
         if not _LIVE:
             print("[bridge] DRY-RUN: 発行せず")
             return True

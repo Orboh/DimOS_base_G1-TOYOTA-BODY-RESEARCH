@@ -160,9 +160,16 @@ class IkReachBridgeConfig(ModuleConfig):
     # behavior unchanged). Waypoint infeasible (workspace/IK/limits) -> falls back
     # to the direct reach with a warning. Wired from env OKRA_APPROACH_ABOVE_M.
     approach_above_m: float = 0.0
-    # Cartesian streaming of the U-path legs: waypoint spacing [m] and publish
+    # Straight-in FRONT approach (2026-07-23, Oda: "まっすぐIKでもっていければ最高"):
+    # stream the tip in a straight line from its current pose to a point this many
+    # meters IN FRONT of the target (torso -X), then push straight +X onto the
+    # target. No side sweep, no under-curve — the jaw slot meets the pod head-on,
+    # so the fingers don't clip the mounting post. Mutually exclusive with
+    # approach_above_m (above wins if both set). Wired from OKRA_APPROACH_FRONT_M.
+    approach_front_m: float = 0.0
+    # Cartesian streaming of the path legs: waypoint spacing [m] and publish
     # cadence [s]. Tip speed ~= path_step_m / path_cadence_s (~0.19 m/s default).
-    # Only used when approach_above_m > 0.
+    # Used when approach_above_m > 0 or approach_front_m > 0.
     path_step_m: float = 0.035
     path_cadence_s: float = 0.18
     # Two-click confirm guard (2026-07-22): viewer camera-drags emit phantom clicks
@@ -541,7 +548,8 @@ class IkReachBridge(Module):
         # into the plant ("結局下からカーブする", 2026-07-21).
         q_start = q_right
         approach = float(self.config.approach_above_m)
-        if approach > 0.0 and not self.config.log_only:
+        front = float(self.config.approach_front_m)
+        if (approach > 0.0 or front > 0.0) and not self.config.log_only:
             step_m = max(float(self.config.path_step_m), 0.005)
             cadence = max(float(self.config.path_cadence_s), 0.05)
 
@@ -586,27 +594,40 @@ class IkReachBridge(Module):
             tip_now = np.asarray(
                 self._arm.root_to_torso_pose(self._arm.fk_tip(q_right)).translation
             ).flatten()
-            z_transit = max(float(p_torso[2]) + approach, float(tip_now[2]))
-            p_lift = np.array([tip_now[0], tip_now[1], z_transit])
-            p_over = np.array([p_torso[0], p_torso[1], z_transit])
             q_cur = q_right
             ok = True
             abort = False
-            # (1) LIFT: straight up at the current tip x,y (clear of the plant).
-            if float(tip_now[2]) < z_transit - 0.02:
-                q_cur, ok, abort = _stream_leg(tip_now, p_lift, q_cur, "lift")
+            if approach > 0.0:
+                z_transit = max(float(p_torso[2]) + approach, float(tip_now[2]))
+                p_lift = np.array([tip_now[0], tip_now[1], z_transit])
+                p_over = np.array([p_torso[0], p_torso[1], z_transit])
+                # (1) LIFT: straight up at the current tip x,y (clear of the plant).
+                if float(tip_now[2]) < z_transit - 0.02:
+                    q_cur, ok, abort = _stream_leg(tip_now, p_lift, q_cur, "lift")
+                    if abort:
+                        return
+                # (2) TRANSIT: horizontal at altitude to directly above the target.
+                if ok:
+                    q_cur, ok, abort = _stream_leg(p_lift, p_over, q_cur, "transit")
+                    if abort:
+                        return
+                # (3) DESCEND: vertical drop onto the target.
+                if ok:
+                    q_cur, ok, abort = _stream_leg(p_over, np.asarray(p_torso, dtype=float), q_cur, "descend")
+                    if abort:
+                        return
+            else:
+                # FRONT approach: (1) straight tip-line to a point front_m before the
+                # target (free space in front of the row), then (2) straight +X push
+                # onto the pod — the jaw slot meets it head-on, no side sweep.
+                p_front = np.array([float(p_torso[0]) - front, float(p_torso[1]), float(p_torso[2])])
+                q_cur, ok, abort = _stream_leg(tip_now, p_front, q_cur, "front-approach")
                 if abort:
                     return
-            # (2) TRANSIT: horizontal at altitude to directly above the target.
-            if ok:
-                q_cur, ok, abort = _stream_leg(p_lift, p_over, q_cur, "transit")
-                if abort:
-                    return
-            # (3) DESCEND: vertical drop onto the target.
-            if ok:
-                q_cur, ok, abort = _stream_leg(p_over, np.asarray(p_torso, dtype=float), q_cur, "descend")
-                if abort:
-                    return
+                if ok:
+                    q_cur, ok, abort = _stream_leg(p_front, np.asarray(p_torso, dtype=float), q_cur, "push")
+                    if abort:
+                        return
             # Adopt the streamed endpoint solution when the path completed; on a
             # stopped leg fall through to the direct final publish from wherever
             # the arm is now (q_start=q_cur keeps the handoff wait honest).

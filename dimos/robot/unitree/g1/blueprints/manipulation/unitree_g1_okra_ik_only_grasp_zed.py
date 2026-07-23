@@ -259,6 +259,7 @@ _MODULES = [
         approach_offset_xyz=[0.0, 0.0, _TARGET_Z_OFFSET - _CUT_BELOW_CENTROID_M],
         standoff_m=_STANDOFF_M,
         approach_above_m=_APPROACH_ABOVE_M,
+        approach_front_m=float(os.getenv("OKRA_APPROACH_FRONT_M", "0.0")),
         confirm_click=_CONFIRM_CLICK,
         confirm_min_gap_s=_CONFIRM_MIN_GAP_S,
         confirm_window_s=_CONFIRM_WINDOW_S,
