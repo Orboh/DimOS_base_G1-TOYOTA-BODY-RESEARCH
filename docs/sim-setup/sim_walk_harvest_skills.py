@@ -264,7 +264,7 @@ class WalkHarvestSkills(SimHarvestSkills):
         # 位置合わせ後の把持工程（reach→servo→close→lift）。
         # held(ON): ここで脚凍結を張り続け、bridge が骨盤をピン留め＝倒れない土台で精密把持。
         #           骨盤ピン中は歩けないので半歩前進はスキップ（遠め x スタンス前提）。
-        # held(OFF): reach/servo は policy に踏ん張らせ（凍結すると転倒）、close の一瞬だけ凍結。
+        # held(OFF): reach/servo/close すべて policy に踏ん張らせる（凍結すると転倒。2026-07-23 修正）。
         # いずれも早期 return で確実に解除するよう try/finally で保護。
         held = _GRASP_HOLD
         if held:
@@ -332,16 +332,21 @@ class WalkHarvestSkills(SimHarvestSkills):
                 self._ramp(list(r.arm14), 1.2, grip_q=0.0)
                 self._blog.mark()
                 self._hold(1.8, grip_q=0.0)
-            # D) close → lift → 検証。held(OFF) は close の一瞬だけ脚凍結（~2.3s＝準安定限界内）で
-            # 立位の揺れ（±1-2cm）を消す。held(ON) は既に骨盤ピン中なので追加凍結は不要。
+            # D) close → lift → 検証。
+            # 【2026-07-23 転倒修正】held(OFF) の close 時脚凍結を廃止。凍結中は歩行 policy が
+            # 完全に切れ（PD が最終目標を保持するだけ）、腕前方＋接触力で支えを失い転倒する
+            # 「掴んだ瞬間に弱くなる」の直接原因だった（ピンなし E2E で base z=0.06 まで転倒を実測）。
+            # close 中も policy にバランスを取らせ続ける。旧動作（立位揺れ ±1-2cm を消す凍結）は
+            # SIM_WALK_CLOSE_FREEZE=1 で復元可。held(ON) は骨盤ピン中なので従来どおり何もしない。
+            close_freeze = (not held) and os.getenv("SIM_WALK_CLOSE_FREEZE", "0") == "1"
             self._blog.mark()
-            if not held:
+            if close_freeze:
                 self._freeze_legs()
             try:
                 self._ramp(self._cur_arm, 2.5, grip_q=_Q_CLOSE)  # close は緩やかに（急閉じで剛体オクラを弾き出さない）
                 self._hold(1.0, grip_q=_Q_CLOSE)
             finally:
-                if not held:
+                if close_freeze:
                     self._unfreeze_legs()
             # lift 軌道: 従来は持ち上げと同時に x を 5cm 手前へ引いていた（tgt[0]-0.05）。この後ろ引きが
             # 指の間からオクラをせん断で抜く「滑り型」失敗の疑い（指DOF ~0.019 で挟んでいるのに lift 中に
