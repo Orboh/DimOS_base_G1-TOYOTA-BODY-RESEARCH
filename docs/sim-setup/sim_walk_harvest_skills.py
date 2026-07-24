@@ -109,6 +109,23 @@ class WalkHarvestSkills(SimHarvestSkills):
         p = self._base_pose()
         return (p[0], p[1])
 
+    def _yaw_fix_wz(self) -> float:
+        """移動パルス中の向き閉ループ補正（2026-07-24）。横歩きに同方向のヨー回転が混ざり続け
+        （実測 +5.5°/横1m）、ラン終盤に累積 63° → 体が机に斜めのまま掴みに行き後半の把持が
+        全滅する（成功は全部ズレ≤10°・失敗は全部それ以上、追記48）。移動中だけ yaw→0 の
+        旋回 wz を混ぜて向きを保つ。旧 YAW_TOL(v1) がスピンした要因（±π折り返し漏れ・
+        ゲイン過大）は atan2 正規化＋低ゲイン＋上限で対策。SIM_WALK_YAW_FIX=0 で無効。"""
+        if os.getenv("SIM_WALK_YAW_FIX", "1") != "1":
+            return 0.0
+        err = self._base_pose()[2]
+        err = float(np.arctan2(np.sin(err), np.cos(err)))  # ±π 正規化（折り返し安全）
+        if abs(err) < float(os.getenv("SIM_WALK_YAW_TOL", "0.03")):  # 不感帯 ~2°（ディザ防止）
+            return 0.0
+        k = float(os.getenv("SIM_WALK_YAW_K", "1.0"))
+        wmin = float(os.getenv("SIM_WALK_YAW_WMIN", "0.12"))  # policy 指令デッドバンド対策の下駄
+        wmax = float(os.getenv("SIM_WALK_YAW_WMAX", "0.30"))
+        return -float(np.sign(err)) * min(max(k * abs(err), wmin), wmax)
+
     def _pulse(self, vx: float, vy: float, secs: float, dist: float | None = None) -> None:
         """base 速度パルス。dist[m] 指定時は**変位ベース**: その距離動くまで指令を出し続ける
         （GUI は描画で実時間が遅く、時間ベースだとシム内歩行が1/3以下になり接近が破綻する）。"""
@@ -117,7 +134,7 @@ class WalkHarvestSkills(SimHarvestSkills):
         timeout = max(secs, (dist / 0.25 + 2.0) if dist else secs) + 8.0  # 実時間の安全上限
         while time.time() - t0 < timeout:
             with open(_BASE_MOVE_FILE, "w") as f:
-                f.write(f"{vx},{vy}")
+                f.write(f"{vx},{vy},{self._yaw_fix_wz()}")
             self._hold(0.1, grip_q=self._grip_q)  # 歩行中も腕目標を保持し続ける
             if dist is not None:
                 bx, by = self._base_xy()
