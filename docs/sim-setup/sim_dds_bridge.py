@@ -1087,8 +1087,24 @@ def main() -> None:
                 _bq = np.asarray(_bq, dtype=float).reshape(-1)  # (w,x,y,z)
                 _yaw = float(np.arctan2(2.0 * (_bq[0] * _bq[3] + _bq[1] * _bq[2]),
                                         1.0 - 2.0 * (_bq[2] ** 2 + _bq[3] ** 2)))  # [rad]
+                # roll/pitch も出す（「腰が曲がる」= 胴体ロール/ピッチ。yaw=旋回とは別軸。2026-07-21）
+                _roll = float(np.arctan2(2.0 * (_bq[0] * _bq[1] + _bq[2] * _bq[3]),
+                                         1.0 - 2.0 * (_bq[1] ** 2 + _bq[2] ** 2)))  # [rad]
+                _sinp = 2.0 * (_bq[0] * _bq[2] - _bq[3] * _bq[1])
+                _pitch = float(np.arcsin(max(-1.0, min(1.0, _sinp))))  # [rad]
+                # 腰3関節の実測角（折田さん仮説の検証用計測 2026-07-22: 「見た目の傾き」= 腰関節屈曲。
+                # 骨盤基準の roll/pitch にも flat_orientation 報酬にも映らない盲点を可視化する）
+                _wtxt = ""
+                try:
+                    _qj = np.asarray(robot.get_joint_positions(), dtype=float).reshape(-1)
+                    _wi = [canon_to_isaac.get(ci) for ci in (12, 13, 14)]  # waist yaw/roll/pitch
+                    if all(i is not None for i in _wi):
+                        _wtxt = (f" waist(y,r,p)=({_qj[_wi[0]]:+.2f},{_qj[_wi[1]]:+.2f},{_qj[_wi[2]]:+.2f})")
+                except Exception:  # noqa: BLE001
+                    pass
                 print(f"[bridge][walk] step={step} cmd=({_cmd[0]:+.2f},{_cmd[1]:+.2f},{_cmd[2]:+.2f}) "
                       f"base=({_bp[0]:+.2f},{_bp[1]:+.2f},{_bp[2]:.3f}) yaw={_yaw:+.2f} "
+                      f"roll={_roll:+.2f} pitch={_pitch:+.2f}{_wtxt} "
                       f"arm_ovr={len(walk_arm_tgt)}", flush=True)
         else:
             world.step(render=render_on)
@@ -1204,9 +1220,11 @@ def main() -> None:
                     _hw = UsdGeom.XformCache(Usd.TimeCode.Default()).GetLocalToWorldTransform(
                         stage.GetPrimAtPath(hand_path)).ExtractTranslation()
                     _bi, _bz, _bd = -1, float("nan"), 1e9
+                    _allz = []  # 巻き添え倒し調査用: 全オクラzを毎行記録（2026-07-24, 追記53）
                     for _i, _op in enumerate(okra_paths):
                         _ow = UsdGeom.XformCache(Usd.TimeCode.Default()).GetLocalToWorldTransform(
                             stage.GetPrimAtPath(_op)).ExtractTranslation()
+                        _allz.append(round(float(_ow[2]), 2))
                         _dd = (_hw[0]-_ow[0])**2 + (_hw[1]-_ow[1])**2 + (_hw[2]-_ow[2])**2
                         if _dd < _bd:
                             _bi, _bz, _bd = _i, float(_ow[2]), _dd
@@ -1225,7 +1243,8 @@ def main() -> None:
                     except Exception:  # noqa: BLE001
                         pass
                     _fg = [round(float(qm[gi]), 4) for gi in gripper_isaac_idx]
-                    _fr = f" | hand_z={_hz:.3f} nearest=Okra_{_bi} okra_z={_bz:.3f} dist={_bd**0.5:.3f} finger={_fg}"
+                    _fr = (f" | hand_z={_hz:.3f} nearest=Okra_{_bi} okra_z={_bz:.3f} dist={_bd**0.5:.3f}"
+                           f" allz={_allz} finger={_fg}")
                     # ジョー隙間の中心 vs オクラ（torso 系）。delta = okra - gap = IK 目標に足す補正量。
                     if jaw_link_paths and torso_path and _bi >= 0:
                         _xc2 = UsdGeom.XformCache(Usd.TimeCode.Default())
