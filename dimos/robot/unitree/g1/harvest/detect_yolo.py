@@ -65,6 +65,37 @@ def _mask_centroid(det: Any) -> tuple[float, float] | None:
         return None
 
 
+def _mask_median_depth(
+    det: Any, depth_getter: Callable[[float, float], float] | None
+) -> float | None:
+    """マスク内画素の有効深度の median [m]。マスク/depth_getter 無し → None。"""
+    if depth_getter is None:
+        return None
+    mask = getattr(det, "mask", None)
+    if mask is None:
+        return None
+    try:
+        import numpy as np
+
+        ys, xs = np.where(np.asarray(mask) > 0)
+        if len(xs) == 0:
+            return None
+        # マスク全画素は重いので最大 N 点をサブサンプル（重心近傍に偏らせない一様間引き）。
+        if len(xs) > _MASK_DEPTH_SAMPLES:
+            step = len(xs) // _MASK_DEPTH_SAMPLES
+            xs, ys = xs[::step], ys[::step]
+        depths = []
+        for u, v in zip(xs, ys):
+            d = depth_getter(float(u), float(v))
+            if d is not None and np.isfinite(d) and 0.05 < d < 10.0:
+                depths.append(float(d))
+        if not depths:
+            return None
+        return float(np.median(depths))
+    except Exception:
+        return None
+
+
 def default_pixel_to_base(
     u: float,
     v: float,
@@ -93,6 +124,44 @@ def default_pixel_to_base(
         "y": depth_m + cam_forward_m,
         "z": cam_height_m - vertical_drop,
     }
+
+
+def make_zed_pixel_to_base(
+    *,
+    depth_getter: Callable[[float, float], float] | None,
+    intrinsics_getter: Callable[[], tuple[float, float, float, float] | None],
+    fallback_image_w: int = 1280,
+    fallback_image_h: int = 720,
+) -> Callable[[float, float, Any], dict[str, float]]:
+    """Pixel→base-frame {x,y,z} [m] via REAL pinhole back-projection using the
+    ZED's own reported intrinsics (``camera_info.K``), instead of
+    :func:`default_pixel_to_base`'s angular approximation (which assumes the
+    head-mounted D435i's FOV/height — wrong for the chest-mounted ZED).
+
+    Same output convention as :func:`default_pixel_to_base`: x=lateral(+right),
+    y=depth(+forward), z=height(+up) — so downstream (``cam_to_torso_xyzquat``)
+    is unaffected. Depth still comes from the mask-median ZED depth (unchanged,
+    already accurate); only the lateral/vertical projection changes.
+
+    Falls back to :func:`default_pixel_to_base` if ``intrinsics_getter()``
+    returns ``None`` (e.g. no ``camera_info`` received yet at startup).
+    """
+
+    def _pixel_to_base(u: float, v: float, det: Any) -> dict[str, float]:
+        depth = _mask_median_depth(det, depth_getter)
+        if depth is None:
+            depth = depth_getter(u, v) if depth_getter else _ASSUMED_DEPTH_M
+        intr = intrinsics_getter()
+        if intr is None:
+            return default_pixel_to_base(
+                u, v, image_w=fallback_image_w, image_h=fallback_image_h, depth_m=depth
+            )
+        fx, fy, cx, cy = intr
+        x_opt = (u - cx) * depth / fx  # optical frame: +right
+        y_opt = (v - cy) * depth / fy  # optical frame: +down
+        return {"x": x_opt, "y": depth, "z": -y_opt}
+
+    return _pixel_to_base
 
 
 class YoloOkraDetector:
@@ -180,31 +249,7 @@ class YoloOkraDetector:
 
     def _mask_median_depth(self, det: Any) -> float | None:
         """マスク内画素の有効深度の median [m]。マスク/depth_getter 無し → None。"""
-        if self._depth_getter is None:
-            return None
-        mask = getattr(det, "mask", None)
-        if mask is None:
-            return None
-        try:
-            import numpy as np
-
-            ys, xs = np.where(np.asarray(mask) > 0)
-            if len(xs) == 0:
-                return None
-            # マスク全画素は重いので最大 N 点をサブサンプル（重心近傍に偏らせない一様間引き）。
-            if len(xs) > _MASK_DEPTH_SAMPLES:
-                step = len(xs) // _MASK_DEPTH_SAMPLES
-                xs, ys = xs[::step], ys[::step]
-            depths = []
-            for u, v in zip(xs, ys):
-                d = self._depth_getter(float(u), float(v))
-                if d is not None and np.isfinite(d) and 0.05 < d < 10.0:
-                    depths.append(float(d))
-            if not depths:
-                return None
-            return float(np.median(depths))
-        except Exception:
-            return None
+        return _mask_median_depth(det, self._depth_getter)
 
 
 def make_yolo_detect_okra(
@@ -237,4 +282,9 @@ def make_yolo_detect_okra(
     return yolo.detect
 
 
-__all__ = ["YoloOkraDetector", "default_pixel_to_base", "make_yolo_detect_okra"]
+__all__ = [
+    "YoloOkraDetector",
+    "default_pixel_to_base",
+    "make_yolo_detect_okra",
+    "make_zed_pixel_to_base",
+]

@@ -109,8 +109,11 @@ class Okra:
 class HarvestConfig:
     """Tunable parameters for the harvest workflow (no magic numbers in nodes).
 
-    The geometry defaults are placeholders for the mock; replace with the G1's
-    measured arm-reach volume and camera FOV when wiring the real robot.
+    ``reach`` is derived from ``IkApproachSkill``'s real, hardware-verified right-arm
+    workspace (``ws_x``/``ws_y``/``ws_z`` in `ik_approach.py`, standard ROS torso frame
+    x=forward/y=left/z=up), converted to this module's x=lateral(+right)/y=depth(+forward)/
+    z=height(+up) convention. ``fov`` is still a placeholder (never calibrated against the
+    real camera) — replace when wiring FOV-based detection filtering for the real robot.
     """
 
     ripeness_threshold: float = 0.6  # [0..1] minimum score to treat an okra as ripe
@@ -120,12 +123,15 @@ class HarvestConfig:
     basket_capacity: int = 30  # number of fruits before the basket is full
 
     # --- geometry [m] (robot base frame) ---
-    # Right-side reach volume: the arm can grasp only inside this box.
+    # Right-side reach volume: the arm can grasp only inside this box. Real values
+    # (see class docstring) — NOT a placeholder.
     reach: Box3D = field(
-        default_factory=lambda: Box3D(0.10, 0.50, 0.30, 0.60, 0.40, 1.10)
+        default_factory=lambda: Box3D(-0.20, 0.75, 0.05, 0.65, -0.35, 0.85)
     )
-    # Camera field of view: what detection can SEE (wider than reach).
-    fov: Box3D = field(default_factory=lambda: Box3D(-0.80, 0.80, 0.10, 1.50, 0.00, 1.60))
+    # Camera field of view: what detection can SEE (wider than reach). STILL a placeholder
+    # (never calibrated against the real camera) — but widened on y/z so it stays a proper
+    # superset of the now-real `reach` box above (an okra must be visible before reachable).
+    fov: Box3D = field(default_factory=lambda: Box3D(-0.80, 0.80, 0.00, 1.50, -0.35, 1.60))
 
     # --- movement [m] / counts ---
     # Harvest progresses RIGHT→LEFT: the discovery sweep steps left by this much.

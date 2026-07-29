@@ -50,6 +50,7 @@ from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.transport import LCMTransport
 from dimos.hardware.sensors.camera.zed.camera import ZEDCamera
 from dimos.msgs.geometry_msgs.Twist import Twist
+from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.robot.unitree.g1.act.g1_arm_sdk_connection import G1ArmSdkConnection
@@ -67,17 +68,31 @@ _WALK = os.getenv("OKRA_WALK", "1").strip() != "0"
 # IK 到達後そのまま切断可否チェック→グリッパを閉じる（②相当、スクリプト式）。
 # _ARM=0 のときは無関係（アーム自体が無効）。
 _ACT = os.getenv("OKRA_ACT", "1").strip() != "0"
+_USE_ACT_GRASP = _ARM and _ACT
 
+_modules = [
+    # 胸部 ZED: head の color + 実 depth（検出 + 重心3D）。深度は NEURAL 推奨（穴が少ない）。
+    ZEDCamera.blueprint(depth_mode=os.getenv("ZED_DEPTH_MODE", "NEURAL")),
+    G1ArmSdkConnection.blueprint(network_interface=_NIC),
+    G1GripperConnection.blueprint(network_interface=_NIC),
+]
+if _WALK:
+    # ベース歩行（LocoClient）。OKRA_WALK=0 なら省略 — G1HighLevelDdsSdk の
+    # MotionSwitcherClient/LocoClient.Init() は dds_init.channel_lock を取らずに
+    # DDS 初期化するため、G1ArmSdkConnection/G1GripperConnection の起動スレッドと
+    # 並走すると cyclonedds の IDL 型登録が競合し、稀に
+    # 'NoneType' object has no attribute 'SupportsBasic' で全体がクラッシュする
+    # （dds_init.py の channel_lock コメント参照）。歩行不要な段階検証では外して回避。
+    _modules.append(G1HighLevelDdsSdk.blueprint(network_interface=_NIC))
+if _USE_ACT_GRASP:
+    # 右手首カメラ: ACT 入力（据え置き UVC/teleimager）。ACT 無効時（OKRA_ACT=0 /
+    # OKRA_ARM=0）は不要 — teleimager パッケージ未インストールの環境でも段階
+    # ブリングアップ（IKのみ検証）できるよう、ACT 有効時のみ組み込む。
+    _modules.append(RightWristTeleimagerCamera.blueprint(camera="right_wrist"))
 
 unitree_g1_okra_harvest_ik = (
     autoconnect(
-        # 胸部 ZED: head の color + 実 depth（検出 + 重心3D）。深度は NEURAL 推奨（穴が少ない）。
-        ZEDCamera.blueprint(depth_mode=os.getenv("ZED_DEPTH_MODE", "NEURAL")),
-        # 右手首カメラ: ACT 入力（据え置き UVC/teleimager）。
-        RightWristTeleimagerCamera.blueprint(camera="right_wrist"),
-        G1ArmSdkConnection.blueprint(network_interface=_NIC),
-        G1GripperConnection.blueprint(network_interface=_NIC),
-        G1HighLevelDdsSdk.blueprint(network_interface=_NIC),  # ベース歩行（LocoClient）
+        *_modules,
         HarvestModule.blueprint(
             use_dummy=False,
             # --- 検出（胸部 ZED + okra-seg, [[SS-01]] / [[SS-04]]）---
@@ -86,7 +101,7 @@ unitree_g1_okra_harvest_ik = (
             target_classes=os.getenv("OKRA_TARGET", "okra"),
             # --- 把持（IK → (任意)ACT → 切断 シーケンス, [[SS-04/05/06]]）---
             # OKRA_ACT=0 で ACT を無効化（IK到達→スクリプト式グリッパ close のみ）。
-            use_act_grasp=_ARM and _ACT,
+            use_act_grasp=_USE_ACT_GRASP,
             use_ik_grasp_sequence=_ARM,
             # ACT は手首単眼・右腕7次元（sotata/act-okura-kinesthetic-wrist-7d）。
             # act_service を ACT_REPO_ID=sotata/act-okura-kinesthetic-wrist-7d で起動すること。
@@ -105,17 +120,23 @@ unitree_g1_okra_harvest_ik = (
         ),
     )
     .remappings(
-        [
-            # 右手首は color_image を出すため、ACT 手首入力（cam_right_wrist）にリネーム。
-            # ZED の color_image / depth_image は head のまま検出へ。
-            (RightWristTeleimagerCamera, "color_image", "cam_right_wrist"),
-        ]
+        # 右手首は color_image を出すため、ACT 手首入力（cam_right_wrist）にリネーム。
+        # ZED の color_image / depth_image は head のまま検出へ。ACT 無効時はモジュール
+        # 自体が組み込まれていないので、remap も不要（空リスト）。
+        [(RightWristTeleimagerCamera, "color_image", "cam_right_wrist")]
+        if _USE_ACT_GRASP
+        else []
     )
     .transports(
         {
             ("color_image", Image): LCMTransport("/color_image", Image),
             ("depth_image", Image): LCMTransport("/depth_image", Image),
-            ("cam_right_wrist", Image): LCMTransport("/cam_right_wrist", Image),
+            ("camera_info", CameraInfo): LCMTransport("/camera_info", CameraInfo),
+            **(
+                {("cam_right_wrist", Image): LCMTransport("/cam_right_wrist", Image)}
+                if _USE_ACT_GRASP
+                else {}
+            ),
             ("motor_states", JointState): LCMTransport("/g1/motor_states", JointState),
             ("arm_target", JointState): LCMTransport("/g1/arm_target", JointState),
             ("right_gripper_state", JointState): LCMTransport("/g1/right_gripper_state", JointState),

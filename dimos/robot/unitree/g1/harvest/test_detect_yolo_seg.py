@@ -23,6 +23,7 @@ import numpy as np
 from dimos.robot.unitree.g1.harvest.detect_yolo import (
     YoloOkraDetector,
     _mask_centroid,
+    make_zed_pixel_to_base,
 )
 
 
@@ -131,3 +132,53 @@ def test_mask_median_ignores_invalid_depths() -> None:
     assert len(okra) == 1
     # Only the valid 0.40 m samples survive -> median 0.40 -> y = 0.45.
     assert okra[0].pos_3d["y"] == 0.40 + 0.05
+
+
+def test_zed_pixel_to_base_uses_real_intrinsics() -> None:
+    """With intrinsics available, lateral/vertical come from proper pinhole
+    back-projection (fx,fy,cx,cy) instead of the D435i angular guess."""
+    fx, fy, cx, cy = 700.0, 700.0, 640.0, 360.0
+    depth = 0.40
+    pixel_to_base = make_zed_pixel_to_base(
+        depth_getter=lambda u, v: depth,
+        intrinsics_getter=lambda: (fx, fy, cx, cy),
+    )
+    det = _SegDet(name="okra", bbox=(0, 0, 10, 10), mask=None)
+    # A pixel 70px right and 35px below the principal point.
+    u, v = cx + 70.0, cy + 35.0
+    pos = pixel_to_base(u, v, det)
+    assert pos["y"] == depth
+    assert pos["x"] == (u - cx) * depth / fx
+    assert pos["z"] == -((v - cy) * depth / fy)
+    # Right-of-centre pixel -> lateral > 0 (+right); below-centre -> height < 0.
+    assert pos["x"] > 0
+    assert pos["z"] < 0
+
+
+def test_zed_pixel_to_base_falls_back_without_intrinsics() -> None:
+    """No camera_info received yet -> fall back to default_pixel_to_base, not a crash."""
+    pixel_to_base = make_zed_pixel_to_base(
+        depth_getter=lambda u, v: 0.5,
+        intrinsics_getter=lambda: None,
+    )
+    det = _SegDet(name="okra", bbox=(0, 0, 10, 10), mask=None)
+    pos = pixel_to_base(320.0, 240.0, det)
+    assert pos["y"] == 0.5 + 0.05  # default_pixel_to_base's cam_forward_m offset applied
+
+    def depth_getter(u: float, v: float) -> float:
+        return u / 1000.0
+
+    mask = _square_mask(300, 200, 340, 260)
+    seg_det = _SegDet(name="okra", bbox=(300, 200, 340, 260), mask=mask)
+    yolo = YoloOkraDetector(
+        detector=_StubDetector([seg_det]),
+        frame_getter=lambda: _Frame(),
+        target_classes={"okra"},
+        pixel_to_base=make_zed_pixel_to_base(
+            depth_getter=depth_getter, intrinsics_getter=lambda: (700.0, 700.0, 320.0, 240.0)
+        ),
+    )
+    okra = yolo.detect()
+    assert len(okra) == 1
+    # Still driven by the mask-median depth (same behaviour as the legacy path).
+    assert 0.30 < okra[0].pos_3d["y"] < 0.42

@@ -31,6 +31,7 @@ from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
 from dimos.msgs.geometry_msgs.Twist import Twist
+from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.robot.unitree.g1.harvest.announce import CallableAnnouncer
@@ -124,6 +125,7 @@ class HarvestModule(Module):
     config: HarvestModuleConfig
     color_image: In[Image]  # ヘッドカメラ（LIVE モード）; ダミーモードでは未使用
     depth_image: In[Image]  # ZED 深度画像（LIVE + use_zed_depth）; 未接続時は仮定深度にフォールバック
+    camera_info: In[CameraInfo]  # ZED 内部パラメータ（LIVE + use_zed_depth、実逆投影に使用）
     cam_right_wrist: In[Image]  # 右手首カメラ（LIVE + use_act_grasp、2カメラツリーモデル）
     cmd_vel: Out[Twist]  # ベース速度（LIVE + use_base_move）-> G1Connection
     # アームストリーム（LIVE + use_act_grasp）-> G1ArmSdkConnection / G1GripperConnection
@@ -141,6 +143,7 @@ class HarvestModule(Module):
         self._lock = threading.Lock()
         self._latest_image: Image | None = None
         self._latest_depth: Image | None = None
+        self._latest_camera_info: CameraInfo | None = None
         self._latest_wrist: Image | None = None
         self._latest_state: JointState | None = None
         self._latest_gripper: float = 0.0
@@ -234,6 +237,19 @@ class HarvestModule(Module):
         with self._lock:
             self._latest_depth = image
 
+    def _on_camera_info(self, info: CameraInfo) -> None:
+        with self._lock:
+            self._latest_camera_info = info
+
+    def _zed_intrinsics(self) -> tuple[float, float, float, float] | None:
+        """``camera_info.K``（3x3 row-major）から (fx, fy, cx, cy) を返す。未受信なら None。"""
+        with self._lock:
+            info = self._latest_camera_info
+        k = getattr(info, "K", None) if info is not None else None
+        if not k or len(k) < 6:
+            return None
+        return float(k[0]), float(k[4]), float(k[2]), float(k[5])
+
     @rpc
     def start(self) -> None:
         super().start()
@@ -251,11 +267,15 @@ class HarvestModule(Module):
             targets = {c.strip() for c in self.config.target_classes.split(",") if c.strip()}
 
             depth_getter = None
+            pixel_to_base = None
             depth_note = "depth=assumed(0.45m)"
             if self.config.use_zed_depth:
                 import numpy as np
 
                 self.register_disposable(Disposable(self.depth_image.subscribe(self._on_depth)))
+                self.register_disposable(
+                    Disposable(self.camera_info.subscribe(self._on_camera_info))
+                )
                 _FALLBACK_DEPTH_M = 0.45  # [m] ZED が値を返さない場合のフォールバック
 
                 def _zed_depth_getter(u: float, v: float) -> float:
@@ -273,6 +293,32 @@ class HarvestModule(Module):
 
                 depth_getter = _zed_depth_getter
                 depth_note = "depth=ZED"
+
+                # ピクセル→3D は D435i（頭部）画角の当て推量ではなく、ZED 自身の camera_info
+                # (K) を使った実逆投影で行う（default_pixel_to_base は intrinsics 未受信時
+                # のみのフォールバック）。奥行きは上記の ZED mask-median depth のまま。
+                from dimos.robot.unitree.g1.harvest.detect_yolo import make_zed_pixel_to_base
+
+                pixel_to_base_cam = make_zed_pixel_to_base(
+                    depth_getter=depth_getter,
+                    intrinsics_getter=self._zed_intrinsics,
+                )
+
+                # Okra.pos_3d は「ロボット本体(torso)基準」であることが reach box
+                # （graph.py の select）・IK 双方の前提（blackboard.py の Box3D docstring
+                # 参照）。cam_to_torso_xyzquat が校正済みならここで検出時点に torso 座標へ
+                # 変換する — reach box チェックにも IK にも同じ変換済み座標が渡るように
+                # （以前は IK 直前でしか変換されておらず、reach box は未校正のカメラ座標を
+                # 見て誤判定していた）。未校正（空文字）ならカメラ座標のまま通す。
+                cam_to_torso = self._parse_cam_to_torso(self.config.cam_to_torso_xyzquat)
+                if cam_to_torso is not None:
+
+                    def pixel_to_base(u: float, v: float, det: Any) -> dict[str, float]:
+                        p_cam = pixel_to_base_cam(u, v, det)
+                        x, y, z = cam_to_torso([p_cam["x"], p_cam["y"], p_cam["z"]])
+                        return {"x": x, "y": y, "z": z}
+                else:
+                    pixel_to_base = pixel_to_base_cam
 
             verify_fn = None
             verify_note = "verify=[LIVE-TODO] プレースホルダー"
@@ -352,13 +398,20 @@ class HarvestModule(Module):
                     )
 
                 ik_skill = IkApproachSkill()
-                cam_to_torso = self._parse_cam_to_torso(self.config.cam_to_torso_xyzquat)
 
                 def _ik_solve(okra: Any) -> Any:
-                    """対象オクラの重心(pos_3d)→torso 3D→右腕 IK。解けなければ None。"""
+                    """対象オクラの重心(pos_3d、既に torso 座標)→右腕 IK。解けなければ None。"""
                     pos = getattr(okra, "pos_3d", None) or {}
-                    p = [float(pos.get("x", 0.0)), float(pos.get("y", 0.0)), float(pos.get("z", 0.0))]
-                    target_torso = cam_to_torso(p) if cam_to_torso is not None else p
+                    # pos_3d は use_zed_depth 時点で cam_to_torso 変換済み（上記 pixel_to_base
+                    # 参照）だが、この収穫パイプライン独自の座標系（x=左右+右, y=奥行き+前方,
+                    # z=高さ+上）のまま。IkApproachSkill（pinocchio）は標準 ROS 座標系
+                    # （X=前方, Y=左, Z=上）を要求するので、ここで変換する（変換し忘れると
+                    # x/y が取り違えられ、reach box は通っても IK ワークスペース判定で
+                    # 「範囲外」と誤って弾かれる）。
+                    x_lat = float(pos.get("x", 0.0))
+                    y_depth = float(pos.get("y", 0.0))
+                    z_height = float(pos.get("z", 0.0))
+                    target_torso = [y_depth, -x_lat, z_height]
                     with self._lock:
                         state = self._latest_state
                     if state is None:
@@ -407,6 +460,7 @@ class HarvestModule(Module):
                 grasp_module=grasp_override,
                 next_station_fn=next_station_override,
                 depth_getter=depth_getter,
+                pixel_to_base=pixel_to_base,
                 yolo_model=self.config.yolo_model,
             )
             mode = f"LIVE — {detect_note}; {depth_note}; {verify_note}; {move_note}; {grasp_note}"
