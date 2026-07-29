@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 import sys, os, time
+from urllib.parse import quote
 import numpy as np
 import cv2
 import pyzed.sl as sl
@@ -37,9 +38,18 @@ rr.init("okra_zed_live_local")
 rr.serve_grpc(grpc_port=GRPC_PORT, cors_allow_origin=["*"])
 uri = "rerun+http://%s:%d/proxy" % (HOST, GRPC_PORT)
 rr.serve_web_viewer(web_port=WEB_PORT, open_browser=False, connect_to=uri)
+# ★ 素の http://host:port で開くと Welcome 画面のまま「空ソースに固着」する。
+#   理由: rerun の serve_web_viewer は connect_to を open_browser=True の時しか
+#   使わない（docstring: "If open_browser is true, then this is the URL the web
+#   viewer will connect to."）。配信ページに接続先は埋め込まれないので、
+#   open_browser=False の本スクリプトでは ?url= でブラウザ側から渡すのが唯一の手段。
+#   （Jetson で SSH 常駐起動する用途なので open_browser=True にはできない）
+#   `+` `:` `/` はクエリで壊れるため percent-encode する（quote(safe="")）。
+VIEWER_URL = "http://%s:%d/?url=%s" % (HOST, WEB_PORT, quote(uri, safe=""))
 print("=" * 64, flush=True)
-print("  WEB VIEWER:  http://%s:%d" % (HOST, WEB_PORT), flush=True)
-print("  fallback:    http://%s:%d/?url=%s" % (HOST, WEB_PORT, uri), flush=True)
+print("  WEB VIEWER (このURLで開くこと):", flush=True)
+print("  %s" % VIEWER_URL, flush=True)
+print("  ※ 素の http://%s:%d は空ソースに固着するので使わない" % (HOST, WEB_PORT), flush=True)
 print("=" * 64, flush=True)
 
 rr.log("world", rr.ViewCoordinates.RDF, static=True)
