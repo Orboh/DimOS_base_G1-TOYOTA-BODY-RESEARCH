@@ -97,3 +97,14 @@ MUJOCO_LOG.TXT
 *.log
 **/chromadb_data/
 **/visual_memory.pkl
+
+# --- 巨大バイナリ / 生成物（誤 push 防止）---
+# Isaac/MuJoCo シーンの USD。okra_field_full.usd 単体で 1.2GB あり、
+# FARO スキャンから再生成できるため git には入れない（手順は docs 参照）。
+usd_file/
+# pyzed は ZED SDK 付属の wheel。SDK インストール時に生成されるので追跡しない。
+*.whl
+# rerun のレコーディング（g1_cam_mount.rrd 等）はスクリプトから再生成できる生成物。
+*.rrd
+# pyopenjtalk で生成する日本語アナウンス音声。ソース（文言）から再生成可能。
+docs/sim-setup/audio_samples/
