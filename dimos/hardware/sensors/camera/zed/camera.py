@@ -63,6 +63,12 @@ class ZEDCameraConfig(ModuleConfig, DepthCameraConfig):
     enable_depth: bool = True
     enable_pointcloud: bool = False
     pointcloud_fps: float = 5.0
+    # Voxel size [m] for downsampling the published cloud (upstream default 0.005).
+    # Smaller = denser cloud but more bandwidth/render load. <= 0 disables downsampling.
+    pointcloud_voxel: float = 0.005
+    # Max depth [m] to include in the cloud (from_rgbd depth_trunc). Truncating the
+    # far background concentrates the point budget on the workspace.
+    pointcloud_depth_trunc: float = 5.0
     camera_info_fps: float = 1.0
     camera_id: int = 0
     serial_number: int | str | None = None
@@ -438,8 +444,10 @@ class ZEDCamera(DepthCameraHardware, Module, perception.DepthCamera):
                 depth_image=depth_img,
                 camera_info=self._color_camera_info,
                 depth_scale=self._depth_scale,
+                depth_trunc=self.config.pointcloud_depth_trunc,
             )
-            pcd = pcd.voxel_downsample(0.005)
+            if self.config.pointcloud_voxel > 0.0:
+                pcd = pcd.voxel_downsample(self.config.pointcloud_voxel)
             self.pointcloud.publish(pcd)
         except Exception as e:
             print(f"Pointcloud generation error: {e}")

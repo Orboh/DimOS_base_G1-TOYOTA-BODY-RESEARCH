@@ -50,7 +50,7 @@ from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
 from dimos.msgs.sensor_msgs.JointState import JointState
-from dimos.robot.unitree.g1.act.dds_init import ensure_channel_factory
+from dimos.robot.unitree.g1.act.dds_init import channel_lock, ensure_channel_factory
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
@@ -73,10 +73,26 @@ class G1GripperConnectionConfig(ModuleConfig):
     q_min: float = 0.0
     q_max: float = 9.0
     frame_id: str = "g1_right_gripper"
+    # DDS topic prefix for the Dex1 service ("<prefix>/cmd" + "<prefix>/state").
+    # Default = the standard right-hand service. Override when the PHYSICALLY
+    # right-mounted Dex1 enumerates under the left service (e.g. its data cable
+    # is plugged into the left-hand port — observed 2026-07-16: hand on the right
+    # wrist, but only rt/dex1/left/state publishing): set "rt/dex1/left". This
+    # only renames the wire topics — the module still represents the RIGHT
+    # gripper (streams/frame_id unchanged).
+    dex1_topic_prefix: str = "rt/dex1/right"
     # DRY-RUN: when False, the loop still reads rt/dex1/right/state and publishes
     # right_gripper_state, but writes NOTHING to rt/dex1/right/cmd — the gripper
     # does not move. Used by the dry-run blueprint.
     publish_cmd: bool = True
+    # FIXED-HOLD mode (kinesthetic collection): if set, hold the gripper AT this q
+    # (ramped from the measured start over hold_ramp_s), IGNORING gripper_target — so
+    # the gripper stays at e.g. ~3cm open while the operator hand-guides. None = normal
+    # (hold current / follow gripper_target). q units are the Dex1 motor q (clamp ~[0,9],
+    # observed rest ~3-5); the 3cm value is NOT a known mapping — tune on hardware
+    # (watch right_gripper_state) until the opening looks right.
+    hold_target_q: float | None = None
+    hold_ramp_s: float = 1.5     # ramp measured->hold_target_q [s] (avoid a sudden jaw move)
 
 
 class G1GripperConnection(Module):
@@ -97,6 +113,8 @@ class G1GripperConnection(Module):
         self._thread: Thread | None = None
         self._measured_q: float | None = None
         self._target_q: float | None = None
+        self._hold_q0: float | None = None   # measured q at start (fixed-hold ramp origin)
+        self._hold_t0: float = 0.0
 
     @rpc
     def start(self) -> None:
@@ -105,12 +123,16 @@ class G1GripperConnection(Module):
         from unitree_sdk2py.idl.default import unitree_go_msg_dds__MotorCmd_
         from unitree_sdk2py.idl.unitree_go.msg.dds_ import MotorCmds_, MotorStates_
 
-        ensure_channel_factory(self.config.network_interface)
-
-        self._publisher = ChannelPublisher("rt/dex1/right/cmd", MotorCmds_)
-        self._publisher.Init()
-        self._subscriber = ChannelSubscriber("rt/dex1/right/state", MotorStates_)
-        self._subscriber.Init(self._on_state, 10)
+        # Serialise unitree DDS channel creation vs sibling DDS modules (arm_sdk):
+        # concurrent cyclonedds type registration raises "Failed to encode union
+        # ... DDS.XTypes.TypeObject".
+        prefix = self.config.dex1_topic_prefix
+        with channel_lock:
+            ensure_channel_factory(self.config.network_interface)
+            self._publisher = ChannelPublisher(f"{prefix}/cmd", MotorCmds_)
+            self._publisher.Init()
+            self._subscriber = ChannelSubscriber(f"{prefix}/state", MotorStates_)
+            self._subscriber.Init(self._on_state, 10)
 
         # Single-motor gripper command, soft gains (kp=5/kd=0.05).
         self._cmd_msg = MotorCmds_()
@@ -121,7 +143,7 @@ class G1GripperConnection(Module):
         self._cmd_msg.cmds[0].kd = self.config.kd
 
         # Wait for the first measured state so we can hold the current position.
-        logger.info("Waiting for first rt/dex1/right/state...")
+        logger.info(f"Waiting for first {prefix}/state...")
         t0 = time.time()
         while time.time() - t0 < _STATE_WAIT_S:
             with self._lock:
@@ -131,11 +153,20 @@ class G1GripperConnection(Module):
         with self._lock:
             if self._measured_q is None:
                 raise RuntimeError(
-                    "No rt/dex1/right/state received; cannot start gripper safely "
-                    "(is the right Dex1 connected and teleimager/robot publishing?)"
+                    f"No {prefix}/state received; cannot start gripper safely "
+                    "(is the Dex1 connected and teleimager/robot publishing?)"
                 )
             self._target_q = self._measured_q  # hold current position until ACT sends a target
-        logger.info(f"Dex1 right gripper ready; holding current q={self._target_q:.3f}")
+            if self.config.hold_target_q is not None:
+                self._hold_q0 = self._measured_q
+                self._hold_t0 = time.perf_counter()
+        if self.config.hold_target_q is not None:
+            logger.info(
+                f"Dex1 right gripper FIXED-HOLD: ramping q {self._measured_q:.3f} -> "
+                f"{self.config.hold_target_q:.3f} over {self.config.hold_ramp_s}s (ignoring gripper_target)."
+            )
+        else:
+            logger.info(f"Dex1 right gripper ready; holding current q={self._target_q:.3f}")
 
         self.register_disposable(Disposable(self.gripper_target.subscribe(self._on_target)))
         self._stop_event.clear()
@@ -206,7 +237,12 @@ class G1GripperConnection(Module):
             with self._lock:
                 if self._cmd_msg is None or self._publisher is None:
                     break
-                target = self._target_q
+                # Fixed-hold (collection): command a ramped constant, ignore gripper_target.
+                if self.config.hold_target_q is not None and self._hold_q0 is not None:
+                    a = min(1.0, (now - self._hold_t0) / max(1e-3, self.config.hold_ramp_s))
+                    target = self._hold_q0 + (self.config.hold_target_q - self._hold_q0) * a
+                else:
+                    target = self._target_q
                 measured = self._measured_q
                 if target is not None and self.config.publish_cmd:  # dry-run: no cmd write
                     self._cmd_msg.cmds[0].q = float(target)
