@@ -25,7 +25,9 @@ HOST      = "localhost"        # 同一マシン表示
 GRPC_PORT = 9876
 WEB_PORT  = 9090
 HERE      = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODEL     = os.path.join(HERE, "data/models_yolo/okra11n-seg.pt")
+# 重みは既定でリポ同梱パス。Jetson など置き場所が違う環境では OKRA_MODEL で上書きする
+# （2026-07-16 に Jetson 実機で必要になった改良を取り込み）。
+MODEL     = os.environ.get("OKRA_MODEL", os.path.join(HERE, "data/models_yolo/okra11n-seg.pt"))
 
 STRIDE     = int(sys.argv[1]) if len(sys.argv) > 1 else 3
 YOLO_EVERY = int(sys.argv[2]) if len(sys.argv) > 2 else 2      # GPU なので密でも可
