@@ -34,6 +34,9 @@ from collections.abc import Callable
 from typing import Any
 
 from dimos.robot.unitree.g1.harvest.blackboard import Okra
+from dimos.utils.logging_config import setup_logger
+
+logger = setup_logger()
 
 # Rough head-camera placeholders for the pinhole estimate (REPLACE with the
 # measured D435i intrinsics + mounting transform). [deg] / [m].
@@ -130,36 +133,47 @@ def make_zed_pixel_to_base(
     *,
     depth_getter: Callable[[float, float], float] | None,
     intrinsics_getter: Callable[[], tuple[float, float, float, float] | None],
-    fallback_image_w: int = 1280,
-    fallback_image_h: int = 720,
-) -> Callable[[float, float, Any], dict[str, float]]:
-    """Pixel→base-frame {x,y,z} [m] via REAL pinhole back-projection using the
-    ZED's own reported intrinsics (``camera_info.K``), instead of
-    :func:`default_pixel_to_base`'s angular approximation (which assumes the
-    head-mounted D435i's FOV/height — wrong for the chest-mounted ZED).
+) -> Callable[[float, float, Any], dict[str, float] | None]:
+    """Pixel→**カメラ光学系**の {x,y,z} [m]（ZED の ``camera_info.K`` を使う実逆投影）。
 
-    Same output convention as :func:`default_pixel_to_base`: x=lateral(+right),
-    y=depth(+forward), z=height(+up) — so downstream (``cam_to_torso_xyzquat``)
-    is unaffected. Depth still comes from the mask-median ZED depth (unchanged,
-    already accurate); only the lateral/vertical projection changes.
+    軸: x=lateral(+right), y=depth(+forward), z=height(+up)。原点は**カメラ**なので、
+    torso 基準にするには下流の ``cam_to_torso_xyzquat`` 変換が必須。
+    :func:`default_pixel_to_base` は軸は同じだが **原点が地面**（``cam_height_m`` /
+    ``cam_forward_m`` を足し込む）ため、両者は互換ではない。
 
-    Falls back to :func:`default_pixel_to_base` if ``intrinsics_getter()``
-    returns ``None`` (e.g. no ``camera_info`` received yet at startup).
+    :func:`default_pixel_to_base` が頭部 D435i の画角（HFOV 69°/VFOV 42°）と高さ
+    1.10m を仮定した近似（当該関数自身が PLACEHOLDER と明記）なのに対し、こちらは
+    ZED 自身が報告する内部パラメータで逆投影する。画像中心から 200px 横で約 3.8cm の
+    横方向誤差が消える（ラップトップで数値検証済み）。
+
+    **推測しない**: 内部パラメータ・深度のどちらかが得られなければ ``None`` を返す。
+    以前は ``default_pixel_to_base``（D435i 定数・地面原点）へフォールバックしていたが、
+    下流の ``cam_to_torso`` 変換でカメラ高さが二重計上され、画像中心で z が約 110cm
+    ずれていた。``camera_info`` は ``camera_info_fps=1.0``（毎秒1回）配信なので、
+    起動直後に最大 1 秒だけこの窓が開く。1 秒待つ方が 1m ずれた位置へ腕を伸ばすより
+    安全なため、その検出を捨てる（呼び出し側は ``None`` をスキップする）。
     """
 
-    def _pixel_to_base(u: float, v: float, det: Any) -> dict[str, float]:
+    def _pixel_to_base(u: float, v: float, det: Any) -> dict[str, float] | None:
+        # 深度: マスク内 median → 点(u,v) の順に試す。どちらも実測値。
+        # 取れない場合に定数（_ASSUMED_DEPTH_M）を当てることはしない。
         depth = _mask_median_depth(det, depth_getter)
-        if depth is None:
-            depth = depth_getter(u, v) if depth_getter else _ASSUMED_DEPTH_M
+        if depth is None and depth_getter is not None:
+            try:
+                depth = depth_getter(u, v)
+            except Exception:
+                depth = None
+        if depth is None or not math.isfinite(depth) or not 0.05 < depth < 10.0:
+            return None
         intr = intrinsics_getter()
         if intr is None:
-            return default_pixel_to_base(
-                u, v, image_w=fallback_image_w, image_h=fallback_image_h, depth_m=depth
-            )
+            return None  # camera_info 未受信 → 推測せず捨てる
         fx, fy, cx, cy = intr
+        if not fx or not fy:
+            return None
         x_opt = (u - cx) * depth / fx  # optical frame: +right
         y_opt = (v - cy) * depth / fy  # optical frame: +down
-        return {"x": x_opt, "y": depth, "z": -y_opt}
+        return {"x": x_opt, "y": float(depth), "z": -y_opt}
 
     return _pixel_to_base
 
@@ -221,6 +235,11 @@ class YoloOkraDetector:
                 uv = ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
             u, v = uv
             pos = self._pos_3d(u, v, det, frame)
+            if pos is None:
+                # 3D 化に必要な情報（ZED の camera_info / 深度）が揃っていない。
+                # 推測値で腕を動かすより捨てる方が安全（make_zed_pixel_to_base 参照）。
+                logger.debug("detect_okra: skipping %s — no 3D position available", name)
+                continue
             ripeness = float(self._ripeness_fn(det)) if self._ripeness_fn else 1.0
             track = getattr(det, "track_id", None)
             okra_id = f"okra_{track}" if track is not None else f"okra_{name}_{idx}"
@@ -235,7 +254,13 @@ class YoloOkraDetector:
             )
         return out
 
-    def _pos_3d(self, u: float, v: float, det: Any, frame: Any) -> dict[str, float]:
+    def _pos_3d(self, u: float, v: float, det: Any, frame: Any) -> dict[str, float] | None:
+        """画素→3D。3D 化できない場合は ``None``（呼び出し側でその検出を捨てる）。
+
+        ``pixel_to_base`` が注入されていれば（ZED 経路）その結果をそのまま返す。
+        未注入の場合は D435i 経路で、``default_pixel_to_base`` が本来の手段
+        （D435i は camera_info を配信しないため、画角定数による近似しかない）。
+        """
         if self._pixel_to_base is not None:
             return self._pixel_to_base(u, v, det)
         w = int(getattr(frame, "width", 640))

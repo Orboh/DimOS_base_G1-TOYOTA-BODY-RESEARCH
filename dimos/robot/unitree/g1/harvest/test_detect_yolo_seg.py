@@ -155,15 +155,58 @@ def test_zed_pixel_to_base_uses_real_intrinsics() -> None:
     assert pos["z"] < 0
 
 
-def test_zed_pixel_to_base_falls_back_without_intrinsics() -> None:
-    """No camera_info received yet -> fall back to default_pixel_to_base, not a crash."""
+def test_zed_pixel_to_base_returns_none_without_intrinsics() -> None:
+    """camera_info 未受信 → 推測せず None。
+
+    以前は default_pixel_to_base（D435i 定数・地面原点）へフォールバックしていたが、
+    下流の cam_to_torso 変換でカメラ高さが二重計上され、画像中心で z が約 110cm
+    ずれていた。camera_info は毎秒1回配信なので、最大1秒待つ方が安全。
+    """
     pixel_to_base = make_zed_pixel_to_base(
         depth_getter=lambda u, v: 0.5,
         intrinsics_getter=lambda: None,
     )
     det = _SegDet(name="okra", bbox=(0, 0, 10, 10), mask=None)
-    pos = pixel_to_base(320.0, 240.0, det)
-    assert pos["y"] == 0.5 + 0.05  # default_pixel_to_base's cam_forward_m offset applied
+    assert pixel_to_base(320.0, 240.0, det) is None
+
+
+def test_zed_pixel_to_base_returns_none_without_usable_depth() -> None:
+    """深度が取れない/範囲外 → 定数(_ASSUMED_DEPTH_M=0.45)を当てず None。"""
+    intr = (700.0, 700.0, 320.0, 240.0)
+    det = _SegDet(name="okra", bbox=(0, 0, 10, 10), mask=None)
+
+    # depth_getter 自体が無い
+    assert make_zed_pixel_to_base(depth_getter=None, intrinsics_getter=lambda: intr)(
+        320.0, 240.0, det
+    ) is None
+    # 深度が範囲外（ZED が 0 を返す = 無効値）
+    assert make_zed_pixel_to_base(
+        depth_getter=lambda u, v: 0.0, intrinsics_getter=lambda: intr
+    )(320.0, 240.0, det) is None
+    # 深度が NaN
+    assert make_zed_pixel_to_base(
+        depth_getter=lambda u, v: float("nan"), intrinsics_getter=lambda: intr
+    )(320.0, 240.0, det) is None
+
+
+def test_detect_skips_okra_without_3d_position() -> None:
+    """3D 化できない検出は Okra リストに載らない（腕を動かさない）。"""
+    mask = _square_mask(300, 200, 340, 260)
+    seg_det = _SegDet(name="okra", bbox=(300, 200, 340, 260), mask=mask)
+    yolo = YoloOkraDetector(
+        detector=_StubDetector([seg_det]),
+        frame_getter=lambda: _Frame(),
+        target_classes={"okra"},
+        pixel_to_base=make_zed_pixel_to_base(
+            depth_getter=lambda u, v: 0.4,
+            intrinsics_getter=lambda: None,  # camera_info 未受信
+        ),
+    )
+    assert yolo.detect() == []
+
+
+def test_zed_pixel_to_base_uses_mask_median_depth() -> None:
+    """intrinsics が揃っていればマスク内 median 深度で 3D 化される。"""
 
     def depth_getter(u: float, v: float) -> float:
         return u / 1000.0
