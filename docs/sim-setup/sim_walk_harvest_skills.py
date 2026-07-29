@@ -167,8 +167,13 @@ class WalkHarvestSkills(SimHarvestSkills):
         # なぎ倒すのを防ぐため、左端から取り始めてロボットを右へ進める（バスケットは
         # 既収穫側=左へ退くので未収穫オクラに当たらない）。並びは calib torso y の降順。
         # graph の select は熟度同点を検出順で拾う（安定ソート）ため、この順が把持順になる。
+        # 【巻き添え対策① 2026-07-29, 追記56】右隣巻き添え（観測7/7が現対象の右隣、直前の
+        # 横滑りなし=腕系の接触）への対策実験: SIM_WALK_PICK_ORDER=right で右端から取る。
+        # 右隣は常に収穫済み＝倒す相手がいない。トレードオフは左手首バスケットが未収穫の
+        # 左側を通ること（旧観測でバスケット薙ぎ倒しあり）→ どちらの当たりが少ないか実測で決める。
+        order_right = os.getenv("SIM_WALK_PICK_ORDER", "left") == "right"
         out = []
-        for k in sorted(self._okra, key=lambda kk: float(self._okra[kk][1][1]), reverse=True):
+        for k in sorted(self._okra, key=lambda kk: float(self._okra[kk][1][1]), reverse=not order_right):
             if k in self._picked:
                 continue
             p = self._okra_now(k)
