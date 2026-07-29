@@ -50,8 +50,24 @@ setsid nohup ./.venv/bin/python scripts/zed_rerun_stream_local.py 3 6 768 0.25 N
   < /dev/null > /tmp/zed_stream.log 2>&1 &
 ```
 
-引数: `[stride=3] [yolo_every=6] [imgsz=768] [conf=0.25] [depth=NEURAL]`
-重み: `data/models_yolo/okra11n-seg.pt`（単一クラス okra）。NEURAL 深度に失敗すると PERFORMANCE に自動フォールバック。
+スクリプト実体: `scripts/zed_rerun_stream_local.py`
+
+引数: `[stride] [yolo_every] [imgsz] [conf] [depth]`。上の例の `3 6 768 0.25 NEURAL` は
+**Jetson の CPU torch 向けに負荷を落とした値**で、スクリプト既定値（`3 2 1280 0.25 NEURAL`）とは異なります。
+GPU があるマシンなら既定値のままで構いません。NEURAL 深度に失敗すると PERFORMANCE に自動フォールバックします。
+
+### YOLO 重みの入手
+
+重みは `data/models_yolo/okra11n-seg.pt`（単一クラス okra）を読みます。
+**この重みは git には入っていません**（`data/.lfs/models_yolo.tar.gz` は LFS ポインタのみで、
+Orboh フォークには blob が無く `git lfs pull` は 404）。Hugging Face から取得してください。
+
+```bash
+hf download Kota0612/okra11n-seg-v5 model/okra11n-seg.pt --local-dir /tmp/okra-w
+mkdir -p data/models_yolo && mv /tmp/okra-w/model/okra11n-seg.pt data/models_yolo/
+```
+
+配布元: [`Kota0612/okra11n-seg-v5`](https://huggingface.co/Kota0612/okra11n-seg-v5)（public / ultralytics / 学習データセット同梱）
 
 ### 停止
 
