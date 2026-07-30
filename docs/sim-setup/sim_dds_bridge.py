@@ -1221,10 +1221,13 @@ def main() -> None:
                         stage.GetPrimAtPath(hand_path)).ExtractTranslation()
                     _bi, _bz, _bd = -1, float("nan"), 1e9
                     _allz = []  # 巻き添え倒し調査用: 全オクラzを毎行記録（2026-07-24, 追記53）
+                    _ally = []  # 巻き添えの機序特定用: 全オクラの横位置y（2026-07-29, 追記56。
+                    #            倒れる前に対象/隣がy方向へ滑っていれば「押し出し」、無ければ「肘接触」）
                     for _i, _op in enumerate(okra_paths):
                         _ow = UsdGeom.XformCache(Usd.TimeCode.Default()).GetLocalToWorldTransform(
                             stage.GetPrimAtPath(_op)).ExtractTranslation()
                         _allz.append(round(float(_ow[2]), 2))
+                        _ally.append(round(float(_ow[1]), 3))
                         _dd = (_hw[0]-_ow[0])**2 + (_hw[1]-_ow[1])**2 + (_hw[2]-_ow[2])**2
                         if _dd < _bd:
                             _bi, _bz, _bd = _i, float(_ow[2]), _dd
@@ -1244,7 +1247,7 @@ def main() -> None:
                         pass
                     _fg = [round(float(qm[gi]), 4) for gi in gripper_isaac_idx]
                     _fr = (f" | hand_z={_hz:.3f} nearest=Okra_{_bi} okra_z={_bz:.3f} dist={_bd**0.5:.3f}"
-                           f" allz={_allz} finger={_fg}")
+                           f" allz={_allz} ally={_ally} finger={_fg}")
                     # ジョー隙間の中心 vs オクラ（torso 系）。delta = okra - gap = IK 目標に足す補正量。
                     if jaw_link_paths and torso_path and _bi >= 0:
                         _xc2 = UsdGeom.XformCache(Usd.TimeCode.Default())
