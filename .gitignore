@@ -97,3 +97,13 @@ MUJOCO_LOG.TXT
 *.log
 **/chromadb_data/
 **/visual_memory.pkl
+
+# --- oda/ZED_M_Depth_check: vendor SDK installers + YOLO finetune artifacts ---
+# Keep only ZED_SDK_Install_Guide.md, zed_*.py, finetune/test/validate scripts.
+oda/ZED_M_Depth_check/*.run
+oda/ZED_M_Depth_check/*.whl
+oda/ZED_M_Depth_check/finetune_V5/dataset/
+oda/ZED_M_Depth_check/finetune_V5/output/
+oda/ZED_M_Depth_check/finetune_V5/runs/
+oda/ZED_M_Depth_check/finetune_V5/model/
+oda/ZED_M_Depth_check/**/*.pt
