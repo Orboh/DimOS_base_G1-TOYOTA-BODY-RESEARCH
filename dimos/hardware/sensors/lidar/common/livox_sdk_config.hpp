@@ -41,6 +41,60 @@ struct SdkPorts {
     int host_log_data   = 56501;
 };
 
+// Emit one device-type section of the SDK config.
+//
+// `section` is the JSON key the SDK's config parser matches against its
+// device-type table: "MID360" is dev_type 9, "Mid360s" is dev_type 35.  They
+// are separate models, and the SDK drops the detection reply of any type it
+// has no section for — silently, with no log line and no error.  So every
+// model we expect to meet has to be declared here.
+//
+// A host_net_info entry carrying no "lidar_ip" list is a type-level config:
+// it applies to every lidar of that type that answers detection.
+//
+// `multicast_ip` may be nullptr, which omits the field and leaves the lidar
+// sending point/IMU data unicast to `host_ip`.
+inline void write_sdk_config_section(FILE* fp,
+                                     const char* section,
+                                     const std::string& host_ip,
+                                     const SdkPorts& ports,
+                                     const char* multicast_ip) {
+    char multicast_line[64] = "";
+    if (multicast_ip != nullptr) {
+        snprintf(multicast_line, sizeof(multicast_line),
+                 "        \"multicast_ip\": \"%s\",\n", multicast_ip);
+    }
+
+    fprintf(fp,
+        "  \"%s\": {\n"
+        "    \"lidar_net_info\": {\n"
+        "      \"cmd_data_port\": %d,\n"
+        "      \"push_msg_port\": %d,\n"
+        "      \"point_data_port\": %d,\n"
+        "      \"imu_data_port\": %d,\n"
+        "      \"log_data_port\": %d\n"
+        "    },\n"
+        "    \"host_net_info\": [\n"
+        "      {\n"
+        "        \"host_ip\": \"%s\",\n"
+        "%s"
+        "        \"cmd_data_port\": %d,\n"
+        "        \"push_msg_port\": %d,\n"
+        "        \"point_data_port\": %d,\n"
+        "        \"imu_data_port\": %d,\n"
+        "        \"log_data_port\": %d\n"
+        "      }\n"
+        "    ]\n"
+        "  }",
+        section,
+        ports.cmd_data, ports.push_msg, ports.point_data,
+        ports.imu_data, ports.log_data,
+        host_ip.c_str(),
+        multicast_line,
+        ports.host_cmd_data, ports.host_push_msg, ports.host_point_data,
+        ports.host_imu_data, ports.host_log_data);
+}
+
 // Write Livox SDK JSON config to an in-memory (or ephemeral) file.
 // Returns {fd, path} — caller must close(fd) after LivoxLidarSdkInit reads it.
 //
@@ -87,34 +141,16 @@ inline std::pair<int, std::string> write_sdk_config(const std::string& host_ip,
         return {-1, ""};
     }
 
-    fprintf(fp,
-        "{\n"
-        "  \"MID360\": {\n"
-        "    \"lidar_net_info\": {\n"
-        "      \"cmd_data_port\": %d,\n"
-        "      \"push_msg_port\": %d,\n"
-        "      \"point_data_port\": %d,\n"
-        "      \"imu_data_port\": %d,\n"
-        "      \"log_data_port\": %d\n"
-        "    },\n"
-        "    \"host_net_info\": [\n"
-        "      {\n"
-        "        \"host_ip\": \"%s\",\n"
-        "        \"multicast_ip\": \"224.1.1.5\",\n"
-        "        \"cmd_data_port\": %d,\n"
-        "        \"push_msg_port\": %d,\n"
-        "        \"point_data_port\": %d,\n"
-        "        \"imu_data_port\": %d,\n"
-        "        \"log_data_port\": %d\n"
-        "      }\n"
-        "    ]\n"
-        "  }\n"
-        "}\n",
-        ports.cmd_data, ports.push_msg, ports.point_data,
-        ports.imu_data, ports.log_data,
-        host_ip.c_str(),
-        ports.host_cmd_data, ports.host_push_msg, ports.host_point_data,
-        ports.host_imu_data, ports.host_log_data);
+    fprintf(fp, "{\n");
+    // Mid-360 (dev_type 9): keeps the multicast data path this config has
+    // always used.
+    write_sdk_config_section(fp, "MID360", host_ip, ports, "224.1.1.5");
+    fprintf(fp, ",\n");
+    // Mid-360S (dev_type 35): unicast to host_ip, matching upstream's
+    // samples/livox_lidar_quick_start/mid360s_config.json.  Unicast also keeps
+    // this model clear of hosts that route 224.0.0.0/4 to loopback for LCM.
+    write_sdk_config_section(fp, "Mid360s", host_ip, ports, nullptr);
+    fprintf(fp, "\n}\n");
     fflush(fp);  // flush but don't fclose — that would close fd
 
     char path[64];
