@@ -61,7 +61,7 @@ logger = setup_logger()
 # ---- robot side (same knobs as the ZED blueprint) ---------------------------
 _NIC = os.getenv("ROBOT_INTERFACE", "enp46s0")
 _LIVE = os.getenv("IK_REACH_LIVE", "").strip() == "1"
-_ARM_VEL_LIMIT = float(os.getenv("IK_ARM_VEL_LIMIT", "4.0"))
+_ARM_VEL_LIMIT = float(os.getenv("IK_ARM_VEL_LIMIT", "12.0"))
 _KP_ARM = float(os.getenv("OKRA_NOACT_KP_ARM", "80.0"))
 _KD_ARM = float(os.getenv("OKRA_NOACT_KD_ARM", "3.0"))
 # Gravity feedforward on the RIGHT arm during position tracking (default OFF = unchanged).

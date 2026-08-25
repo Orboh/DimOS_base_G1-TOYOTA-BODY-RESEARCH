@@ -98,13 +98,24 @@ class G1ArmSdkConnectionConfig(ModuleConfig):
     kd_waist: float = 3.0
     # SAFETY knobs.
     weight_ramp_s: float = 2.0        # 0->1 authority handover time [s]
-    # Caps how fast the published target may slew toward a distant goal [rad/s]. This is
-    # ALSO the speed at which the arm snaps back after the robot briefly takes the arm away
-    # (see the runaway guard below): at the reference 20.0 a 0.9 rad displacement is undone
-    # in ~45 ms (~1150 deg/s), which is what smashed a hand attachment into the leg on
-    # 2026-08-24. 4.0 still covers a full IK reach (0.86 rad in ~215 ms) inside the 1.3 s
-    # open-loop wait, with no functional loss.
-    arm_velocity_limit: float = 4.0   # per-cycle clip toward target [rad/s]
+    # Caps how fast the published target may slew toward a distant goal [rad/s].
+    #
+    # DO NOT lower this to make motion gentler. `_clip_to_measured` keeps the command within
+    # arm_velocity_limit/publish_rate_hz of the MEASURED pose, so this value also sets a
+    # CEILING ON PD AUTHORITY:
+    #
+    #     tau_pd_max = kp_arm * (arm_velocity_limit / publish_rate_hz)
+    #     20 rad/s -> 6.40 N*m      4 rad/s -> 1.28 N*m
+    #
+    # Below what friction + gravity-model error demand, the arm stalls short of the target
+    # and the command stalls with it -- a standoff that never closes. Dropping 20 -> 4 for
+    # safety on 2026-08-25 left a permanent 0.176 rad (10 deg) tracking error, and because
+    # IkReachBridge fires reach_done on a TIMER (not on arrival), diffusion then started
+    # from a pose 25 deg off the clicked target.
+    #
+    # Gentleness is the runaway guard's job, not this value's: it re-anchors and holds
+    # instead of slewing back, so the snap-back this used to cap no longer happens.
+    arm_velocity_limit: float = 12.0  # per-cycle clip toward target [rad/s] -> 3.84 N*m PD
     # Runaway guard: if the measured pose departs this far from the commanded target, the
     # arm is no longer ours (the robot's own controller moved it). Fighting it back is what
     # causes the collision, so re-anchor the target onto the measured pose and hold.

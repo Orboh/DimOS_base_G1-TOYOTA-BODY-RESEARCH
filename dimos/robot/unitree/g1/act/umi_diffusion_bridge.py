@@ -122,6 +122,7 @@ class _PolicyClient:
     def __init__(self, addr: str, timeout_ms: int) -> None:
         self._addr = addr
         self._timeout_ms = int(timeout_ms)
+        self.last_error = ""
         self._ctx = None
         self._sock = None
 
@@ -158,8 +159,16 @@ class _PolicyClient:
             return None
         rep = msgpack.unpackb(raw, raw=False)
         if not rep.get("ok", False):
-            logger.warning(f"UmiDiffusionBridge: server error: {rep.get('err')!r}")
-            return None
+            # Hand the reply back rather than discarding it. `ok: False` is the server
+            # ANSWERING -- most often "the wrist camera is unusable", with the diagnosis in
+            # `reason` (health) or `err` (predict). Returning None here made every camera
+            # fault look like a dead server: the health preflight fell through to
+            # "camera_unreachable" ("is umi_policy_server.py running?") while the GoPro was
+            # simply switched off, and the camera_dead branch became unreachable.
+            self.last_error = str(rep.get("reason") or rep.get("err") or "unspecified")
+            logger.warning(f"UmiDiffusionBridge: server replied not-ok: {self.last_error}")
+            return rep
+        self.last_error = ""
         return rep
 
     def close(self) -> None:
@@ -591,9 +600,10 @@ class UmiDiffusionBridge(Module):
                         timeouts += 1
                         stats["timeouts"] = timeouts
                         if timeouts >= self.config.max_consecutive_timeouts:
+                            why = self._client.last_error or "no reply (server down or too slow)"
                             logger.warning(
                                 f"UmiDiffusionBridge[{ep}]: {timeouts} consecutive server misses; "
-                                "aborting (arm HELD, no adjust_done)."
+                                f"aborting (arm HELD, no adjust_done).\n    last reason: {why}"
                             )
                             _end("server_misses")
                             return
