@@ -105,6 +105,53 @@ OKRA_HALF_LEN = 0.045
 # on the very edge is technically visible but a click on it lands on background depth.
 FOV_MARGIN = 0.75
 
+# Right-arm collision capsules (20260825 review decision B: minimum viable set -- only the
+# parts that can plausibly reach the basket get real collision; left arm and legs stay
+# visual-only bones). No STL exists for these links to measure a radius from, so these
+# reuse radii already present and reviewed elsewhere in this file/URDF rather than
+# invented numbers: 0.03 m is the shoulder collision cylinder radius already in g1.urdf
+# (right_shoulder_roll_link's <collision>), 0.026 m is the wrist/hand "tip" sphere radius
+# _add_bones() already draws for every leaf link.
+ARM_COLLISION_RADIUS_LIMB = 0.03
+ARM_COLLISION_RADIUS_WRIST = 0.026
+# (parent_body, child_body, radius): one capsule per segment, spanning parent origin to
+# child origin -- same geometry _add_bones() already draws as a visual-only bone, just
+# with collision turned on for this specific chain.
+_ARM_COLLISION_SEGMENTS = [
+    ("right_shoulder_yaw_link", "right_elbow_link", ARM_COLLISION_RADIUS_LIMB),        # upper arm
+    ("right_elbow_link", "right_wrist_roll_link", ARM_COLLISION_RADIUS_LIMB),          # forearm
+    ("right_wrist_roll_link", "right_wrist_pitch_link", ARM_COLLISION_RADIUS_WRIST),
+    ("right_wrist_pitch_link", "right_wrist_yaw_link", ARM_COLLISION_RADIUS_WRIST),
+]
+
+# MuJoCo's default `filterparent` flag drops contacts between a geom's own body and its
+# direct parent, which handles most joints in the chain above for free. It does NOT cover
+# "skip one" pairs, and the wrist cluster is packed too tightly for that to be free of
+# false positives: e.g. the forearm capsule's far end sits exactly at right_wrist_roll_link
+# (radius 0.03), 0.038 m short of where the next-but-one wrist_pitch->wrist_yaw capsule
+# starts (radius 0.026) -- 0.056 m of combined radius over a 0.038 m gap, so they overlap
+# in *every* pose, home included. This is an artifact of approximating a compact multi-DOF
+# wrist as a chain of capsules, not a real self-collision; verified via _check_home_contacts
+# (2026-08-25) and excluded explicitly rather than shrinking radii, which would just move
+# the same problem to a different pair of segments.
+_ARM_COLLISION_EXCLUDE_PAIRS = [
+    ("right_elbow_link", "right_wrist_pitch_link"),   # forearm vs wrist_pitch->wrist_yaw
+    ("right_wrist_roll_link", "right_wrist_yaw_link"),  # wrist_roll->wrist_pitch vs hand
+]
+
+# 20260825 decision (Ueda + Yokote): stop chasing the basket's real-world placement error
+# with more measurement passes -- accept the ~+/-10mm photo-based z uncertainty documented
+# in g1.urdf's basket_joint comment (and the unmeasured x/y mounting slop on top of it), and
+# instead make the *simulated* box bigger than the real cardboard box by this margin on
+# every face. A too-big keepout volume in sim is a false positive the arm just avoids a
+# little early; a too-small one is a real collision the sim never sees. Only the 5 named
+# basket collision plates (basket_back/top/bottom/left/right, see g1.urdf) are padded --
+# the visual plates keep the true dimensions so renders still look like the actual box.
+BASKET_COLLISION_MARGIN_M = 0.015
+_BASKET_COLLISION_NAMES = [
+    "basket_back", "basket_top", "basket_bottom", "basket_left", "basket_right",
+]
+
 
 def _strip_meshes(root: ET.Element) -> int:
     """Drop every visual/collision that references a mesh file. Returns the drop count."""
@@ -278,6 +325,94 @@ def _add_bones(root: ET.Element, model: mujoco.MjModel) -> int:
             )
             added += 1
     return added
+
+
+def _add_arm_collision(root: ET.Element, model: mujoco.MjModel) -> int:
+    """Add real (collidable) capsules along the right arm, per 20260825 decision B.
+
+    ``_add_bones()`` already draws a capsule of this exact shape along every link, but
+    with contype=conaffinity=0 (visual only -- see its docstring: the IK/diffusion loop
+    must not be measured against fake geometry). That leaves the basket unenforceable no
+    matter how solid it is, because nothing on the arm side can register a contact.
+    ``filterparent`` (MuJoCo's default) suppresses the parent/child false positives this
+    would otherwise create against the existing shoulder collision cylinders.
+    """
+    added = 0
+    for parent_name, child_name, radius in _ARM_COLLISION_SEGMENTS:
+        body = _find_body(root, parent_name)
+        child_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, child_name)
+        if child_id < 0:
+            raise RuntimeError(f"arm collision segment references unknown body {child_name!r}")
+        offset = np.asarray(model.body_pos[child_id], dtype=float)
+        ET.SubElement(
+            body,
+            "geom",
+            name=f"armcoll_{parent_name}_{child_name}",
+            type="capsule",
+            fromto=f"0 0 0 {offset[0]:.6f} {offset[1]:.6f} {offset[2]:.6f}",
+            size=f"{radius:.4f}",
+            rgba="0.85 0.25 0.25 0.5",
+        )
+        added += 1
+
+    # right_rubber_hand collapses into right_wrist_yaw_link at compile time (fixed joint,
+    # see g1.urdf right_hand_palm_joint), so a collidable sphere at the wrist origin is the
+    # hand stand-in -- same radius as the visual "tip" sphere _add_bones() already draws
+    # there.
+    wrist_body = _find_body(root, "right_wrist_yaw_link")
+    ET.SubElement(
+        wrist_body,
+        "geom",
+        name="armcoll_right_hand",
+        type="sphere",
+        size=f"{ARM_COLLISION_RADIUS_WRIST:.4f}",
+        rgba="0.85 0.25 0.25 0.5",
+    )
+    added += 1
+    return added
+
+
+def _add_contact_excludes(root: ET.Element, pairs: list[tuple[str, str]]) -> int:
+    """Write ``<contact><exclude body1=.. body2=..>`` entries, one per (body, body) pair."""
+    contact = root.find("contact")
+    if contact is None:
+        contact = ET.SubElement(root, "contact")
+    for body1, body2 in pairs:
+        ET.SubElement(
+            contact,
+            "exclude",
+            name=f"exclude_{body1}_{body2}",
+            body1=body1,
+            body2=body2,
+        )
+    return len(pairs)
+
+
+def _pad_basket_collision(root: ET.Element, margin: float) -> int:
+    """Grow the basket's collision plates by ``margin`` on every face (see 20260825 note
+    on ``BASKET_COLLISION_MARGIN_M`` above). Each plate keeps its center pos and just gets
+    ``margin`` added to all three half-extents, so a thin plate becomes a thicker slab that
+    also spills outward past its original footprint on every edge -- the basket_link is
+    fixed-joint-collapsed into the pelvis body, so this can never create a new same-body
+    contact; it only widens what counts as "touching the basket" from other bodies (the
+    right arm). Only the named ``<collision>`` geoms are touched -- the paired ``<visual>``
+    geoms MuJoCo emits alongside them are untouched, so renders keep the true box size.
+    """
+    padded = 0
+    for geom in root.iter("geom"):
+        if geom.get("name") not in _BASKET_COLLISION_NAMES:
+            continue
+        size = [float(v) + margin for v in geom.get("size", "").split()]
+        if len(size) != 3:
+            raise RuntimeError(f"basket collision geom {geom.get('name')!r} has size {geom.get('size')!r}, expected 3 values")
+        geom.set("size", " ".join(f"{v:.6f}" for v in size))
+        padded += 1
+    if padded != len(_BASKET_COLLISION_NAMES):
+        raise RuntimeError(
+            f"expected to pad {len(_BASKET_COLLISION_NAMES)} basket collision geoms, found {padded} "
+            f"-- did the names in g1.urdf change?"
+        )
+    return padded
 
 
 def _add_gravcomp(root: ET.Element) -> int:
@@ -470,6 +605,42 @@ def _check_chest_fov(res: tuple[int, int], fovy_deg: float) -> tuple[float, floa
     return float(horiz), float(vert), dist
 
 
+def _check_home_contacts(model: mujoco.MjModel) -> int:
+    """Assert the only contact at the home keyframe is feet-on-floor.
+
+    Done here, at build time, for the same reason as ``_check_chest_fov``: with the right
+    arm now carrying real collision geoms (``_add_arm_collision``), any overlap baked into
+    the geometry itself -- e.g. a capsule radius fat enough to graze the torso bone, or the
+    basket sitting closer to the hip than its wall lets on -- shows up as a nonzero-penetration
+    contact from frame zero, before any motion is ever commanded. Better to fail the build
+    than to discover it as "the diffusion loop diverged" later. Returns the contact count
+    excluding floor contacts, i.e. 0 on success.
+    """
+    data = mujoco.MjData(model)
+    key_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_KEY, "home")
+    if key_id < 0:
+        raise RuntimeError("no 'home' keyframe in generated model")
+    mujoco.mj_resetDataKeyframe(model, data, key_id)
+    mujoco.mj_forward(model, data)
+
+    floor_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "floor")
+    unexpected = []
+    for i in range(data.ncon):
+        c = data.contact[i]
+        if floor_id in (c.geom1, c.geom2):
+            continue  # feet resting on the floor is expected at the home posture
+        n1 = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, c.geom1) or f"geom#{c.geom1}"
+        n2 = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, c.geom2) or f"geom#{c.geom2}"
+        unexpected.append((n1, n2))
+    if unexpected:
+        raise RuntimeError(
+            "unexpected contact(s) at the home posture (baked-in geometry overlap, not a "
+            "real collision event -- shrink a radius, adjust an origin, or add a "
+            "<contact><exclude> pair): " + "; ".join(f"{a} vs {b}" for a, b in unexpected)
+        )
+    return len(unexpected)
+
+
 def build(out_path: Path = _OUT, verbose: bool = True) -> Path:
     horiz, vert, cam_dist = _check_chest_fov(CHEST_RES, CHEST_FOVY_DEG)
 
@@ -497,6 +668,9 @@ def build(out_path: Path = _OUT, verbose: bool = True) -> Path:
 
     _weld_base(root, pelvis_z)
     _add_bones(root, probe_model)
+    arm_collision_n = _add_arm_collision(root, probe_model)
+    _add_contact_excludes(root, _ARM_COLLISION_EXCLUDE_PAIRS)
+    basket_pad_n = _pad_basket_collision(root, BASKET_COLLISION_MARGIN_M)
     gravcomp_n = _add_gravcomp(root)
     _add_actuators(root, joints)
     _add_options(root, joints)
@@ -523,10 +697,13 @@ def build(out_path: Path = _OUT, verbose: bool = True) -> Path:
     for cam in ("chest_cam", "wrist_cam", "spectator"):
         if mujoco.mj_name2id(check, mujoco.mjtObj.mjOBJ_CAMERA, cam) < 0:
             raise RuntimeError(f"camera {cam!r} missing from generated scene")
+    _check_home_contacts(check)
 
     if verbose:
         print(f"wrote {out_path}")
         print(f"  mesh geoms dropped : {dropped}")
+        print(f"  arm collision geoms: {arm_collision_n}")
+        print(f"  basket geoms padded: {basket_pad_n} (+{BASKET_COLLISION_MARGIN_M * 1000:.0f} mm/face)")
         print(f"  gravcomp bodies    : {gravcomp_n}")
         print(f"  nq/nv/nu           : {check.nq}/{check.nv}/{check.nu}")
         print(f"  pelvis weld z      : {pelvis_z:.4f} m (foot drop {foot_drop:.4f})")

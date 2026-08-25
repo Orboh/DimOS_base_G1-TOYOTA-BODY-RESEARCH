@@ -2,7 +2,17 @@
   <compiler angle="radian" meshdir="meshes/" />
   <worldbody>
     <body name="pelvis" pos="0 0 0.786864" gravcomp="1">
-      <inertial pos="0 0 -0.0760301" quat="1 0 -0.000398273 0" mass="3.814" diaginertia="0.0105549 0.00931478 0.0079185" />
+      <inertial pos="0.00215321 0 -0.0761461" quat="0.706797 -0.0209272 -0.0209272 0.706797" mass="3.864" diaginertia="0.0107853 0.0106633 0.00938054" />
+      <geom size="0.0025 0.06 0.06" pos="0.0639 0 -0.085" type="box" contype="0" conaffinity="0" group="1" density="0" rgba="0.62 0.45 0.28 1" />
+      <geom name="basket_back" size="0.017500 0.075000 0.075000" pos="0.0639 0 -0.085" type="box" rgba="0.62 0.45 0.28 1" />
+      <geom size="0.105 0.06 0.0025" pos="0.1664 0 -0.1425" type="box" contype="0" conaffinity="0" group="1" density="0" rgba="0.62 0.45 0.28 1" />
+      <geom name="basket_bottom" size="0.120000 0.075000 0.017500" pos="0.1664 0 -0.1425" type="box" rgba="0.62 0.45 0.28 1" />
+      <geom size="0.105 0.06 0.0025" pos="0.1664 0 -0.0275" type="box" contype="0" conaffinity="0" group="1" density="0" rgba="0.62 0.45 0.28 1" />
+      <geom name="basket_top" size="0.120000 0.075000 0.017500" pos="0.1664 0 -0.0275" type="box" rgba="0.62 0.45 0.28 1" />
+      <geom size="0.105 0.0025 0.06" pos="0.1664 -0.0575 -0.085" type="box" contype="0" conaffinity="0" group="1" density="0" rgba="0.62 0.45 0.28 1" />
+      <geom name="basket_right" size="0.120000 0.017500 0.075000" pos="0.1664 -0.0575 -0.085" type="box" rgba="0.62 0.45 0.28 1" />
+      <geom size="0.105 0.0025 0.06" pos="0.1664 0.0575 -0.085" type="box" contype="0" conaffinity="0" group="1" density="0" rgba="0.62 0.45 0.28 1" />
+      <geom name="basket_left" size="0.120000 0.017500 0.075000" pos="0.1664 0.0575 -0.085" type="box" rgba="0.62 0.45 0.28 1" />
       <body name="left_hip_pitch_link" pos="0 0.064452 -0.1027" gravcomp="1">
         <inertial pos="0.002741 0.047791 -0.02606" quat="0.954862 0.293964 0.0302556 0.030122" mass="1.35" diaginertia="0.00181517 0.00153422 0.00116212" />
         <joint name="left_hip_pitch_joint" pos="0 0 0" axis="0 1 0" range="-2.5307 2.8798" actuatorfrcrange="-88 88" />
@@ -141,15 +151,20 @@
                           <inertial pos="0.0379083 0.0289125 -0.0016186" quat="0.349895 0.361293 0.626906 0.595004" mass="0.254576" diaginertia="0.000427647 0.000400224 0.000206049" />
                           <joint name="right_wrist_yaw_joint" pos="0 0 0" axis="0 0 1" range="-1.61443 1.61443" actuatorfrcrange="-5 5" />
                           <geom name="tip_right_wrist_yaw_link" type="sphere" size="0.026" rgba="0.62 0.66 0.70 1" contype="0" conaffinity="0" group="1" mass="0" />
+                          <geom name="armcoll_right_hand" type="sphere" size="0.0260" rgba="0.85 0.25 0.25 0.5" />
                           <camera name="wrist_cam" pos="0.055000 -0.020000 0.045000" quat="0.596304675 0.380027282 -0.380027282 -0.596304675" fovy="92.0000" />
                         </body>
                         <geom name="bone_right_wrist_pitch_link_right_wrist_yaw_link" type="capsule" fromto="0 0 0 0.046000 0.000000 0.000000" size="0.022" rgba="0.62 0.66 0.70 1" contype="0" conaffinity="0" group="1" mass="0" />
+                        <geom name="armcoll_right_wrist_pitch_link_right_wrist_yaw_link" type="capsule" fromto="0 0 0 0.046000 0.000000 0.000000" size="0.0260" rgba="0.85 0.25 0.25 0.5" />
                       </body>
                       <geom name="bone_right_wrist_roll_link_right_wrist_pitch_link" type="capsule" fromto="0 0 0 0.038000 0.000000 0.000000" size="0.022" rgba="0.62 0.66 0.70 1" contype="0" conaffinity="0" group="1" mass="0" />
+                      <geom name="armcoll_right_wrist_roll_link_right_wrist_pitch_link" type="capsule" fromto="0 0 0 0.038000 0.000000 0.000000" size="0.0260" rgba="0.85 0.25 0.25 0.5" />
                     </body>
                     <geom name="bone_right_elbow_link_right_wrist_roll_link" type="capsule" fromto="0 0 0 0.100000 -0.001888 -0.010000" size="0.022" rgba="0.62 0.66 0.70 1" contype="0" conaffinity="0" group="1" mass="0" />
+                    <geom name="armcoll_right_elbow_link_right_wrist_roll_link" type="capsule" fromto="0 0 0 0.100000 -0.001888 -0.010000" size="0.0300" rgba="0.85 0.25 0.25 0.5" />
                   </body>
                   <geom name="bone_right_shoulder_yaw_link_right_elbow_link" type="capsule" fromto="0 0 0 0.015783 0.000000 -0.080518" size="0.022" rgba="0.62 0.66 0.70 1" contype="0" conaffinity="0" group="1" mass="0" />
+                  <geom name="armcoll_right_shoulder_yaw_link_right_elbow_link" type="capsule" fromto="0 0 0 0.015783 0.000000 -0.080518" size="0.0300" rgba="0.85 0.25 0.25 0.5" />
                 </body>
                 <geom name="bone_right_shoulder_roll_link_right_shoulder_yaw_link" type="capsule" fromto="0 0 0 0.000000 -0.006240 -0.103200" size="0.022" rgba="0.62 0.66 0.70 1" contype="0" conaffinity="0" group="1" mass="0" />
               </body>
@@ -175,6 +190,10 @@
       <geom name="okra_stem" type="capsule" fromto="0 0 0.0450 0 0 0.2650" size="0.005" rgba="0.30 0.45 0.18 1" contype="0" conaffinity="0" />
     </body>
   </worldbody>
+  <contact>
+    <exclude name="exclude_right_elbow_link_right_wrist_pitch_link" body1="right_elbow_link" body2="right_wrist_pitch_link" />
+    <exclude name="exclude_right_wrist_roll_link_right_wrist_yaw_link" body1="right_wrist_roll_link" body2="right_wrist_yaw_link" />
+  </contact>
   <actuator>
     <position name="act_left_hip_pitch_joint" joint="left_hip_pitch_joint" kp="400" kv="20" />
     <position name="act_left_hip_roll_joint" joint="left_hip_roll_joint" kp="400" kv="20" />
