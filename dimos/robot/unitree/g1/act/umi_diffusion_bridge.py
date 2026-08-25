@@ -197,10 +197,37 @@ class UmiDiffusionBridgeConfig(ModuleConfig):
     max_joint_delta_deg: float = 20.0  # per-cycle cap (tighter than IkReach's one-shot 90°)
     max_reach_pos_err_m: float = 0.05
     require_converged: bool = True
+    # Leash on how far the policy may carry the tip from where IK parked it.
+    # The policy anchors every chunk on the MEASURED pose, so a persistent bias in its
+    # output integrates without bound: on 2026-08-25 the tip drifted +76 mm up / -40 mm
+    # back over 24 s and never converged. The workspace box below is far too coarse to
+    # catch that (it is the whole reachable volume). Okra fine-adjustment is a few cm of
+    # work, so anything past this radius means the policy is running away, not adjusting.
+    max_anchor_drift_m: float = 0.05   # 0 disables
     ws_x: list[float] = [0.05, 0.65]
     ws_y: list[float] = [-0.75, 0.20]
     ws_z: list[float] = [-0.35, 0.85]
     max_state_age_s: float = 1.0
+
+    # ---- wrist-camera liveness (this side cannot see the camera; the server reports it) ----
+    # The camera dies SILENTLY in two ways, both observed on hardware:
+    #  * the capture device vanishes (a USB replug renumbers /dev/videoN) and the server's
+    #    ring buffer then serves the SAME frame forever — on 2026-08-25 an entire LIVE run
+    #    was driven from a 16-HOUR-old frame, with the policy emitting all-zero actions;
+    #  * the card keeps delivering frames while the GoPro outputs nothing → ~100% black
+    #    image (training frames are ~21% black from the mask).
+    # Neither raises anywhere, and from this side both look exactly like "the policy just
+    # isn't moving". So ask the server BEFORE the arm is driven, and refuse to start.
+    require_camera_ok: bool = True
+    camera_check_timeout_ms: int = 2000   # health round-trip budget (no inference involved)
+
+    # ---- spoken phase announcements (Japanese, via the G1 speaker) ----
+    # From outside the robot an IK coarse reach and a diffusion fine-adjustment look the
+    # same, and a refused adjustment looks like nothing at all. Off by default; degrades
+    # to log-only if the speaker cannot be built, and never raises into the control loop.
+    voice: bool = False
+    voice_nic: str = ""
+    voice_volume: int = 100
 
     # ---- DRY-RUN (default): compute + log, publish NOTHING ----
     log_only: bool = True
@@ -245,6 +272,11 @@ class UmiDiffusionBridge(Module):
         self._count = 0
         # Resolved in start(): __init__ runs before the per-run log dir is published.
         self._trace_path: Path | None = None
+        from dimos.robot.unitree.g1.act.phase_voice import build_phase_voice
+
+        self._voice = build_phase_voice(
+            self.config.voice, self.config.voice_nic, volume=self.config.voice_volume
+        )
 
     @rpc
     def start(self) -> None:
@@ -338,6 +370,18 @@ class UmiDiffusionBridge(Module):
             logger.warning(f"UmiDiffusionBridge: trace write failed ({e!r}); disabling trace.")
             self._trace_path = None
 
+    def _camera_health(self) -> dict | None:
+        """Ask the server about the wrist camera. None = server unreachable.
+
+        Uses its own (short) timeout: no inference runs, so the predict budget — which is
+        sized for a ~135 ms forward pass — would be needlessly tight here.
+        """
+        client = _PolicyClient(self.config.server_addr, self.config.camera_check_timeout_ms)
+        try:
+            return client.request({"cmd": "health"})
+        finally:
+            client.close()
+
     def _to_torso(self, p_root: np.ndarray) -> np.ndarray:
         return np.asarray(
             self._arm.torso_in_root.actInv(np.asarray(p_root, dtype=np.float64)), dtype=np.float64
@@ -392,6 +436,7 @@ class UmiDiffusionBridge(Module):
         period = 1.0 / max(self.config.control_hz, 1e-3)
         tag = "DRY" if self.config.log_only else "LIVE->arm_sdk"
         logger.info(f"UmiDiffusionBridge[{ep}]: reach_done -> starting EE adjustment [{tag}].")
+        self._voice.say_phase("diffusion", "ディフュージョンで微調整します")
 
         t0 = time.time()
         stats: dict[str, Any] = {
@@ -425,6 +470,21 @@ class UmiDiffusionBridge(Module):
                 f"end{np.round(last_tip, 3) if last_tip is not None else '-'} "
                 f"net={net*1000:.1f}mm path={stats['path_m']*1000:.1f}mm"
             )
+            # Speak the outcome. The operator otherwise cannot tell "finished adjusting"
+            # from "gave up" — both just leave the arm sitting still.
+            self._voice.say_phase("end:" + reason, {
+                "converged": "微調整が完了しました",
+                "max_duration": "時間切れで微調整を終了します",
+                "anchor_drift": "ポリシーが逸脱したため微調整を中止します",
+                "server_misses": "推論サーバーが応答しません。中止します",
+                "camera_dead": "手首カメラの映像が使えません。中止します",
+                "camera_unreachable": "推論サーバーに接続できません。中止します",
+                "state_stale": "ロボットの状態が取得できません。中止します",
+                "no_state": "ロボットの状態が取得できません。中止します",
+                "stopped": "停止しました",
+                "exception": "エラーが発生しました。中止します",
+            }.get(reason, "微調整を終了します"))
+            self._voice.reset()  # next reach_done starts a fresh phase sequence
             self._trace({
                 "kind": "end", "t": time.time(), "ep": ep, "reason": reason,
                 "dur_s": round(dur, 3), "ticks": stats["ticks"], "infers": stats["infers"],
@@ -434,6 +494,36 @@ class UmiDiffusionBridge(Module):
                 "net_m": round(net, 6), "path_m": round(float(stats["path_m"]), 6),
                 "tip_first_torso": self._j(first_tip), "tip_last_torso": self._j(last_tip),
             })
+
+        # ---- wrist-camera preflight, BEFORE anything drives the arm ----------------
+        # A dead camera is indistinguishable from "the policy is idle" once the loop is
+        # running, so check up front and refuse rather than move on a stale/black frame.
+        if self.config.require_camera_ok:
+            cam = self._camera_health()
+            if cam is None:
+                logger.error(
+                    f"UmiDiffusionBridge[{ep}]: policy server did not answer the camera "
+                    "health check; refusing to start (arm HELD, no adjust_done). Is "
+                    "umi_policy_server.py running?"
+                )
+                _end("camera_unreachable")
+                return
+            age = cam.get("cam_age_ms")
+            blk = cam.get("black_frac")
+            age_s = "?" if age is None else f"{float(age):.0f}ms"
+            blk_s = "?" if blk is None else f"{float(blk) * 100:.1f}%"
+            if not cam.get("ok", False):
+                logger.error(
+                    f"UmiDiffusionBridge[{ep}]: WRIST CAMERA NOT USABLE — refusing to "
+                    f"start (arm HELD, no adjust_done).\n    cam_age={age_s} "
+                    f"black={blk_s}\n    {cam.get('reason', '')}"
+                )
+                _end("camera_dead")
+                return
+            logger.info(
+                f"UmiDiffusionBridge[{ep}]: wrist camera OK (age={age_s} black={blk_s}, "
+                "training frames are ~21% black)."
+            )
 
         arm = self._read_arm_q()
         if arm is None:
@@ -518,12 +608,21 @@ class UmiDiffusionBridge(Module):
                     pending = list(actions[:n_exec])
                     n_slice = len(pending)
                     wp_i = 0
+                    # Camera health per inference: a camera that dies MID-episode is
+                    # otherwise invisible from this side (the preflight only covers start).
+                    cam_age = rep.get("cam_age_ms")
+                    cam_blk = rep.get("black_frac")
+                    cam_s = (
+                        ""
+                        if cam_age is None
+                        else f" cam(age={float(cam_age):.0f}ms black={float(cam_blk or 0) * 100:.0f}%)"
+                    )
                     logger.info(
                         f"[{tag}] umi-infer[ep{ep} tick{tick}] "
                         f"obs tip(torso){np.round(tip_meas_torso, 3)} aa{np.round(eef_aa, 3)}\n"
                         f"    q_meas={np.round(q_right, 3)}\n"
                         f"    server n={chunk_n} infer={infer_ms:.1f}ms exec={len(pending)} "
-                        f"reset={was_reset}\n"
+                        f"reset={was_reset}{cam_s}\n"
                         f"    chunk Δtip(torso,mm) {self._fmt_chunk(actions, tip_meas_torso)}"
                     )
                     self._trace({
@@ -556,6 +655,24 @@ class UmiDiffusionBridge(Module):
                     f"[wp{i_wp}/{n_slice}of{chunk_n} tip(torso){np.round(tip_meas_torso, 3)} "
                     f"q_meas={np.round(q_right, 3)}]"
                 )
+
+                # Anchor-drift gate: stop the unbounded integration described on
+                # `max_anchor_drift_m`. Ends the episode rather than skipping the single
+                # waypoint -- once the policy is this far off, every later chunk repeats
+                # the same bias, so skipping just spins until max_duration.
+                anchor = stats.get("tip_first")
+                if self.config.max_anchor_drift_m > 0.0 and anchor is not None:
+                    drift_v = p_torso - anchor
+                    drift = float(np.linalg.norm(drift_v))
+                    if drift > self.config.max_anchor_drift_m:
+                        logger.error(
+                            f"UmiDiffusionBridge[{ep}]: policy ran {drift * 1000:.0f} mm from the IK "
+                            f"anchor (limit {self.config.max_anchor_drift_m * 1000:.0f} mm) "
+                            f"dxyz={np.round(drift_v * 1000, 1)} mm; it is drifting, not converging. "
+                            f"Stopping (arm HELD, no adjust_done). {where}"
+                        )
+                        _end("anchor_drift")
+                        return
 
                 # workspace gate in torso frame
                 if not (

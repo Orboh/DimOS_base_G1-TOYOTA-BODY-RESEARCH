@@ -135,13 +135,28 @@ class CameraThread:
 
 
 class PolicyServer:
-    def __init__(self, policy, cfg, shape_meta, cam, control_hz, device):
+    def __init__(self, policy, cfg, shape_meta, cam, control_hz, device,
+                 max_cam_age_ms=1000.0, max_black_frac=0.90, check_camera=True):
         self._policy = policy
         self._cfg = cfg
         self._shape_meta = shape_meta
         self._cam = cam
         self._dt = 1.0 / control_hz
         self._device = device
+        # CAMERA LIVENESS. Two ways the wrist camera dies SILENTLY — both observed on
+        # hardware, neither raises, so the policy keeps predicting on a dead image and
+        # the robot acts on it:
+        #  1) STALE: the UVC device vanished (a USB replug renumbers /dev/videoN, so the
+        #     already-open fd goes dead). CameraThread's `if not ok: continue` then stops
+        #     appending and the ring buffer serves the SAME frames forever. Seen
+        #     2026-08-25: cam_age had reached 57,578,811 ms (~16 h) while the policy
+        #     returned all-zero actions for an entire LIVE run.
+        #  2) BLACK: the HDMI capture card is fine but the GoPro is off / not outputting.
+        #     Frames arrive at full rate and are ALL zeros — 100% black vs the ~21% the
+        #     training mask paints.
+        self._max_cam_age_ms = float(max_cam_age_ms)
+        self._max_black_frac = float(max_black_frac)
+        self._check_camera = bool(check_camera)
         self._obs_pose_repr = cfg.task.pose_repr.obs_pose_repr
         self._action_pose_repr = cfg.task.pose_repr.action_pose_repr
         self._cam_ds = int(shape_meta["obs"]["camera0_rgb"]["down_sample_steps"])
@@ -169,6 +184,38 @@ class PolicyServer:
         self._policy.reset()
         self._episode_start = np.concatenate([np.asarray(pos, float), np.asarray(aa, float)])
 
+    def camera_health(self):
+        """Liveness of the wrist camera. Never raises — returns what it sees.
+
+        `black_frac` is measured on the PREPROCESSED frame, so a healthy GoPro sits near
+        the ~21% the training mask paints; ~100% means no HDMI signal behind a capture
+        card that is otherwise happily delivering frames.
+        """
+        frames = self._cam.snapshot()
+        if not frames:
+            return {"ok": False, "reason": "no frames yet", "cam_age_ms": None,
+                    "black_frac": None, "cam_buf": 0}
+        last_t, last_img = frames[-1]
+        cam_age_ms = (time.time() - last_t) * 1e3
+        black_frac = float((last_img.max(axis=2) <= 0.02).mean())
+        h = {"cam_age_ms": cam_age_ms, "black_frac": black_frac, "cam_buf": len(frames),
+             "ok": True, "reason": ""}
+        if not self._check_camera:
+            return h
+        if cam_age_ms > self._max_cam_age_ms:
+            h["ok"] = False
+            h["reason"] = (f"camera STALE: newest frame is {cam_age_ms / 1000.0:.1f}s old "
+                           f"(limit {self._max_cam_age_ms / 1000.0:.1f}s). The capture device "
+                           f"most likely vanished (USB replug renumbers /dev/videoN) — "
+                           f"restart this server after re-seating it.")
+        elif black_frac >= self._max_black_frac:
+            h["ok"] = False
+            h["reason"] = (f"camera SIGNAL DEAD: {black_frac * 100:.1f}% of the frame is black "
+                           f"(training frames are ~21%). The capture card is delivering frames "
+                           f"but the GoPro is off / not outputting HDMI — check its power, the "
+                           f"Media Mod seating and that it is in clean-HDMI output mode.")
+        return h
+
     def predict(self, t_now, pos, aa):
         """-> (actions (N,6) absolute pos+aa in ROOT, diag dict for logging/trace)."""
         self.push_pose(t_now, pos, aa)
@@ -177,6 +224,12 @@ class PolicyServer:
         frames = self._cam.snapshot()
         if not frames:
             raise RuntimeError("no camera frames yet")
+        # Refuse to predict on a dead camera. Raising here surfaces as ok=False, which the
+        # bridge counts as a miss and — after max_consecutive_timeouts — aborts the episode
+        # with the arm HELD. Far better than driving the robot from a 16-hour-old frame.
+        health = self.camera_health()
+        if not health["ok"]:
+            raise RuntimeError(health["reason"])
         last_t = frames[-1][0]
         # freshness of the newest frame AT OBS-ASSEMBLY TIME (not after inference, which
         # would just add the inference latency back in and read as a stalled camera)
@@ -219,6 +272,9 @@ class PolicyServer:
         diag = {
             "cam_buf": len(frames),
             "cam_age_ms": cam_age_ms,
+            # forwarded to the bridge so camera health shows up in the DIMOS log too,
+            # not only here (the bridge cannot see the camera at all otherwise)
+            "black_frac": float((frames[-1][1].max(axis=2) <= 0.02).mean()),
             "pose_buf": len(self._poses),
             "n_pred": int(raw.shape[0]),
             "obs_pos": env_obs["robot0_eef_pos"][-1].astype(np.float64),
@@ -258,8 +314,18 @@ def load_policy(ckpt, device):
 @click.option("--quiet", is_flag=True, default=False, help="no per-request lines at all")
 @click.option("--trace", default=None,
               help="JSONL trace path: per request the FULL raw (N,9) net output + decoded actions")
+@click.option("--max-cam-age-ms", default=1000.0, type=float,
+              help="refuse to predict if the newest frame is older than this. Catches a "
+                   "vanished capture device (USB replug), where the ring buffer would "
+                   "otherwise serve the same stale frame forever")
+@click.option("--max-black-frac", default=0.90, type=float,
+              help="refuse to predict if this fraction of the frame is black. Training "
+                   "frames are ~21% (the mask); ~100% means no HDMI signal / GoPro off")
+@click.option("--no-camera-check", is_flag=True, default=False,
+              help="disable both camera guards (debug only — the robot will then act on "
+                   "whatever the camera last produced, however old or black)")
 def main(ckpt, addr, cam_device, dummy_cam, control_hz, fisheye, camera_intrinsics, sim_fov,
-         no_mirror, log_every, quiet, trace):
+         no_mirror, log_every, quiet, trace, max_cam_age_ms, max_black_frac, no_camera_check):
     import zmq
     import msgpack
     import json
@@ -284,7 +350,18 @@ def main(ckpt, addr, cam_device, dummy_cam, control_hz, fisheye, camera_intrinsi
     preproc = build_preproc(fisheye_converter, no_mirror, out_res=out_res)
     cam = CameraThread(cam_device, preproc, dummy=dummy_cam)
     cam.start()
-    server = PolicyServer(policy, cfg, shape_meta, cam, control_hz, device)
+    # --dummy-cam feeds all-zero frames on purpose, so the black guard would fire on every
+    # request and break the offline IPC check. Keep the staleness guard (the dummy thread
+    # still produces fresh frames, so it stays quiet) but drop the black one.
+    server = PolicyServer(
+        policy, cfg, shape_meta, cam, control_hz, device,
+        max_cam_age_ms=max_cam_age_ms,
+        max_black_frac=(2.0 if dummy_cam else max_black_frac),
+        check_camera=not no_camera_check,
+    )
+    print("camera guards: max_age={:.0f}ms max_black={:.0f}% enabled={}{}".format(
+        max_cam_age_ms, max_black_frac * 100, not no_camera_check,
+        "  (black guard OFF: --dummy-cam)" if dummy_cam else ""), flush=True)
 
     trace_f = open(trace, "a") if trace else None
     ctx = zmq.Context.instance()
@@ -298,6 +375,18 @@ def main(ckpt, addr, cam_device, dummy_cam, control_hz, fisheye, camera_intrinsi
             req = msgpack.unpackb(sock.recv(), raw=False)
             n_req += 1
             try:
+                # Camera preflight, asked by the bridge BEFORE it starts driving the arm.
+                if req.get("cmd") == "health":
+                    h = server.camera_health()
+                    if not quiet:
+                        age = h["cam_age_ms"]
+                        blk = h["black_frac"]
+                        age_s = "-" if age is None else "{:.0f}ms".format(age)
+                        blk_s = "-" if blk is None else "{:.1f}%".format(blk * 100)
+                        print("HEALTH req#{} ok={} cam_age={} black={} {}".format(
+                            n_req, h["ok"], age_s, blk_s, h["reason"]), flush=True)
+                    sock.send(msgpack.packb({"ok": True, **h}, use_bin_type=True))
+                    continue
                 if req.get("reset"):
                     server.reset(req["eef_pos"], req["eef_rot_aa"])
                     if not quiet:
@@ -307,7 +396,9 @@ def main(ckpt, addr, cam_device, dummy_cam, control_hz, fisheye, camera_intrinsi
                 acts, diag = server.predict(req["t"], req["eef_pos"], req["eef_rot_aa"])
                 infer_ms = (time.time() - t0) * 1e3
                 rep = {"ok": True, "actions": [[float(x) for x in row] for row in acts],
-                       "n": int(acts.shape[0]), "infer_ms": infer_ms}
+                       "n": int(acts.shape[0]), "infer_ms": infer_ms,
+                       "cam_age_ms": float(diag["cam_age_ms"]),
+                       "black_frac": float(diag["black_frac"])}
                 if not quiet and log_every > 0 and n_req % log_every == 0:
                     d0 = (acts[0, :3] - np.asarray(req["eef_pos"], dtype=np.float64)) * 1e3
                     span = float(np.linalg.norm(acts[-1, :3] - acts[0, :3])) * 1e3

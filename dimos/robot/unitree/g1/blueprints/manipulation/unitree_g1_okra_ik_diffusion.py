@@ -61,9 +61,27 @@ logger = setup_logger()
 # ---- robot side (same knobs as the ZED blueprint) ---------------------------
 _NIC = os.getenv("ROBOT_INTERFACE", "enp46s0")
 _LIVE = os.getenv("IK_REACH_LIVE", "").strip() == "1"
-_ARM_VEL_LIMIT = float(os.getenv("IK_ARM_VEL_LIMIT", "20.0"))
+_ARM_VEL_LIMIT = float(os.getenv("IK_ARM_VEL_LIMIT", "4.0"))
 _KP_ARM = float(os.getenv("OKRA_NOACT_KP_ARM", "80.0"))
 _KD_ARM = float(os.getenv("OKRA_NOACT_KD_ARM", "3.0"))
+# Gravity feedforward on the RIGHT arm during position tracking (default OFF = unchanged).
+# Without it the arm holds a pose only by carrying a permanent position error
+# (e = tau_gravity / kp; measured 3-7 deg = 45-90 mm at the tip on hw with kp=80 plus the
+# wrist-mounted payload). That droop is what stalls the diffusion loop: the policy asks for
+# "measured + delta", the arm settles at "commanded - droop", so the tip never advances.
+# OKRA_GRAVITY_TAU_SCALE trims for what the URDF does NOT model (GoPro, Media Mod, mount,
+# cabling): start LOW (0.6-0.8) and raise while watching `arm track` shrink.
+_GRAVITY_FF = os.getenv("OKRA_GRAVITY_FF", "").strip() == "1"
+_GRAVITY_TAU_SCALE = float(os.getenv("OKRA_GRAVITY_TAU_SCALE", "0.7"))
+# End-effector payload the URDF does NOT model. It ends in a 0.170 kg `right_rubber_hand`
+# (G1's display hand), so this is the mass to ADD: (real payload) - 0.170.
+# 2026-08-25 hardware: Dex1-1 550 g + GoPro HERO9 158 g + attachments 100 g = 808 g
+#   -> 0.808 - 0.170 = 0.638 kg.
+_TIP_EXTRA_MASS_KG = float(os.getenv("OKRA_TIP_EXTRA_MASS_KG", "0.638"))
+# Payload CoM in the wrist-yaw frame [m] (0.0415 = hand mount face, 0.1845 = fingertip).
+_TIP_EXTRA_COM = [
+    float(v) for v in os.getenv("OKRA_TIP_EXTRA_COM_XYZ", "0.113,-0.003,0.0").split(",")
+]
 # Pre-grasp standoff: stop the IK reach SHORT so the diffusion policy fine-adjusts the
 # last leg. Default 0.05 m (was 0.0 in the scripted-close blueprint). approach legs OFF.
 _STANDOFF_M = float(os.getenv("OKRA_STANDOFF_M", "0.05"))
@@ -110,6 +128,19 @@ _UMI_LOG_JOINTS = os.getenv("UMI_LOG_JOINTS", "1").strip() == "1"
 _UMI_LOG_CHUNK_MAX = int(os.getenv("UMI_LOG_CHUNK_MAX", "4"))
 # "auto" = <per-run log dir>/umi_diffusion_trace.jsonl. Empty string disables the trace.
 _UMI_TRACE_PATH = os.getenv("UMI_TRACE_PATH", "auto")
+# Wrist-camera preflight: refuse to start the adjustment on a stale/black frame. A dead
+# camera is indistinguishable from an idle policy once running (2026-08-25: a whole LIVE
+# run was driven from a 16-hour-old frame). Set 0 only to debug without the GoPro.
+_UMI_REQUIRE_CAMERA = os.getenv("UMI_REQUIRE_CAMERA_OK", "1").strip() != "0"
+
+# ---- spoken phase announcements (Japanese, G1 speaker) ----------------------
+# From outside the robot, an IK coarse reach and a diffusion fine-adjustment look the
+# same, and an adjustment that refused to start looks like nothing at all. The LangGraph
+# harvest app announces every phase; this gives the bridge pipeline the same cue.
+# Needs pyopenjtalk + scipy in the venv; without them it degrades to [VOICE] log lines.
+_ANCHOR_DRIFT = float(os.getenv("UMI_MAX_ANCHOR_DRIFT_M", "0.05"))
+_VOICE = os.getenv("OKRA_VOICE", "").strip() == "1"
+_VOICE_VOLUME = int(os.getenv("OKRA_VOICE_VOLUME", "100"))
 
 # ---- chest-ZED camera (same knobs as the ZED blueprint) ---------------------
 _ZED_SERIAL = os.getenv("ZED_SERIAL", "").strip() or None
@@ -194,16 +225,27 @@ _MODULES = [
         gripper_offset_xyz=_TIP_OFFSET,
         camera_mount_xyzrpy=_ZED_MOUNT,
         click_in_camera_body_frame=True,
+        voice=_VOICE,
+        voice_nic=_NIC,
+        voice_volume=_VOICE_VOLUME,
     ),
     G1ArmSdkConnection.blueprint(
         network_interface=_NIC,
         arm_velocity_limit=_ARM_VEL_LIMIT,
+        voice=_VOICE,
+        voice_nic=_NIC,
+        voice_volume=_VOICE_VOLUME,
         publish_cmd=_LIVE,
         kp_arm=_KP_ARM,
         kd_arm=_KD_ARM,
         enable_disconnect=True,
+        gravity_ff=_GRAVITY_FF,
+        gravity_tau_scale=_GRAVITY_TAU_SCALE,
+        tip_extra_mass_kg=_TIP_EXTRA_MASS_KG,
+        tip_extra_com_xyz=_TIP_EXTRA_COM,
     ),
     UmiDiffusionBridge.blueprint(
+        max_anchor_drift_m=_ANCHOR_DRIFT,
         server_addr=_UMI_SERVER,
         control_hz=_UMI_CONTROL_HZ,
         n_exec_per_infer=_UMI_N_EXEC,
@@ -213,6 +255,10 @@ _MODULES = [
         converge_pos_eps_m=_UMI_CONVERGE_EPS_M,
         converge_hold_ticks=_UMI_CONVERGE_HOLD_TICKS,
         log_only=not _LIVE,
+        require_camera_ok=_UMI_REQUIRE_CAMERA,
+        voice=_VOICE,
+        voice_nic=_NIC,
+        voice_volume=_VOICE_VOLUME,
         log_every_n=_UMI_LOG_EVERY_N,
         log_joints=_UMI_LOG_JOINTS,
         log_chunk_max=_UMI_LOG_CHUNK_MAX,

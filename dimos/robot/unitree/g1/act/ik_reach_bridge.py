@@ -236,6 +236,13 @@ class IkReachBridgeConfig(ModuleConfig):
     reach_min_wait_s: float = 0.8            # floor (latency + tiny moves) [s]
     reach_max_wait_s: float = 3.0            # ceiling before handoff [s]
     reach_dry_wait_s: float = 0.1            # DRY: short fixed wait (arm not driven) [s]
+    # Spoken phase announcements through the G1 speaker (Japanese: pyopenjtalk +
+    # PlayStream, the same path the LangGraph harvest app uses). Off by default so no
+    # existing blueprint changes behaviour. Degrades to log-only if the speaker cannot be
+    # built, and never raises into the reach path.
+    voice: bool = False
+    voice_nic: str = ""      # wired NIC to the G1 (shares the process-wide DDS factory)
+    voice_volume: int = 100  # 0-100
     log_every_n: int = 1
     # Hand-eye calibration diagnostic: log the MEASURED gripper tip in torso every N
     # motor_states (0 = off). With this on, position the tip at a marker the head camera
@@ -314,6 +321,11 @@ class IkReachBridge(Module):
         # races the reach thread's ik.solve (which writes self._arm.ik._data).
         self._diag_data = self._arm.ik.model.createData()
         self._state_count = 0
+        from dimos.robot.unitree.g1.act.phase_voice import build_phase_voice
+
+        self._voice = build_phase_voice(
+            self.config.voice, self.config.voice_nic, volume=self.config.voice_volume
+        )
 
     @rpc
     def start(self) -> None:
@@ -535,6 +547,9 @@ class IkReachBridge(Module):
         # --- accepted: arm the debounce identically in DRY and LIVE -----------
         self._last_reach_t = now
         self._count += 1
+        # Announce only once the target passed every gate, so a rejected click never
+        # tells the operator the arm is about to move.
+        self._voice.say_phase("ik", "アイケーで接近します")
 
         # --- approach-from-above (0 = legacy direct). U-shaped 3-phase path:
         # (1) LIFT straight up at the current tip x,y (near the body / clear of the
@@ -699,7 +714,10 @@ class IkReachBridge(Module):
                 f"IkReachBridge: ACT handoff OFF — holding pre-grasp (delta={delta:.3f} rad, "
                 f"worst-joint err at hold={fire_err:.4f} rad); NOT firing reach_done."
             )
+            self._voice.say_phase("ik_hold", "接近しました。この姿勢で保持します")
+            self._voice.reset()  # next click starts a fresh phase sequence
             return
+        self._voice.say_phase("ik_done", "接近しました")
         logger.info(
             f"IkReachBridge: open-loop wait {wait_s:.2f}s done (delta={delta:.3f} rad, "
             f"nominal={self.config.reach_nominal_speed_rad_s} margin={self.config.reach_margin_s}); "
