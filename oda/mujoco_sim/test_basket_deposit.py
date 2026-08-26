@@ -53,6 +53,10 @@ DROP_IK_SEED = np.array([-0.581, -1.057, 0.608, -0.280, 0.947, 0.574, 1.159])
 CARGO_RADIUS_M = 0.013
 CARGO_HALF_LEN_M = 0.045
 TRACK_TOL_M = 0.010
+# The arm may start the stow from any valid front-side grasp configuration, not only from
+# home. Three seconds lets the position actuators settle through that larger joint-space
+# displacement while retaining contact checks at every simulation step.
+DEPOSIT_MOVE_SECONDS = 3.0
 SETTLE_SECONDS = 4.0
 # MuJoCo's compliant contact can settle a dense capsule fractionally inside its
 # padded contact shell.  Keep the physical 15 mm basket margin intact and allow
@@ -201,7 +205,7 @@ def main() -> int:
     failures: list[str] = []
     print("[2] carry down through the open (+Z) face")
     for label, target, solution in (("entry", ENTRY_TORSO, q_entry), ("drop", DROP_TORSO, q_drop)):
-        deepest, pairs, torso_pairs = _advance(rig, solution, seconds=2.0)
+        deepest, pairs, torso_pairs = _advance(rig, solution, seconds=DEPOSIT_MOVE_SECONDS)
         tip_err = float(np.linalg.norm(rig.tip_torso(np.asarray(TIP_OFFSET)) - target))
         arm_basket = [p for p in pairs if "cargo_okra" not in p]
         print(

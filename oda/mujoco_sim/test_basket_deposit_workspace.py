@@ -57,6 +57,7 @@ from oda.mujoco_sim.build_g1_scene import _OUT
 from oda.mujoco_sim.render_basket_deposit import render as render_deposit
 from oda.mujoco_sim.smoke_sim_arm import STANDOFF_M, TIP_OFFSET, TRACK_TOL_M
 from oda.mujoco_sim.test_basket_deposit import (
+    DEPOSIT_MOVE_SECONDS,
     DROP_IK_SEED,
     DROP_TORSO,
     ENTRY_IK_SEED,
@@ -73,8 +74,6 @@ from oda.mujoco_sim.test_basket_deposit import (
 
 _OUT_DIR = Path(__file__).resolve().parent / "output"
 _RIGHT_SLICE = slice(22, 29)
-RESULTS_JSON = _OUT_DIR / "workspace_test_results.json"
-PLOT_PNG = _OUT_DIR / "workspace_test_plot.png"
 REACH_SETTLE_S = 2.0
 
 # ---------------------------------------------------------------------------------------
@@ -103,11 +102,30 @@ _STRESS_POINTS = [
     (0.55, 0.10, -0.20),   # corner
 ]
 
+# Operational front-side harvesting envelope, torso_link frame [m]. This is intentionally
+# narrower than the click-clamping box and excludes the torso centreline. It is the area
+# that must pass *every* sample before we claim a reliable front-to-basket handoff:
+# 30--45 cm ahead, 25--45 cm to the right of torso centre, and 5--25 cm above torso origin.
+# A 5 cm grid makes the acceptance set explicit and reproducible (4 x 3 x 3 = 36 points).
+FRONT_WORKSPACE_BOX_TORSO = {
+    "x": [0.30, 0.45],
+    "y": [-0.45, -0.25],
+    "z": [0.05, 0.25],
+}
+_FRONT_GRID_X = [0.30, 0.35, 0.40, 0.45]
+_FRONT_GRID_Y = [-0.45, -0.35, -0.25]
+_FRONT_GRID_Z = [0.05, 0.15, 0.25]
+
 
 def sample_points() -> list[tuple[float, float, float]]:
     pts = [(x, y, z) for x in _GRID_X for y in _GRID_Y for z in _GRID_Z]
     pts.extend(_STRESS_POINTS)
     return pts
+
+
+def front_sample_points() -> list[tuple[float, float, float]]:
+    """Return the 36-point, all-pass-required front harvesting acceptance grid."""
+    return [(x, y, z) for x in _FRONT_GRID_X for y in _FRONT_GRID_Y for z in _FRONT_GRID_Z]
 
 
 def _contact_report(model: mujoco.MjModel, data: mujoco.MjData, ignore: set[str]) -> list[tuple[str, str]]:
@@ -261,7 +279,7 @@ def _deposit_from_pose(scene: Path, q_reach: np.ndarray, tip_world: np.ndarray, 
 
     failures: list[str] = []
     for label, target, solution in (("entry", ENTRY_TORSO, q_entry), ("drop", DROP_TORSO, q_drop)):
-        deepest, pairs, torso_pairs = _advance(rig, solution, seconds=2.0)
+        deepest, pairs, torso_pairs = _advance(rig, solution, seconds=DEPOSIT_MOVE_SECONDS)
         tip_err = float(np.linalg.norm(rig.tip_torso(np.asarray(TIP_OFFSET)) - target))
         arm_basket = [p for p in pairs if "cargo_okra" not in p]
         if tip_err > DEPOSIT_TRACK_TOL_M:
@@ -445,33 +463,52 @@ def render_representatives(scene: Path, reps: list[dict], out_dir: Path) -> list
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--scene", type=Path, default=_OUT)
+    ap.add_argument(
+        "--profile",
+        choices=("diagnostic", "front"),
+        default="diagnostic",
+        help="diagnostic: broad/stress sweep; front: 36-point all-pass harvesting envelope",
+    )
     ap.add_argument("--skip-videos", action="store_true", help="skip representative mp4 rendering")
     args = ap.parse_args()
     if not args.scene.exists():
         print(f"scene missing: {args.scene}\nrun: .venv/bin/python oda/mujoco_sim/build_g1_scene.py")
         return 2
 
-    points = sample_points()
-    print(f"sweeping {len(points)} points")
+    points = front_sample_points() if args.profile == "front" else sample_points()
+    print(f"sweeping {len(points)} points ({args.profile} profile)")
     results = run(args.scene, points)
 
     print()
     print(summarize(results))
 
     _OUT_DIR.mkdir(parents=True, exist_ok=True)
-    RESULTS_JSON.write_text(json.dumps({"points": results, "workspace_box_torso": {
+    results_path = _OUT_DIR / f"workspace_{args.profile}_test_results.json"
+    workspace_box = FRONT_WORKSPACE_BOX_TORSO if args.profile == "front" else {
         "x": [0.05, 0.65], "y": [-0.75, 0.20], "z": [-0.35, 0.85],
-    }}, indent=2))
-    print(f"wrote {RESULTS_JSON}")
+    }
+    results_path.write_text(json.dumps({
+        "profile": args.profile,
+        "points": results,
+        "workspace_box_torso": workspace_box,
+        "all_points_required": args.profile == "front",
+    }, indent=2))
+    print(f"wrote {results_path}")
 
-    plot(results, PLOT_PNG)
-    print(f"wrote {PLOT_PNG}")
+    plot_path = _OUT_DIR / f"workspace_{args.profile}_test_plot.png"
+    plot(results, plot_path)
+    print(f"wrote {plot_path}")
 
     if not args.skip_videos:
         reps = pick_representatives(results)
         print(f"rendering {len(reps)} representative videos")
         render_representatives(args.scene, reps, _OUT_DIR)
 
+    if args.profile == "front" and any(not r["success"] for r in results):
+        print("FRONT_WORKSPACE FAILED: every front-profile point must succeed")
+        return 1
+    if args.profile == "front":
+        print("FRONT_WORKSPACE OK: every front-profile point succeeded")
     return 0
 
 

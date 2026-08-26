@@ -40,6 +40,7 @@ from dimos.robot.unitree.g1.ik_reach.right_arm_model import load_g1_right_arm_ik
 from oda.mujoco_sim.build_g1_scene import _BASKET_COLLISION_NAMES, _OUT
 from oda.mujoco_sim.smoke_sim_arm import TIP_OFFSET, SimRig
 from oda.mujoco_sim.test_basket_deposit import (
+    DEPOSIT_MOVE_SECONDS,
     DROP_IK_SEED,
     DROP_TORSO,
     ENTRY_IK_SEED,
@@ -217,10 +218,12 @@ def render(
     """
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Sizing: total simulated motion time is entry(2s) + drop(2s) + settle(SETTLE_SECONDS)
-    # -- render enough frames from that + a hold at start/end so playback lands near
+    # Sizing: total simulated motion time is entry + drop + settle. Keep this tied to
+    # the test's motion duration: the movie must show the same reliable trajectory that
+    # the front-workspace contract validates. Render enough frames from that + a hold at
+    # start/end so playback lands near
     # TARGET_SECONDS without slowing physics down.
-    moving_seconds = 2.0 + 2.0 + SETTLE_SECONDS
+    moving_seconds = 2.0 * DEPOSIT_MOVE_SECONDS + SETTLE_SECONDS
     total_frames = int(FPS * TARGET_SECONDS)
     hold_frames = max(1, int(FPS * 1.0))  # 1 s hold at start and end
     moving_frames = max(1, total_frames - 2 * hold_frames)
@@ -263,8 +266,8 @@ def render(
     rec.rebind(rig.model)
     rec.hold(rig.data, hold_frames)
 
-    _advance_recorded(rig, q_entry, seconds=2.0, rec=rec, frame_every=frame_every)
-    _advance_recorded(rig, q_drop, seconds=2.0, rec=rec, frame_every=frame_every)
+    _advance_recorded(rig, q_entry, seconds=DEPOSIT_MOVE_SECONDS, rec=rec, frame_every=frame_every)
+    _advance_recorded(rig, q_drop, seconds=DEPOSIT_MOVE_SECONDS, rec=rec, frame_every=frame_every)
     if verbose:
         print(f"[render] carried entry -> drop, cargo(torso)={np.round(_cargo_torso(rig, cargo_body), 4).tolist()}")
 
