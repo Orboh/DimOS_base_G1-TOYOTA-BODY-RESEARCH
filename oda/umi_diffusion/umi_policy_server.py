@@ -26,6 +26,7 @@ Run (LIVE, once Step 2 pins the preprocessing):
 Offline IPC check:
   conda run -n umi python oda/umi_diffusion/umi_policy_server.py --dummy-cam
 """
+import json
 import os
 import sys
 import threading
@@ -57,11 +58,38 @@ from umi.common.pose_util import pose_to_mat, mat_to_pose, pose10d_to_mat
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
-_GRIPPER_CONST = 1e-4  # dead training channel (verified in okra_20260723_ishimaru)
+# Fallback only. The real value comes from the checkpoint's own normalizer -- see
+# gripper_const_from_policy(). robot0_gripper_width is a DEAD channel in these datasets
+# (it never opens/closes), but "dead" means constant, not zero: the 101-episode okra ckpt
+# holds it at ~0.0417 m with a 0.8 mm spread, and its normalizer scales that spread by
+# 2490x to fill [-1, 1]. Feeding a hand-picked 1e-4 therefore lands at -103.6 in
+# normalized units -- a hundred times outside anything the policy saw in training.
+_GRIPPER_FALLBACK = 1e-4
+
+
+def gripper_const_from_policy(policy):
+    """Training-time centre of robot0_gripper_width, read off the ckpt's normalizer.
+
+    Feeding the channel its own training mean puts it at the middle of the distribution
+    (normalized ~0 for a constant channel), which is the only value that is in-distribution
+    by construction -- whatever the dataset happened to record.
+    """
+    try:
+        st = policy.normalizer.params_dict["robot0_gripper_width"]["input_stats"]
+        mean = float(st["mean"].detach().cpu().numpy().ravel()[0])
+        lo = float(st["min"].detach().cpu().numpy().ravel()[0])
+        hi = float(st["max"].detach().cpu().numpy().ravel()[0])
+        print(f"gripper_width: training mean={mean:.6f} range=[{lo:.6f}, {hi:.6f}] "
+              f"(was hard-coded {_GRIPPER_FALLBACK})", flush=True)
+        return mean
+    except Exception as e:
+        print(f"gripper_width: could not read normalizer ({e!r}); "
+              f"falling back to {_GRIPPER_FALLBACK}", flush=True)
+        return _GRIPPER_FALLBACK
 
 
 # ------------------------------------------------------------------ preprocessing
-def build_preproc(fisheye_converter, no_mirror, out_res=(224, 224)):
+def build_preproc(fisheye_converter, no_mirror, out_res=(224, 224), gripper_mask=True):
     """Return f(bgr_frame)->float32 RGB (H,W,3) in [0,1], matching umi_env.py's tf()."""
     import cv2
     from diffusion_policy.common.cv2_util import get_image_transform
@@ -72,8 +100,18 @@ def build_preproc(fisheye_converter, no_mirror, out_res=(224, 224)):
             tf = get_image_transform(input_res=(bgr.shape[1], bgr.shape[0]),
                                      output_res=out_res, bgr_to_rgb=True)
             img = np.ascontiguousarray(tf(bgr))
-            img = draw_predefined_mask(img, color=(0, 0, 0),
-                                       mirror=no_mirror, gripper=True, finger=False, use_aa=True)
+            # The gripper mask blacks out the bottom ~22% of the frame (rows 157-223 of
+            # 224) -- exactly where the fruit sits during a grasp. Whether the policy
+            # expects it depends on which pipeline built its dataset:
+            #   * stock UMI (scripts/07_generate_replay_buffer.py) draws it -> keep it ON
+            #   * roboharvest stubs draw_predefined_mask to `return img`, so datasets built
+            #     with its scripts_data_processing/ have NO mask -> pass --no-gripper-mask
+            # Feeding a masked frame to a ckpt trained without one hides a fifth of the
+            # image the policy was taught to rely on.
+            if gripper_mask:
+                img = draw_predefined_mask(img, color=(0, 0, 0),
+                                           mirror=no_mirror, gripper=True, finger=False,
+                                           use_aa=True)
         else:
             img = fisheye_converter.forward(bgr)
             img = img[..., ::-1]  # bgr -> rgb
@@ -85,7 +123,8 @@ def build_preproc(fisheye_converter, no_mirror, out_res=(224, 224)):
 class CameraThread:
     """Grab BGR frames from a UVC device (or a dummy) and keep a timestamped ring buffer."""
 
-    def __init__(self, device, preproc, dummy=False, cap_res=(1920, 1080), buf=16):
+    def __init__(self, device, preproc, dummy=False, cap_res=(1920, 1080), buf=16,
+                 record_dir=None, record_fps=15.0):
         self._device = device
         self._preproc = preproc
         self._dummy = dummy
@@ -94,6 +133,16 @@ class CameraThread:
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread = None
+        # Continuous capture log. The per-inference dump in PolicyServer.predict only lands
+        # ~7 frames in 10 s, which is a slideshow, not a video -- you cannot see the arm
+        # move between decisions. This writes the capture stream itself, decimated to
+        # record_fps, so the analysis video plays at something like real time.
+        self._rec_dir = record_dir
+        self._rec_period = 1.0 / max(1e-6, record_fps)
+        self._rec_n = 0
+        self._rec_last = 0.0
+        self._rec_index = None
+        self._rec_warned = False
 
     def start(self):
         self._thread = threading.Thread(target=self._run, daemon=True, name="gopro-cam")
@@ -119,10 +168,34 @@ class CameraThread:
                     time.sleep(0.005)
                     continue
             img = self._preproc(bgr)
+            now = time.time()
             with self._lock:
-                self._buf.append((time.time(), img))
+                self._buf.append((now, img))
+            if self._rec_dir is not None and (now - self._rec_last) >= self._rec_period:
+                # Recording is diagnostics. An exception here used to kill this thread --
+                # the buffer then went stale and the bridge refused to run with
+                # "camera STALE", pointing at the USB cable instead of at this code.
+                # Never let a logging fault take the camera down.
+                try:
+                    self._rec_last = now
+                    self._rec_n += 1
+                    import cv2 as _cv2
+                    _cv2.imwrite(
+                        os.path.join(self._rec_dir, "cam_%06d.png" % self._rec_n),
+                        (np.clip(img, 0.0, 1.0) * 255).astype(np.uint8)[..., ::-1])
+                    if self._rec_index is None:
+                        self._rec_index = open(os.path.join(self._rec_dir, "cam_index.jsonl"), "a")
+                    self._rec_index.write(json.dumps({"n": self._rec_n, "t": now}) + "\n")
+                    self._rec_index.flush()
+                except Exception as exc:
+                    if not self._rec_warned:
+                        self._rec_warned = True
+                        print(f"frame recording failed ({exc!r}); capture continues, "
+                              "the analysis video will be short", flush=True)
         if cap is not None:
             cap.release()
+        if self._rec_index is not None:
+            self._rec_index.close()
 
     def snapshot(self):
         with self._lock:
@@ -136,6 +209,7 @@ class CameraThread:
 
 class PolicyServer:
     def __init__(self, policy, cfg, shape_meta, cam, control_hz, device,
+                 gripper_override=None, record_dir=None,
                  max_cam_age_ms=1000.0, max_black_frac=0.90, check_camera=True):
         self._policy = policy
         self._cfg = cfg
@@ -163,6 +237,13 @@ class PolicyServer:
         self._pose_ds = int(shape_meta["obs"]["robot0_eef_pos"]["down_sample_steps"])
         self._cam_h = int(shape_meta["obs"]["camera0_rgb"]["horizon"])
         self._pose_h = int(shape_meta["obs"]["robot0_eef_pos"]["horizon"])
+        self._gripper_req = None   # per-request override (A/B on identical frames)
+        self._record_dir = record_dir  # --record: dump every fed frame for post-hoc analysis
+        self._record_n = 0
+        self._gripper_const = (
+            gripper_override if gripper_override is not None
+            else gripper_const_from_policy(policy)
+        )
         self._poses = deque(maxlen=256)  # (t, pos3, aa3)
         self._episode_start = None
 
@@ -198,7 +279,7 @@ class PolicyServer:
         last_t, last_img = frames[-1]
         cam_age_ms = (time.time() - last_t) * 1e3
         black_frac = float((last_img.max(axis=2) <= 0.02).mean())
-        h = {"cam_age_ms": cam_age_ms, "black_frac": black_frac, "cam_buf": len(frames),
+        h = {"cam_age_ms": cam_age_ms, "frame": self._record_n, "black_frac": black_frac, "cam_buf": len(frames),
              "ok": True, "reason": ""}
         if not self._check_camera:
             return h
@@ -241,6 +322,19 @@ class PolicyServer:
         cam_obs = np.stack([frames[i][1] for i in idxs])  # (h, 224,224,3)
 
         # pose obs at the same alignment clock (use the camera 'now')
+        # Dump the exact frame the policy is about to see. Not the raw capture: the
+        # 224x224 post-preprocessing image, so a later replay shows what the network had,
+        # mask/crop/mirror included. Written before inference so a crash still leaves it.
+        if self._record_dir is not None:
+            import cv2 as _cv2
+            self._record_n += 1
+            # build_preproc returns float32 in [0, 1] (the range the policy wants), so it
+            # has to be scaled back to 0-255 before imwrite -- writing the float array
+            # straight out truncates every pixel to 0 and saves a black frame.
+            _cv2.imwrite(
+                os.path.join(self._record_dir, "frame_%06d.png" % self._record_n),
+                (np.clip(cam_obs[-1], 0.0, 1.0) * 255).astype(np.uint8)[..., ::-1])
+
         pose_ts = last_t - np.arange(self._pose_h)[::-1] * self._pose_ds * self._dt
         pose_obs = self._interp_pose(pose_ts)
 
@@ -248,7 +342,8 @@ class PolicyServer:
             "camera0_rgb": cam_obs,
             "robot0_eef_pos": pose_obs[:, :3].astype(np.float32),
             "robot0_eef_rot_axis_angle": pose_obs[:, 3:].astype(np.float32),
-            "robot0_gripper_width": np.full((self._pose_h, 1), _GRIPPER_CONST, np.float32),
+            "robot0_gripper_width": np.full(
+                (self._pose_h, 1), self._gripper_req or self._gripper_const, np.float32),
             "timestamp": cam_ts,
         }
         obs_dict_np = get_real_umi_obs_dict(
@@ -280,6 +375,7 @@ class PolicyServer:
             "obs_pos": env_obs["robot0_eef_pos"][-1].astype(np.float64),
             "obs_aa": env_obs["robot0_eef_rot_axis_angle"][-1].astype(np.float64),
             "raw": raw.astype(np.float64),  # (N,9) pre-decode, the actual net output
+            "frame": self._record_n,        # links this request to frame_%06d.png
         }
         return mat_to_pose(action_mat), diag  # (N,6), diag
 
@@ -321,10 +417,20 @@ def load_policy(ckpt, device):
 @click.option("--max-black-frac", default=0.90, type=float,
               help="refuse to predict if this fraction of the frame is black. Training "
                    "frames are ~21% (the mask); ~100% means no HDMI signal / GoPro off")
+@click.option("--record-fps", default=15.0, type=float,
+              help="rate to log the capture stream at when --record is set")
+@click.option("--record", default=None,
+              help="directory to dump every fed 224x224 frame + trace.jsonl "
+                   "(implies --trace <dir>/server_trace.jsonl)")
+@click.option("--gripper-mask/--no-gripper-mask", default=True,
+              help="draw the UMI gripper mask. roboharvest-trained ckpts were built WITHOUT it -> use --no-gripper-mask")
+@click.option("--gripper-width", default=None, type=float,
+              help="override robot0_gripper_width (default: the ckpt normalizer's training mean)")
 @click.option("--no-camera-check", is_flag=True, default=False,
               help="disable both camera guards (debug only — the robot will then act on "
                    "whatever the camera last produced, however old or black)")
 def main(ckpt, addr, cam_device, dummy_cam, control_hz, fisheye, camera_intrinsics, sim_fov,
+         gripper_width, gripper_mask, record, record_fps,
          no_mirror, log_every, quiet, trace, max_cam_age_ms, max_black_frac, no_camera_check):
     import zmq
     import msgpack
@@ -347,14 +453,26 @@ def main(ckpt, addr, cam_device, dummy_cam, control_hz, fisheye, camera_intrinsi
         fisheye_converter = FisheyeRectConverter(**intr, out_size=out_res, out_fov=sim_fov)
         print(f"fisheye rectification ON (fov={sim_fov})")
 
-    preproc = build_preproc(fisheye_converter, no_mirror, out_res=out_res)
-    cam = CameraThread(cam_device, preproc, dummy=dummy_cam)
+    preproc = build_preproc(fisheye_converter, no_mirror, out_res=out_res,
+                            gripper_mask=gripper_mask)
+    print("gripper mask: {} ({})".format(
+        "ON" if gripper_mask else "OFF",
+        "stock UMI datasets" if gripper_mask else "roboharvest datasets"), flush=True)
+    cam = CameraThread(cam_device, preproc, dummy=dummy_cam, record_dir=record, record_fps=record_fps)
     cam.start()
     # --dummy-cam feeds all-zero frames on purpose, so the black guard would fire on every
     # request and break the offline IPC check. Keep the staleness guard (the dummy thread
     # still produces fresh frames, so it stays quiet) but drop the black one.
+    if record:
+        os.makedirs(record, exist_ok=True)
+        if not trace:
+            trace = os.path.join(record, "server_trace.jsonl")
+        print(f"recording frames + trace to {record}", flush=True)
+
     server = PolicyServer(
         policy, cfg, shape_meta, cam, control_hz, device,
+        gripper_override=gripper_width,
+        record_dir=record,
         max_cam_age_ms=max_cam_age_ms,
         max_black_frac=(2.0 if dummy_cam else max_black_frac),
         check_camera=not no_camera_check,
@@ -393,6 +511,7 @@ def main(ckpt, addr, cam_device, dummy_cam, control_hz, fisheye, camera_intrinsi
                         print(f"RESET req#{n_req} episode_start pos[{f3(req['eef_pos'])}] "
                               f"aa[{f3(req['eef_rot_aa'])}]", flush=True)
                 t0 = time.time()
+                server._gripper_req = req.get("gripper_width")
                 acts, diag = server.predict(req["t"], req["eef_pos"], req["eef_rot_aa"])
                 infer_ms = (time.time() - t0) * 1e3
                 rep = {"ok": True, "actions": [[float(x) for x in row] for row in acts],
@@ -415,7 +534,7 @@ def main(ckpt, addr, cam_device, dummy_cam, control_hz, fisheye, camera_intrinsi
                         "t": time.time(), "req": n_req, "reset": bool(req.get("reset")),
                         "obs_pos": diag["obs_pos"].round(6).tolist(),
                         "obs_aa": diag["obs_aa"].round(6).tolist(),
-                        "cam_age_ms": round(diag["cam_age_ms"], 2),
+                        "cam_age_ms": round(diag["cam_age_ms"], 2), "frame": diag.get("frame", 0),
                         "cam_buf": diag["cam_buf"], "pose_buf": diag["pose_buf"],
                         "infer_ms": round(infer_ms, 2),
                         "raw": diag["raw"].round(6).tolist(),          # (N,9) net output
