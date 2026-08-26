@@ -212,6 +212,7 @@
                           <geom name="armcoll_right_hand_finger_2" type="capsule" fromto="0.100000 0.000000 -0.003000 0.174000 0.000000 -0.003000" size="0.0120" contype="2" conaffinity="1" rgba="0.85 0.25 0.25 0.5" />
                           <geom name="armcoll_right_hand_finger_3" type="capsule" fromto="0.100000 0.017000 0.012000 0.174000 0.017000 0.012000" size="0.0120" contype="2" conaffinity="1" rgba="0.85 0.25 0.25 0.5" />
                           <geom name="armcoll_right_hand_finger_4" type="capsule" fromto="0.100000 0.034000 0.020000 0.174000 0.034000 0.020000" size="0.0120" contype="2" conaffinity="1" rgba="0.85 0.25 0.25 0.5" />
+                          <geom name="armcoll_right_umi_base" type="box" pos="0.086000 0.000000 0.029100" size="0.086000 0.045700 0.029100" contype="2" conaffinity="1" rgba="0.98 0.50 0.08 0.45" />
                           <geom name="armcoll_right_umi_gopro" type="box" pos="0.055000 -0.020000 0.045000" euler="0.000000 0.436000 0.000000" size="0.021800 0.040500 0.032500" contype="2" conaffinity="1" rgba="0.10 0.10 0.10 0.8" />
                           <camera name="wrist_cam" pos="0.055000 -0.020000 0.045000" quat="0.596304675 0.380027282 -0.380027282 -0.596304675" fovy="92.0000" />
                         </body>

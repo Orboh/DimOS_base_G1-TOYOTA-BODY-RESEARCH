@@ -141,6 +141,17 @@ _HAND_FINGER_CAPSULES = [
 _HAND_FINGER_X_FROMTO = (0.100, 0.174)
 HAND_FINGER_RADIUS_M = 0.012
 
+# CAD-derived outer envelope of the 3D-printed UMI base mounted on the Dex1-1 hand.
+#
+# Source: ``uim_base_dex1-1_No_cube.f3d`` supplied on 2026-08-26.  Its Fusion OGS
+# display mesh has a bounding span of 172.0 x 91.4 x 58.2 mm.  This model does not
+# contain the GoPro body (``No_cube``), so the camera remains a separate keepout below.
+# The CAD's long axis is mounted along the G1 hand's +x (wrist -> fingertip) direction;
+# the base begins at the wrist origin and sits on top of the hand.  The mount origin is
+# photo-derived pending physical measurement, but the collision size is CAD-derived.
+UMI_BASE_FULL_EXTENTS = (0.1720, 0.0914, 0.0582)  # x, y, z [m]
+UMI_BASE_POS = (0.0860, 0.0000, 0.0291)  # centre in right_wrist_yaw_link [m]
+
 # UMI uses the wrist-mounted GoPro HERO9 + Media Mod rig.  GoPro's specified
 # HERO9 body envelope is W x H x D = 71.0 x 55.0 x 33.6 mm.  In the G1 body
 # convention these map to y, z, x respectively.  We add 5 mm on every face to
@@ -426,8 +437,25 @@ def _add_arm_collision(root: ET.Element, model: mujoco.MjModel) -> int:
         )
         added += 1
 
-    # The UMI observation camera is a physical keepout, not merely a virtual camera.
-    # It remains a primitive collision envelope in this phase; its visual mesh is not
+    # The CAD-derived 3D-printed UMI base is a physical keepout.  A single bounding box
+    # is deliberate at this stage: it covers the base plate, its upright brackets, and
+    # the unmeshed mirror mounting tabs, without treating the visual mesh itself as a
+    # validated MuJoCo collision mesh.
+    base_x, base_y, base_z = UMI_BASE_FULL_EXTENTS
+    ET.SubElement(
+        wrist_body,
+        "geom",
+        name="armcoll_right_umi_base",
+        type="box",
+        pos=" ".join(f"{v:.6f}" for v in UMI_BASE_POS),
+        size=f"{base_x / 2:.6f} {base_y / 2:.6f} {base_z / 2:.6f}",
+        contype="2",
+        conaffinity="1",
+        rgba="0.98 0.50 0.08 0.45",
+    )
+    added += 1
+
+    # The GoPro/Media Mod body is a separate physical keepout.  Its visual mesh is not
     # known or validated for contact.
     full_x, full_y, full_z = UMI_GOPRO_BODY_FULL_EXTENTS
     ET.SubElement(
