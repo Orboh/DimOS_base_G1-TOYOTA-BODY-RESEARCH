@@ -69,10 +69,11 @@ else:
 unitree_g1_arm_hold = autoconnect(
     G1ArmSdkConnection.blueprint(
         network_interface=_NIC,
-        # No arm_target producer is present, so this is belt-and-suspenders:
-        # even a future accidental target connection cannot move the arm through
-        # this commissioning blueprint.
-        arm_velocity_limit=0.0,
+        # The target is captured from LowState and no target producer exists in
+        # this blueprint.  Keep the proven measured-relative clip enabled so a
+        # small sag is actively corrected.  A zero limit would only mirror the
+        # measured pose and therefore provide no position hold at all.
+        arm_velocity_limit=20.0,
         initial_arm_pose=[],
         weight_ramp_s=5.0,
         publish_cmd=_LIVE_REQUESTED,
