@@ -116,6 +116,24 @@ _FRONT_GRID_X = [0.30, 0.35, 0.40, 0.45]
 _FRONT_GRID_Y = [-0.45, -0.35, -0.25]
 _FRONT_GRID_Z = [0.05, 0.15, 0.25]
 
+# Photo-aligned, front-centre-side acceptance profile. The plant appears near the image
+# centre in IMG_7961, but a right-arm-only transfer needs 10--20 cm rightward clearance
+# from torso centre to keep the UMI and carried pod out of the body/basket. Ten forward
+# samples, five lateral samples and two fruit heights provide a 100-case all-pass gate.
+CENTER_WORKSPACE_BOX_TORSO = {
+    "x": [0.45, 0.54],
+    "y": [-0.20, -0.10],
+    "z": [0.15, 0.25],
+}
+_CENTER_GRID_X = [0.45, 0.46, 0.47, 0.48, 0.49, 0.50, 0.51, 0.52, 0.53, 0.54]
+_CENTER_GRID_Y = [-0.20, -0.175, -0.15, -0.125, -0.10]
+_CENTER_GRID_Z = [0.15, 0.25]
+
+# Route central grasps outward, forward and above the basket rim before carrying them
+# inward to the abdominal drop point. Solve this waypoint from the actual grasp posture
+# so the IK preserves the local elbow branch instead of switching through the torso.
+TRANSFER_STAGE_TORSO = np.array([0.50, -0.25, 0.30])
+
 
 def sample_points() -> list[tuple[float, float, float]]:
     pts = [(x, y, z) for x in _GRID_X for y in _GRID_Y for z in _GRID_Z]
@@ -126,6 +144,11 @@ def sample_points() -> list[tuple[float, float, float]]:
 def front_sample_points() -> list[tuple[float, float, float]]:
     """Return the 36-point, all-pass-required front harvesting acceptance grid."""
     return [(x, y, z) for x in _FRONT_GRID_X for y in _FRONT_GRID_Y for z in _FRONT_GRID_Z]
+
+
+def center_sample_points() -> list[tuple[float, float, float]]:
+    """Return the photo-aligned 100-point, all-pass-required centre-side grid."""
+    return [(x, y, z) for x in _CENTER_GRID_X for y in _CENTER_GRID_Y for z in _CENTER_GRID_Z]
 
 
 def _contact_report(model: mujoco.MjModel, data: mujoco.MjData, ignore: set[str]) -> list[tuple[str, str]]:
@@ -272,6 +295,7 @@ def _deposit_from_pose(scene: Path, q_reach: np.ndarray, tip_world: np.ndarray, 
     cargo_qpos_adr = rig.model.jnt_qposadr[cargo_joint]
 
     try:
+        q_transfer = _solve(arm, TRANSFER_STAGE_TORSO, q_reach)
         q_entry = _solve(arm, ENTRY_TORSO, ENTRY_IK_SEED)
         q_drop = _solve(arm, DROP_TORSO, DROP_IK_SEED)
         q_retreat = _solve(arm, RETREAT_TORSO, ENTRY_IK_SEED)
@@ -279,7 +303,11 @@ def _deposit_from_pose(scene: Path, q_reach: np.ndarray, tip_world: np.ndarray, 
         return {"ok": False, "stage": "deposit_ik", "reason": str(exc)}
 
     failures: list[str] = []
-    for label, target, solution in (("entry", ENTRY_TORSO, q_entry), ("drop", DROP_TORSO, q_drop)):
+    for label, target, solution in (
+        ("transfer", TRANSFER_STAGE_TORSO, q_transfer),
+        ("entry", ENTRY_TORSO, q_entry),
+        ("drop", DROP_TORSO, q_drop),
+    ):
         deepest, pairs, torso_pairs = _advance(rig, solution, seconds=DEPOSIT_MOVE_SECONDS)
         tip_err = float(np.linalg.norm(rig.tip_torso(np.asarray(TIP_OFFSET)) - target))
         arm_basket = [p for p in pairs if not any("cargo_okra" in geom for geom in p)]
@@ -449,11 +477,13 @@ def render_representatives(scene: Path, reps: list[dict], out_dir: Path) -> list
             print(f"  [video] {pt} failed at reach ({reach['reason']}) -- skipping video (nothing to show past that point)")
             continue
         try:
+            q_transfer = _solve(arm, TRANSFER_STAGE_TORSO, np.asarray(reach["q_reach"]))
             render_deposit(
                 scene,
                 out_path,
                 q_start=np.asarray(reach["q_reach"]),
                 tip_world_override=np.asarray(reach["tip_world"]),
+                q_transfer=q_transfer,
                 verbose=False,
             )
             label = "success" if r["success"] else f"failure[{r.get('stage')}]"
@@ -469,9 +499,12 @@ def main() -> int:
     ap.add_argument("--scene", type=Path, default=_OUT)
     ap.add_argument(
         "--profile",
-        choices=("diagnostic", "front"),
+        choices=("diagnostic", "front", "center"),
         default="diagnostic",
-        help="diagnostic: broad/stress sweep; front: 36-point all-pass harvesting envelope",
+        help=(
+            "diagnostic: broad/stress sweep; front: 36-point all-pass harvesting envelope; "
+            "center: photo-aligned 100-point all-pass centre-side envelope"
+        ),
     )
     ap.add_argument("--skip-videos", action="store_true", help="skip representative mp4 rendering")
     args = ap.parse_args()
@@ -479,7 +512,11 @@ def main() -> int:
         print(f"scene missing: {args.scene}\nrun: .venv/bin/python oda/mujoco_sim/build_g1_scene.py")
         return 2
 
-    points = front_sample_points() if args.profile == "front" else sample_points()
+    points = {
+        "diagnostic": sample_points,
+        "front": front_sample_points,
+        "center": center_sample_points,
+    }[args.profile]()
     print(f"sweeping {len(points)} points ({args.profile} profile)")
     results = run(args.scene, points)
 
@@ -488,14 +525,15 @@ def main() -> int:
 
     _OUT_DIR.mkdir(parents=True, exist_ok=True)
     results_path = _OUT_DIR / f"workspace_{args.profile}_test_results.json"
-    workspace_box = FRONT_WORKSPACE_BOX_TORSO if args.profile == "front" else {
-        "x": [0.05, 0.65], "y": [-0.75, 0.20], "z": [-0.35, 0.85],
-    }
+    workspace_box = {
+        "front": FRONT_WORKSPACE_BOX_TORSO,
+        "center": CENTER_WORKSPACE_BOX_TORSO,
+    }.get(args.profile, {"x": [0.05, 0.65], "y": [-0.75, 0.20], "z": [-0.35, 0.85]})
     results_path.write_text(json.dumps({
         "profile": args.profile,
         "points": results,
         "workspace_box_torso": workspace_box,
-        "all_points_required": args.profile == "front",
+        "all_points_required": args.profile in ("front", "center"),
     }, indent=2))
     print(f"wrote {results_path}")
 
@@ -508,11 +546,11 @@ def main() -> int:
         print(f"rendering {len(reps)} representative videos")
         render_representatives(args.scene, reps, _OUT_DIR)
 
-    if args.profile == "front" and any(not r["success"] for r in results):
-        print("FRONT_WORKSPACE FAILED: every front-profile point must succeed")
+    if args.profile in ("front", "center") and any(not r["success"] for r in results):
+        print(f"{args.profile.upper()}_WORKSPACE FAILED: every profile point must succeed")
         return 1
-    if args.profile == "front":
-        print("FRONT_WORKSPACE OK: every front-profile point succeeded")
+    if args.profile in ("front", "center"):
+        print(f"{args.profile.upper()}_WORKSPACE OK: every profile point succeeded")
     return 0
 
 

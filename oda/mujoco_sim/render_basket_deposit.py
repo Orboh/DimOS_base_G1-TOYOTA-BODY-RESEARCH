@@ -212,6 +212,7 @@ def render(
     *,
     q_start: np.ndarray | None = None,
     tip_world_override: np.ndarray | None = None,
+    q_transfer: np.ndarray | None = None,
     verbose: bool = True,
 ) -> dict:
     """Run entry->drop->release->retreat/settle, writing an mp4 of ``deposit_cam``.
@@ -223,6 +224,8 @@ def render(
         tip_world_override: world-frame point the (virtually-held) cargo starts welded
             to. Defaults to the tip position at the scene's home pose. Pass the tip
             position at ``q_start`` to keep the cargo glued to the hand that "grasped" it.
+        q_transfer: optional collision-validated right-arm waypoint between a real grasp
+            pose and the basket-entry pose. When supplied, it is rendered before entry.
     Returns:
         dict summary (final cargo torso-frame position, settle speed, whether it ended
         inside the basket keepout box) -- reused by the workspace test to report per-clip
@@ -235,7 +238,8 @@ def render(
     # the front-workspace contract validates. Render enough frames from that + a hold at
     # start/end so playback lands near
     # TARGET_SECONDS without slowing physics down.
-    moving_seconds = 2.0 * DEPOSIT_MOVE_SECONDS + SETTLE_SECONDS
+    transfer_count = 1 if q_transfer is not None else 0
+    moving_seconds = (2.0 + transfer_count) * DEPOSIT_MOVE_SECONDS + SETTLE_SECONDS
     total_frames = int(FPS * TARGET_SECONDS)
     hold_frames = max(1, int(FPS * 1.0))  # 1 s hold at start and end
     moving_frames = max(1, total_frames - 2 * hold_frames)
@@ -278,6 +282,10 @@ def render(
     rec.rebind(rig.model)
     rec.hold(rig.data, hold_frames)
 
+    if q_transfer is not None:
+        _advance_recorded(
+            rig, q_transfer, seconds=DEPOSIT_MOVE_SECONDS, rec=rec, frame_every=frame_every
+        )
     _advance_recorded(rig, q_entry, seconds=DEPOSIT_MOVE_SECONDS, rec=rec, frame_every=frame_every)
     _advance_recorded(rig, q_drop, seconds=DEPOSIT_MOVE_SECONDS, rec=rec, frame_every=frame_every)
     if verbose:
