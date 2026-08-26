@@ -91,10 +91,11 @@ CHEST_MOUNT = [
 CHEST_FOVY_DEG = 70.0        # ZED Mini vertical FOV, approximate
 CHEST_RES = (640, 360)
 
-# Wrist GoPro mount on right_wrist_yaw_link (the UMI observation camera). The real dex1-1
-# rig's GoPro looks forward-and-slightly-inward past the jaw. Pitch is +25 deg (nose down)
-# so the gripper occupies the lower part of the frame like the UMI training data.
-WRIST_MOUNT = [0.055, -0.02, 0.045, 0.0, 0.436, 0.0]
+# Wrist GoPro mount on right_wrist_yaw_link (the UMI observation camera).  The supplied
+# CAD excludes the camera body (``No_cube``), so this is a separate physical proxy.  Its
+# centre is above the UMI base top face rather than embedded in the plate.  Pitch is +25
+# deg (nose down) so the gripper occupies the lower part of the frame like UMI data.
+WRIST_MOUNT = [0.055, -0.020, 0.100, 0.0, 0.436, 0.0]
 WRIST_FOVY_DEG = 92.0        # GoPro Wide, de-fisheyed equivalent (sim renders pinhole)
 WRIST_RES = (320, 240)
 
@@ -146,11 +147,16 @@ HAND_FINGER_RADIUS_M = 0.012
 # Source: ``uim_base_dex1-1_No_cube.f3d`` supplied on 2026-08-26.  Its Fusion OGS
 # display mesh has a bounding span of 172.0 x 91.4 x 58.2 mm.  This model does not
 # contain the GoPro body (``No_cube``), so the camera remains a separate keepout below.
-# The CAD's long axis is mounted along the G1 hand's +x (wrist -> fingertip) direction;
-# the base begins at the wrist origin and sits on top of the hand.  The mount origin is
-# photo-derived pending physical measurement, but the collision size is CAD-derived.
-UMI_BASE_FULL_EXTENTS = (0.1720, 0.0914, 0.0582)  # x, y, z [m]
-UMI_BASE_POS = (0.0860, 0.0000, 0.0291)  # centre in right_wrist_yaw_link [m]
+# The supplied UMI photo establishes the mounting convention: the 172 mm plate spans
+# across the hand, not wrist-to-fingertip.  In the G1 wrist frame this maps the CAD long
+# side onto +Y/-Y, while the 91.4 mm side is the fore-aft (+X) extent.  The plate is
+# centred above the wrist/palm and its lower face sits at wrist-frame z=0.  This fixes the
+# earlier (incorrect) x/y swap that made the simulated UMI look laterally too small.
+#
+# The exact clamp origin still needs a physical datum on the G1 hand; the pose below is a
+# photo-derived centre mount, and is deliberately isolated here for that later update.
+UMI_BASE_FULL_EXTENTS = (0.0914, 0.1720, 0.0582)  # x, y, z [m], G1 wrist frame
+UMI_BASE_POS = (0.0550, 0.0000, 0.0291)  # centre in right_wrist_yaw_link [m]
 
 # UMI uses the wrist-mounted GoPro HERO9 + Media Mod rig.  GoPro's specified
 # HERO9 body envelope is W x H x D = 71.0 x 55.0 x 33.6 mm.  In the G1 body

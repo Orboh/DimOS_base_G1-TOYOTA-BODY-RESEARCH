@@ -42,12 +42,13 @@ DROP_TORSO = np.array([0.200, -0.025, 0.100])
 RETREAT_TORSO = ENTRY_TORSO.copy()
 
 # Position-only IK has a null space: a tip can reach the same point with either
-# the elbow/UMI outside the torso or passing through it.  These seeds select the
-# externally-routed branch, then every interpolated motion sample is checked
-# against ``torso_collision_core`` below.  They were obtained with the actual
-# CAD-derived UMI base keepout enabled, not tuned from a visual-only model.
-ENTRY_IK_SEED = np.array([0.091, -0.841, 0.206, -0.439, 0.436, -0.371, 0.937])
-DROP_IK_SEED = np.array([0.139, -0.857, 0.397, -0.211, -0.032, -0.822, 0.450])
+# the elbow/UMI outside the torso or passing through it.  These seeds choose the
+# externally-routed, elbow-forward branch: its elbow is about 0.10 m in front of
+# the torso origin rather than nearly level with it.  Every interpolated motion
+# sample is checked against ``torso_collision_core`` below.  They were obtained
+# with the CAD-derived UMI base keepout enabled, not tuned from a visual-only model.
+ENTRY_IK_SEED = np.array([-0.518, -0.860, 0.266, -0.353, 0.564, 0.407, 1.477])
+DROP_IK_SEED = np.array([-0.581, -1.057, 0.608, -0.280, 0.947, 0.574, 1.159])
 
 CARGO_RADIUS_M = 0.013
 CARGO_HALF_LEN_M = 0.045
