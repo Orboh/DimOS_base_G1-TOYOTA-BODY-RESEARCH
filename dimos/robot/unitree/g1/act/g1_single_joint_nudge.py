@@ -71,6 +71,7 @@ class G1SingleJointNudge(Module):
         self._move_t: float | None = None
         self._baseline: np.ndarray | None = None
         self._complete_logged = False
+        self._last_trace_t = 0.0
 
     @rpc
     def start(self) -> None:
@@ -133,12 +134,27 @@ class G1SingleJointNudge(Module):
                 position=target.tolist(), velocity=[0.0] * _ARM_COUNT, effort=[0.0] * _ARM_COUNT
             )
         )
+        # The arm connection's aggregate tracking log is useful for safety, but
+        # it cannot prove that THIS joint (rather than another held joint) moved.
+        # Emit a joint-specific measured-versus-target trace during every nudge.
+        if now - self._last_trace_t >= 1.0:
+            self._last_trace_t = now
+            error = float(target[self.config.joint_index] - measured[self.config.joint_index])
+            logger.info(
+                "G1SingleJointNudge: %s target=%.4f measured=%.4f error=%.4f rad",
+                self.config.joint_name,
+                target[self.config.joint_index],
+                measured[self.config.joint_index],
+                error,
+            )
         if travelled >= abs(self.config.delta_rad) and not self._complete_logged:
             self._complete_logged = True
             logger.warning(
-                "G1SingleJointNudge: target reached at %.4f rad; holding only this target "
-                "until normal shutdown.",
+                "G1SingleJointNudge: target reached at %.4f rad (measured %.4f, error %.4f); "
+                "holding only this target until normal shutdown.",
                 target[self.config.joint_index],
+                measured[self.config.joint_index],
+                float(target[self.config.joint_index] - measured[self.config.joint_index]),
             )
 
 
