@@ -58,6 +58,7 @@ from dimos.msgs.geometry_msgs.PointStamped import PointStamped
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.msgs.std_msgs.Bool import Bool
 from dimos.robot.unitree.g1.act.two_click_confirm import TwoClickConfirm
+from dimos.manipulation.planning.kinematics.pinocchio_ik import PinocchioIKConfig
 from dimos.robot.unitree.g1.ik_reach.right_arm_model import (
     DEFAULT_URDF,
     load_g1_right_arm_ik,
@@ -193,6 +194,15 @@ class IkReachBridgeConfig(ModuleConfig):
     fire_reach_done: bool = True
     # Fixed EE orientation as quaternion xyzw in the IK ROOT frame; empty = hold the
     # current EE orientation (position-only reach; safest for R3).
+    #
+    # Setting this SWITCHES THE SOLVER TO 6-DOF. It used to be silently inert:
+    # load_g1_right_arm_ik() defaults to a POSITION-ONLY solver, which ignores the
+    # rotation half of the target, so the wrist kept whatever orientation the arm
+    # happened to be in. That is how the run of 2026-08-26 ended up with the hand's
+    # approach axis 50 deg above horizontal -- the wrist camera stared at the ceiling
+    # while the fruit sat on the bottom edge of the frame, far outside the framing the
+    # UMI demos were collected in. ROOT is torso-aligned (torso_in_root.rotation == I),
+    # so "0,0,0,1" = approach straight forward, image-up = world-up.
     fixed_orientation_xyzw: list[float] = []
     # Expected click frame_id (== the Rerun entity_path of the okra point cloud, e.g.
     # "world/camera/pointcloud"). The static SE3 assumes clicks arrive in the camera
@@ -263,8 +273,14 @@ class IkReachBridge(Module):
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        # 6-DOF only when an orientation was actually asked for: the position-only
+        # solve stays the default because it avoids the large wrist reconfigurations an
+        # over-constrained 6-DOF reach can demand.
         self._arm = load_g1_right_arm_ik(
             self.config.urdf_path,
+            ik_config=PinocchioIKConfig(
+                position_only=not self.config.fixed_orientation_xyzw
+            ),
             gripper_offset_xyz=self.config.gripper_offset_xyz,
         )
         # FAIL CLOSED: every downstream index (warm-start pos[22:29], q_sol, the
@@ -535,9 +551,19 @@ class IkReachBridge(Module):
             )
         if not check_joint_delta(q_sol, q_right, self.config.max_joint_delta_deg):
             wi, wd = get_worst_joint_delta(q_sol, q_right)
+            # Print the whole vector, not just the worst joint. With a fixed orientation
+            # the rejection is usually the WRIST having to swing far -- i.e. a measure of
+            # how badly the hand (and the wrist camera bolted to it) was already aimed.
+            # The bare "joint X exceeds Y" line left no way to tell that from a genuine
+            # IK branch flip without re-deriving the solve offline.
             logger.warning(
                 f"IkReachBridge: rejecting — joint {self._arm.joint_names[wi]} delta "
-                f"{wd:.1f}° exceeds {self.config.max_joint_delta_deg}°."
+                f"{wd:.1f}° exceeds {self.config.max_joint_delta_deg}°.\n"
+                f"    q_meas ={np.round(q_right, 3)}\n"
+                f"    q_sol  ={np.round(q_sol, 3)}\n"
+                f"    Δ(deg) ={np.round(np.rad2deg(np.asarray(q_sol).flatten() - q_right), 1)}\n"
+                f"    fixed_orientation={self.config.fixed_orientation_xyzw or 'OFF (hold current)'}"
+                f" -- raise OKRA_MAX_JOINT_DELTA_DEG to allow this move."
             )
             return
         if not self._arm.clamp_ok(q_sol):

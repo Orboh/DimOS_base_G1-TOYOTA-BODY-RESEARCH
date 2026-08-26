@@ -92,6 +92,11 @@ _CONFIRM_MIN_GAP_S = float(os.getenv("OKRA_CONFIRM_MIN_GAP_S", "0.35"))
 _CONFIRM_WINDOW_S = float(os.getenv("OKRA_CONFIRM_WINDOW_S", "3.5"))
 _FIXED_ORI_RAW = os.getenv("OKRA_FIXED_ORI_XYZW", "").strip()
 _FIXED_ORI = [float(v) for v in _FIXED_ORI_RAW.split(",")] if _FIXED_ORI_RAW else []
+# One-shot sanity gate on the reach. 90 deg is right for a position-only reach, where the
+# wrist barely moves. Pinning OKRA_FIXED_ORI_XYZW makes the reach 6-DOF, and if the hand
+# starts out badly aimed the wrist legitimately has to swing >90 deg to obey -- raise this
+# deliberately for that first re-aiming move, with the e-stop in hand.
+_MAX_JOINT_DELTA_DEG = float(os.getenv("OKRA_MAX_JOINT_DELTA_DEG", "90"))
 
 # Tool-tip offset from the wrist [m], WRIST frame. IkReach drives this onto the click;
 # UmiDiffusionBridge uses it as the FK/IK EE frame. Step 6 aligns the diffusion one to
@@ -115,6 +120,15 @@ _UMI_PREDICT_TIMEOUT_MS = int(os.getenv("UMI_PREDICT_TIMEOUT_MS", "300"))
 # v1 fallback: position-only IK (orientation held) = safest first bring-up. Set
 # UMI_POSITION_ONLY=0 for full 6-DOF (follow the policy's commanded orientation).
 _UMI_POSITION_ONLY = os.getenv("UMI_POSITION_ONLY", "1").strip() == "1"
+# EE frame handed to the policy. The UMI/roboharvest TCP frame is the GoPro OPTICAL
+# frame (+x right, +y down, +z forward); the G1 gripper_tip frame is torso-aligned
+# (+x forward, +y left, +z up). Sending gripper_tip unconverted turns the policy's
+# "approach" (+z) into "straight up" (+z) -- the 2026-08-26 failure. UMI_EE_FRAME=tip
+# reproduces that old behaviour for an A/B; "camera" is correct.
+_UMI_EE_FRAME = os.getenv("UMI_EE_FRAME", "camera").strip().lower()
+# UMI TCP point in gripper_tip coordinates [m]. Cancels exactly while position-only, so
+# it only needs measuring before the 6-DOF mode is enabled.
+_UMI_TIP_TO_TCP = [float(v) for v in os.getenv("UMI_TIP_TO_TCP_XYZ", "0,0,0").split(",")]
 # Convergence -> adjust_done. Observed commanded steps were 3.2-4.3 mm on hw 2026-07-30,
 # i.e. right at the 4 mm default, so keep these reachable without an edit-rebuild cycle.
 _UMI_CONVERGE_EPS_M = float(os.getenv("UMI_CONVERGE_EPS_M", "0.004"))
@@ -177,6 +191,7 @@ if _LIVE:
         "unitree_g1_okra_ik_diffusion LAUNCHING **LIVE (arm only)** -- arm WILL move via "
         f"rt/arm_sdk on NIC {_NIC!r} at <= {_ARM_VEL_LIMIT} rad/s. IK reach -> standoff "
         f"{_STANDOFF_M} m -> UMI diffusion EE adjust ({'pos-only' if _UMI_POSITION_ONLY else '6-DOF'}, "
+        f"ee_frame={_UMI_EE_FRAME}, "
         f"server {_UMI_SERVER}). Gripper is your SEPARATE program (subscribe /g1/adjust_done). "
         "Keep an e-stop in hand."
     )
@@ -222,6 +237,7 @@ _MODULES = [
         confirm_min_gap_s=_CONFIRM_MIN_GAP_S,
         confirm_window_s=_CONFIRM_WINDOW_S,
         fixed_orientation_xyzw=_FIXED_ORI,
+        max_joint_delta_deg=_MAX_JOINT_DELTA_DEG,
         gripper_offset_xyz=_TIP_OFFSET,
         camera_mount_xyzrpy=_ZED_MOUNT,
         click_in_camera_body_frame=True,
@@ -251,6 +267,8 @@ _MODULES = [
         n_exec_per_infer=_UMI_N_EXEC,
         predict_timeout_ms=_UMI_PREDICT_TIMEOUT_MS,
         position_only=_UMI_POSITION_ONLY,
+        ee_frame=_UMI_EE_FRAME,
+        tip_to_tcp_xyz=_UMI_TIP_TO_TCP,
         gripper_offset_xyz=_UMI_TIP_OFFSET,
         converge_pos_eps_m=_UMI_CONVERGE_EPS_M,
         converge_hold_ticks=_UMI_CONVERGE_HOLD_TICKS,

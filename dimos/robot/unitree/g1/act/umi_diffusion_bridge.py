@@ -175,6 +175,36 @@ class _PolicyClient:
         self._reset_socket()
 
 
+# ---------------------------------------------------------------------------- EE frame
+# Rotation taking a vector from the UMI/roboharvest TCP frame into the G1 `gripper_tip`
+# frame. The policy's action translation is expressed in ITS OWN EE frame, so the two
+# conventions must be reconciled or every commanded displacement comes out rotated 90°.
+#
+#   roboharvest scripts_data_processing/06_generate_dataset_plan.py:106
+#       pose_cam_tcp = [0, cam_to_center_height, cam_to_tip_offset, 0, 0, 0]
+#   The rotation is ZERO, i.e. the TCP frame IS the GoPro optical frame (OpenCV
+#   convention): +x right, +y DOWN, +z FORWARD (the approach direction). The 0.086 m
+#   "camera above gripper centre" sits on +y and the 0.2196 m "camera to fingertip" on
+#   +z, which only holds with y-down / z-forward.
+#
+#   G1 `gripper_tip` (right_arm_model.fk_tip): at q=0 the frame coincides exactly with
+#   torso -- +x FORWARD (approach), +y left, +z UP. Verified with pinocchio.
+#
+# So UMI +z ("go forward, toward the fruit") == G1 +x. Feeding the pose through
+# unconverted made that approach command execute as G1 +z == STRAIGHT UP: on 2026-08-26
+# every inference of the run returned a chunk whose EE-frame direction was
+# [~0.03, ~-0.10, +0.99] no matter what the camera saw.
+#
+# Columns = the UMI axes written in gripper_tip coordinates:
+#   UMI +x (right) -> G1 -y    UMI +y (down) -> G1 -z    UMI +z (fwd) -> G1 +x
+_R_TIP_TO_UMI = np.array(
+    [[0.0, 0.0, 1.0],
+     [-1.0, 0.0, 0.0],
+     [0.0, -1.0, 0.0]],
+    dtype=np.float64,
+)
+
+
 class UmiDiffusionBridgeConfig(ModuleConfig):
     # ---- policy server (co-located, umi conda env) ----
     server_addr: str = "tcp://127.0.0.1:5599"
@@ -201,6 +231,18 @@ class UmiDiffusionBridgeConfig(ModuleConfig):
     # v1 fallback: solve POSITION-only and let orientation float (safest; avoids 6-DOF
     # non-convergence). v2: False = full 6-DOF (follow the policy's commanded orientation).
     position_only: bool = False
+
+    # ---- EE frame handed to / received from the policy (see _R_TIP_TO_UMI) ----
+    # "camera": send the UMI TCP frame (GoPro optical axes) and convert the returned
+    #           waypoints back to gripper_tip. This is the CORRECT setting.
+    # "tip":    send the raw G1 gripper_tip frame (pre-2026-08-26 behaviour). Kept only
+    #           so the two can be A/B'd on hardware; it makes "approach" come out as "up".
+    ee_frame: str = "camera"
+    # Position of the UMI TCP point in gripper_tip coordinates [m]. Zero means the G1
+    # hand tip and the point UMI tracked during data collection are the same physical
+    # point (RUN.md Step 6). It cancels exactly while position_only=True, so leave it at
+    # zero until the 6-DOF mode is used.
+    tip_to_tcp_xyz: list[float] = [0.0, 0.0, 0.0]
 
     # ---- safety gates (mirror IkReachBridge) ----
     max_joint_delta_deg: float = 20.0  # per-cycle cap (tighter than IkReach's one-shot 90°)
@@ -271,6 +313,14 @@ class UmiDiffusionBridge(Module):
                 f"reduced right-arm order {self._arm.joint_names} != canonical; refusing "
                 "to construct (index mapping would be silently wrong)."
             )
+        # gripper_tip -> UMI TCP. "tip" reproduces the pre-fix (wrong) behaviour.
+        frame = str(self.config.ee_frame).strip().lower()
+        if frame not in ("camera", "tip"):
+            raise ValueError(f"ee_frame must be 'camera' or 'tip', got {self.config.ee_frame!r}")
+        self._T_tip_umi = pinocchio.SE3(
+            _R_TIP_TO_UMI if frame == "camera" else np.eye(3),
+            np.asarray(self.config.tip_to_tcp_xyz, dtype=np.float64),
+        )
         self._lock = threading.Lock()
         self._latest_state: JointState | None = None
         self._state_recv_t: float = 0.0
@@ -296,10 +346,12 @@ class UmiDiffusionBridge(Module):
         c = self.config
         logger.warning(
             "UmiDiffusionBridge started: server=%s control=%.1fHz n_exec=%d position_only=%s "
+            "ee_frame=%s tip_to_tcp=%s "
             "log_only=%s tip_offset=%s converge=%.4fm x %d ticks max_duration=%.1fs "
             "log_every_n=%d log_joints=%s log_chunk_max=%d trace=%s "
             "(gripper is the USER's separate program; we fire adjust_done on convergence).",
-            c.server_addr, c.control_hz, c.n_exec_per_infer, c.position_only, c.log_only,
+            c.server_addr, c.control_hz, c.n_exec_per_infer, c.position_only,
+            c.ee_frame, c.tip_to_tcp_xyz, c.log_only,
             c.gripper_offset_xyz, c.converge_pos_eps_m, c.converge_hold_ticks, c.max_duration_s,
             c.log_every_n, c.log_joints, c.log_chunk_max, self._trace_path or "OFF",
         )
@@ -396,7 +448,28 @@ class UmiDiffusionBridge(Module):
             self._arm.torso_in_root.actInv(np.asarray(p_root, dtype=np.float64)), dtype=np.float64
         )
 
-    def _fmt_chunk(self, chunk: list[list[float]], tip_torso: np.ndarray) -> str:
+    def _umi_wp_to_tip(self, wp: Any, oMtip: Any) -> tuple[np.ndarray, np.ndarray]:
+        """One policy waypoint (UMI TCP frame, ROOT) -> gripper_tip pose in ROOT.
+
+        Returns (position, axis-angle). With ``position_only`` the wrist orientation is
+        held, so the rotation paired with the commanded point is the MEASURED one --
+        using the policy's commanded rotation here would leak it into the position
+        through the gripper_tip <- TCP lever arm.
+        """
+        p_umi = np.asarray(wp[:3], dtype=np.float64)
+        aa_umi = np.asarray(wp[3:6], dtype=np.float64)
+        rot_umi = (
+            oMtip.rotation @ self._T_tip_umi.rotation
+            if self.config.position_only
+            else pinocchio.exp3(aa_umi)
+        )
+        oMcmd = pinocchio.SE3(rot_umi, p_umi) * self._T_tip_umi.inverse()
+        return (
+            np.asarray(oMcmd.translation, dtype=np.float64),
+            np.asarray(pinocchio.log3(oMcmd.rotation), dtype=np.float64),
+        )
+
+    def _fmt_chunk(self, chunk: list[list[float]], tip_torso: np.ndarray, oMtip: Any) -> str:
         """Chunk as per-waypoint displacement from the measured tip (torso frame, mm)."""
         n = len(chunk)
         if not n or self.config.log_chunk_max == 0:
@@ -404,7 +477,8 @@ class UmiDiffusionBridge(Module):
         n_show = n if self.config.log_chunk_max < 0 else min(self.config.log_chunk_max, n)
 
         def _d(i: int) -> str:
-            d = (self._to_torso(chunk[i][:3]) - tip_torso) * 1000.0
+            p_tip, _ = self._umi_wp_to_tip(chunk[i], oMtip)
+            d = (self._to_torso(p_tip) - tip_torso) * 1000.0
             return f"#{i}[{d[0]:+.1f} {d[1]:+.1f} {d[2]:+.1f}]={float(np.linalg.norm(d)):.1f}"
 
         parts = [_d(i) for i in range(n_show)]
@@ -585,12 +659,17 @@ class UmiDiffusionBridge(Module):
 
                 # (re)infer when the buffered chunk is exhausted
                 if not pending:
-                    eef_aa = np.asarray(pinocchio.log3(oMtip.rotation), dtype=np.float64)
+                    # The policy speaks the UMI TCP frame (GoPro optical axes), not the
+                    # G1 gripper_tip frame. Send its pose so `action_pose_repr=relative`
+                    # rotates the returned displacement into the axes it was trained on.
+                    oMumi = oMtip * self._T_tip_umi
+                    eef_pos = np.asarray(oMumi.translation, dtype=np.float64)
+                    eef_aa = np.asarray(pinocchio.log3(oMumi.rotation), dtype=np.float64)
                     was_reset = first_req
                     rep = self._client.request({
                         "cmd": "predict",
                         "t": time.time(),
-                        "eef_pos": tip_meas.tolist(),
+                        "eef_pos": eef_pos.tolist(),
                         "eef_rot_aa": eef_aa.tolist(),
                         "reset": first_req,
                     })
@@ -629,17 +708,24 @@ class UmiDiffusionBridge(Module):
                     )
                     logger.info(
                         f"[{tag}] umi-infer[ep{ep} tick{tick}] "
-                        f"obs tip(torso){np.round(tip_meas_torso, 3)} aa{np.round(eef_aa, 3)}\n"
+                        f"obs tip(torso){np.round(tip_meas_torso, 3)} "
+                        f"aa_{self.config.ee_frame}{np.round(eef_aa, 3)}\n"
                         f"    q_meas={np.round(q_right, 3)}\n"
                         f"    server n={chunk_n} infer={infer_ms:.1f}ms exec={len(pending)} "
                         f"reset={was_reset}{cam_s}\n"
-                        f"    chunk Δtip(torso,mm) {self._fmt_chunk(actions, tip_meas_torso)}"
+                        f"    chunk Δtip(torso,mm) "
+                        f"{self._fmt_chunk(actions, tip_meas_torso, oMtip)}"
                     )
                     self._trace({
                         "kind": "infer", "t": time.time(), "ep": ep, "tick": tick,
                         "reset": bool(was_reset), "infer_ms": round(infer_ms, 2),
                         "n": chunk_n, "n_exec": len(pending),
-                        "eef_pos_root": self._j(tip_meas), "eef_aa_root": self._j(eef_aa),
+                        # eef_* = the gripper_tip pose; obs_* = what was actually SENT
+                        # to the policy (UMI TCP frame unless ee_frame="tip").
+                        "eef_pos_root": self._j(tip_meas),
+                        "eef_aa_root": self._j(np.asarray(pinocchio.log3(oMtip.rotation))),
+                        "obs_pos_root": self._j(eef_pos), "obs_aa_root": self._j(eef_aa),
+                        "ee_frame": self.config.ee_frame,
                         "eef_pos_torso": self._j(tip_meas_torso), "q_meas": self._j(q_right),
                         # every waypoint, untruncated — the reason the trace file exists
                         "chunk_root": [self._j(np.asarray(a, dtype=np.float64)) for a in actions],
@@ -648,8 +734,9 @@ class UmiDiffusionBridge(Module):
                 wp = pending.pop(0)
                 i_wp = wp_i
                 wp_i += 1
-                p_root = np.asarray(wp[:3], dtype=np.float64)
-                aa_root = np.asarray(wp[3:6], dtype=np.float64)
+                # The waypoint is a pose of the UMI TCP frame; bring it back to the
+                # gripper_tip frame the IK / gates / logs all speak.
+                p_root, aa_root = self._umi_wp_to_tip(wp, oMtip)
                 # No gripper column: this ckpt is action_include_gripper=False (and the
                 # training gripper_width channel was a dead constant anyway).
                 p_torso = self._to_torso(p_root)
