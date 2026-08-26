@@ -124,6 +124,31 @@ FOV_MARGIN = 0.75
 # used by the right-hand stand-in below.
 ARM_COLLISION_RADIUS_LIMB = 0.03
 ARM_COLLISION_RADIUS_WRIST = 0.026
+# The visual mesh was measured directly from the checked-in G1 asset bundle:
+# right_rubber_hand.STL spans (x, y, z) = (131.828, 66.558, 106.479) mm in the
+# hand-link frame.  The fixed hand-link origin is (41.5, -3, 0) mm forward of
+# right_wrist_yaw_link (see g1.urdf).  The old 26 mm wrist sphere therefore did
+# not cover the palm or fingers at all.
+_HAND_PALM_CENTER = (0.079, 0.009, 0.008)
+_HAND_PALM_HALF_EXTENTS = (0.031, 0.034, 0.050)
+_HAND_FINGER_CAPSULES = [
+    # (centre y/z in wrist frame): four forward capsules cover the finger fan.
+    (-0.016, -0.018),
+    (0.000, -0.003),
+    (0.017, 0.012),
+    (0.034, 0.020),
+]
+_HAND_FINGER_X_FROMTO = (0.100, 0.174)
+HAND_FINGER_RADIUS_M = 0.012
+
+# UMI uses the wrist-mounted GoPro HERO9 + Media Mod rig.  GoPro's specified
+# HERO9 body envelope is W x H x D = 71.0 x 55.0 x 33.6 mm.  In the G1 body
+# convention these map to y, z, x respectively.  We add 5 mm on every face to
+# keep Media Mod frame, cable clearance, and the unmeasured wrist bracket inside
+# the collision keepout; it is intentionally conservative until the rig is
+# physically measured.  WRIST_MOUNT is the same hardware transform used by the
+# simulated UMI camera below.
+UMI_GOPRO_BODY_FULL_EXTENTS = (0.0436, 0.0810, 0.0650)  # x, y, z [m]
 # (parent_body, child_body, radius): one capsule per segment, spanning parent origin to
 # child origin for this specific chain.
 _ARM_COLLISION_SEGMENTS = [
@@ -352,21 +377,70 @@ def _add_arm_collision(root: ET.Element, model: mujoco.MjModel) -> int:
             type="capsule",
             fromto=f"0 0 0 {offset[0]:.6f} {offset[1]:.6f} {offset[2]:.6f}",
             size=f"{radius:.4f}",
+            contype="2",
+            conaffinity="1",
             rgba="0.85 0.25 0.25 0.5",
         )
         added += 1
 
-    # right_rubber_hand collapses into right_wrist_yaw_link at compile time (fixed joint,
-    # see g1.urdf right_hand_palm_joint), so a collidable sphere at the wrist origin is the
-    # Hand stand-in at the wrist origin.
+    # Keep the wrist sphere for the compact wrist-yaw housing, then cover the hand mesh
+    # beyond it with a palm box and individual finger capsules.  These shapes are on the
+    # wrist body because right_hand_palm_joint is fixed (see g1.urdf).
     wrist_body = _find_body(root, "right_wrist_yaw_link")
     ET.SubElement(
         wrist_body,
         "geom",
-        name="armcoll_right_hand",
+        name="armcoll_right_wrist_housing",
         type="sphere",
         size=f"{ARM_COLLISION_RADIUS_WRIST:.4f}",
+        contype="2",
+        conaffinity="1",
         rgba="0.85 0.25 0.25 0.5",
+    )
+    added += 1
+
+    ET.SubElement(
+        wrist_body,
+        "geom",
+        name="armcoll_right_hand_palm",
+        type="box",
+        pos=" ".join(f"{v:.6f}" for v in _HAND_PALM_CENTER),
+        size=" ".join(f"{v:.6f}" for v in _HAND_PALM_HALF_EXTENTS),
+        contype="2",
+        conaffinity="1",
+        rgba="0.85 0.25 0.25 0.5",
+    )
+    added += 1
+    for i, (y, z) in enumerate(_HAND_FINGER_CAPSULES):
+        x0, x1 = _HAND_FINGER_X_FROMTO
+        ET.SubElement(
+            wrist_body,
+            "geom",
+            name=f"armcoll_right_hand_finger_{i + 1}",
+            type="capsule",
+            fromto=f"{x0:.6f} {y:.6f} {z:.6f} {x1:.6f} {y:.6f} {z:.6f}",
+            size=f"{HAND_FINGER_RADIUS_M:.4f}",
+            contype="2",
+            conaffinity="1",
+            rgba="0.85 0.25 0.25 0.5",
+        )
+        added += 1
+
+    # The UMI observation camera is a physical keepout, not merely a virtual camera.
+    # It remains a primitive collision envelope in this phase; its visual mesh is not
+    # known or validated for contact.
+    full_x, full_y, full_z = UMI_GOPRO_BODY_FULL_EXTENTS
+    ET.SubElement(
+        wrist_body,
+        "geom",
+        name="armcoll_right_umi_gopro",
+        type="box",
+        pos=" ".join(f"{v:.6f}" for v in WRIST_MOUNT[:3]),
+        euler=" ".join(f"{v:.6f}" for v in WRIST_MOUNT[3:]),
+        size=f"{full_x / 2:.6f} {full_y / 2:.6f} {full_z / 2:.6f}",
+        contype="2",
+        conaffinity="1",
+        rgba="0.10 0.10 0.10 0.8",
     )
     added += 1
     return added

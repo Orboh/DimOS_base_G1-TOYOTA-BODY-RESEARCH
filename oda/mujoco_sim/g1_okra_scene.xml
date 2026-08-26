@@ -206,16 +206,22 @@
                           <joint name="right_wrist_yaw_joint" pos="0 0 0" axis="0 0 1" range="-1.61443 1.61443" actuatorfrcrange="-5 5" />
                           <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.7 0.7 0.7 1" mesh="right_wrist_yaw_link" />
                           <geom pos="0.0415 -0.003 0" quat="1 0 0 0" type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.7 0.7 0.7 1" mesh="right_rubber_hand" />
-                          <geom name="armcoll_right_hand" type="sphere" size="0.0260" rgba="0.85 0.25 0.25 0.5" />
+                          <geom name="armcoll_right_wrist_housing" type="sphere" size="0.0260" contype="2" conaffinity="1" rgba="0.85 0.25 0.25 0.5" />
+                          <geom name="armcoll_right_hand_palm" type="box" pos="0.079000 0.009000 0.008000" size="0.031000 0.034000 0.050000" contype="2" conaffinity="1" rgba="0.85 0.25 0.25 0.5" />
+                          <geom name="armcoll_right_hand_finger_1" type="capsule" fromto="0.100000 -0.016000 -0.018000 0.174000 -0.016000 -0.018000" size="0.0120" contype="2" conaffinity="1" rgba="0.85 0.25 0.25 0.5" />
+                          <geom name="armcoll_right_hand_finger_2" type="capsule" fromto="0.100000 0.000000 -0.003000 0.174000 0.000000 -0.003000" size="0.0120" contype="2" conaffinity="1" rgba="0.85 0.25 0.25 0.5" />
+                          <geom name="armcoll_right_hand_finger_3" type="capsule" fromto="0.100000 0.017000 0.012000 0.174000 0.017000 0.012000" size="0.0120" contype="2" conaffinity="1" rgba="0.85 0.25 0.25 0.5" />
+                          <geom name="armcoll_right_hand_finger_4" type="capsule" fromto="0.100000 0.034000 0.020000 0.174000 0.034000 0.020000" size="0.0120" contype="2" conaffinity="1" rgba="0.85 0.25 0.25 0.5" />
+                          <geom name="armcoll_right_umi_gopro" type="box" pos="0.055000 -0.020000 0.045000" euler="0.000000 0.436000 0.000000" size="0.021800 0.040500 0.032500" contype="2" conaffinity="1" rgba="0.10 0.10 0.10 0.8" />
                           <camera name="wrist_cam" pos="0.055000 -0.020000 0.045000" quat="0.596304675 0.380027282 -0.380027282 -0.596304675" fovy="92.0000" />
                         </body>
-                        <geom name="armcoll_right_wrist_pitch_link_right_wrist_yaw_link" type="capsule" fromto="0 0 0 0.046000 0.000000 0.000000" size="0.0260" rgba="0.85 0.25 0.25 0.5" />
+                        <geom name="armcoll_right_wrist_pitch_link_right_wrist_yaw_link" type="capsule" fromto="0 0 0 0.046000 0.000000 0.000000" size="0.0260" contype="2" conaffinity="1" rgba="0.85 0.25 0.25 0.5" />
                       </body>
-                      <geom name="armcoll_right_wrist_roll_link_right_wrist_pitch_link" type="capsule" fromto="0 0 0 0.038000 0.000000 0.000000" size="0.0260" rgba="0.85 0.25 0.25 0.5" />
+                      <geom name="armcoll_right_wrist_roll_link_right_wrist_pitch_link" type="capsule" fromto="0 0 0 0.038000 0.000000 0.000000" size="0.0260" contype="2" conaffinity="1" rgba="0.85 0.25 0.25 0.5" />
                     </body>
-                    <geom name="armcoll_right_elbow_link_right_wrist_roll_link" type="capsule" fromto="0 0 0 0.100000 -0.001888 -0.010000" size="0.0300" rgba="0.85 0.25 0.25 0.5" />
+                    <geom name="armcoll_right_elbow_link_right_wrist_roll_link" type="capsule" fromto="0 0 0 0.100000 -0.001888 -0.010000" size="0.0300" contype="2" conaffinity="1" rgba="0.85 0.25 0.25 0.5" />
                   </body>
-                  <geom name="armcoll_right_shoulder_yaw_link_right_elbow_link" type="capsule" fromto="0 0 0 0.015783 0.000000 -0.080518" size="0.0300" rgba="0.85 0.25 0.25 0.5" />
+                  <geom name="armcoll_right_shoulder_yaw_link_right_elbow_link" type="capsule" fromto="0 0 0 0.015783 0.000000 -0.080518" size="0.0300" contype="2" conaffinity="1" rgba="0.85 0.25 0.25 0.5" />
                 </body>
               </body>
             </body>

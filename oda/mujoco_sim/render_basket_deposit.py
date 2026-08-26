@@ -44,7 +44,6 @@ from oda.mujoco_sim.test_basket_deposit import (
     ENTRY_TORSO,
     RETREAT_TORSO,
     SETTLE_SECONDS,
-    TRACK_TOL_M,
     _cargo_torso,
     _make_rig,
     _scene_with_free_cargo,
@@ -284,14 +283,14 @@ def render(
     rec.hold(rig.data, hold_frames // 2)
     _advance_recorded(rig, q_retreat, seconds=SETTLE_SECONDS, rec=rec, frame_every=frame_every)
     cargo_t = _cargo_torso(rig, cargo_body)
-    cargo_speed = float(np.linalg.norm(rig.data.qvel[cargo_qvel : cargo_qvel + 6]))
+    cargo_speed = float(np.linalg.norm(rig.data.qvel[cargo_qvel : cargo_qvel + 3]))
     rec.hold(rig.data, hold_frames)
     n_frames = rec.n_frames
     rec.close()
 
     inside = 0.090 < cargo_t[0] < 0.275 and abs(cargo_t[1]) < 0.040 and -0.165 < cargo_t[2] < -0.080
     if verbose:
-        print(f"[render] final cargo(torso)={np.round(cargo_t, 4).tolist()} speed={cargo_speed:.4f} m/s inside={inside}")
+        print(f"[render] final cargo(torso)={np.round(cargo_t, 4).tolist()} linear_speed={cargo_speed:.4f} m/s inside={inside}")
         print(f"[render] wrote {out_path} ({n_frames} frames, {n_frames / FPS:.1f} s)")
     return {
         "cargo_torso": cargo_t.tolist(),

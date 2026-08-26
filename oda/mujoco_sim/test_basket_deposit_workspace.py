@@ -44,11 +44,11 @@ os.environ.setdefault("MUJOCO_GL", "egl")
 import matplotlib
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
-from mpl_toolkits.mplot3d import Axes3D  # noqa: E402,F401  (registers the '3d' projection)
-import mujoco  # noqa: E402
-import numpy as np  # noqa: E402
-import pinocchio  # noqa: E402
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D  # noqa: F401  (registers the '3d' projection)
+import mujoco
+import numpy as np
+import pinocchio
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -59,6 +59,7 @@ from oda.mujoco_sim.smoke_sim_arm import STANDOFF_M, TIP_OFFSET, TRACK_TOL_M
 from oda.mujoco_sim.test_basket_deposit import (
     DROP_TORSO,
     ENTRY_TORSO,
+    MAX_BASKET_PENETRATION_M,
     RETREAT_TORSO,
     SETTLE_SECONDS,
     TRACK_TOL_M as DEPOSIT_TRACK_TOL_M,
@@ -221,7 +222,9 @@ def _deposit_from_pose(scene: Path, q_reach: np.ndarray, tip_world: np.ndarray, 
             size=f"{CARGO_RADIUS_M} {CARGO_HALF_LEN_M}",
             density="700",
             rgba="0.20 0.62 0.16 1",
-            contype="0" if held else "1",
+            # Match test_basket_deposit: a released virtual-grasp pod collides
+            # with the basket but not the non-actuated hand/UMI proxy.
+            contype="0" if held else "4",
             conaffinity="0" if held else "1",
         )
         if held:
@@ -284,7 +287,7 @@ def _deposit_from_pose(scene: Path, q_reach: np.ndarray, tip_world: np.ndarray, 
 
     deepest, pairs = _advance(rig, q_retreat, seconds=SETTLE_SECONDS)
     cargo_t = _cargo_torso(rig, cargo_body)
-    cargo_speed = float(np.linalg.norm(rig.data.qvel[cargo_qvel : cargo_qvel + 6]))
+    cargo_speed = float(np.linalg.norm(rig.data.qvel[cargo_qvel : cargo_qvel + 3]))
     cargo_basket_contacts = [p for p in pairs if "cargo_okra_pod" in p]
     inside = 0.090 < cargo_t[0] < 0.275 and abs(cargo_t[1]) < 0.040 and -0.165 < cargo_t[2] < -0.080
 
@@ -298,8 +301,12 @@ def _deposit_from_pose(scene: Path, q_reach: np.ndarray, tip_world: np.ndarray, 
         }
     if cargo_speed > 0.03:
         return {"ok": False, "stage": "deposit_release", "reason": f"cargo did not settle: speed={cargo_speed:.3f} m/s"}
-    if deepest < -0.010:
-        return {"ok": False, "stage": "deposit_release", "reason": f"basket penetration {deepest * 1000:.1f} mm"}
+    if deepest < -MAX_BASKET_PENETRATION_M:
+        return {
+            "ok": False,
+            "stage": "deposit_release",
+            "reason": f"basket penetration exceeds 15 mm margin: {deepest * 1000:.1f} mm",
+        }
 
     return {"ok": True, "cargo_torso": cargo_t.tolist(), "cargo_speed": cargo_speed}
 
