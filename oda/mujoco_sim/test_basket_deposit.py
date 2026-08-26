@@ -91,15 +91,15 @@ def _scene_with_free_cargo(scene: Path, *, held: bool) -> str:
         size=f"{CARGO_RADIUS_M} {CARGO_HALF_LEN_M}",
         density="700",
         rgba="0.20 0.62 0.16 1",
-        # MuJoCo builds collision pairs when it compiles the model.  The held
-        # and released phases consequently use two models: no pod collision
-        # while virtually clamped, then a freshly compiled collidable pod at
-        # the exact release pose.
-        # Arm/hand/UMI collision geoms use contype=2.  A released pod uses
-        # contype=4 so it still contacts the basket (contype=1) but not the
-        # virtual, non-actuated gripper that was holding it at this same pose.
-        contype="0" if held else "4",
-        conaffinity="0" if held else "1",
+        # The pod collides with the basket in *both* the held and released
+        # phases. Thus an approach that drags the fruit through a rim or wall
+        # is rejected instead of being hidden by the virtual grasp. It does
+        # not collide with the hand/UMI proxy: those use contype=2, whereas
+        # this pod uses contype=4 and the corresponding masks do not overlap.
+        # MuJoCo still needs a newly compiled released model because its
+        # free-body state replaces the weld at the exact release pose.
+        contype="4",
+        conaffinity="1",
     )
     if held:
         equality = root.find("equality")
@@ -207,7 +207,8 @@ def main() -> int:
     for label, target, solution in (("entry", ENTRY_TORSO, q_entry), ("drop", DROP_TORSO, q_drop)):
         deepest, pairs, torso_pairs = _advance(rig, solution, seconds=DEPOSIT_MOVE_SECONDS)
         tip_err = float(np.linalg.norm(rig.tip_torso(np.asarray(TIP_OFFSET)) - target))
-        arm_basket = [p for p in pairs if "cargo_okra" not in p]
+        arm_basket = [p for p in pairs if not any("cargo_okra" in geom for geom in p)]
+        carried_pod_basket = [p for p in pairs if "cargo_okra_pod" in p]
         print(
             f"    {label:7s} tip_err={tip_err * 1000:.2f} mm "
             f"basket_depth={deepest * 1000:.2f} mm"
@@ -216,6 +217,8 @@ def main() -> int:
             failures.append(f"{label}: tip error {tip_err * 1000:.1f} mm")
         if arm_basket:
             failures.append(f"{label}: arm touched basket ({arm_basket[0]})")
+        if carried_pod_basket:
+            failures.append(f"{label}: carried okra touched basket ({carried_pod_basket[0]})")
         if torso_pairs:
             failures.append(f"{label}: arm/UMI touched torso ({torso_pairs[0]})")
 

@@ -242,10 +242,11 @@ def _deposit_from_pose(scene: Path, q_reach: np.ndarray, tip_world: np.ndarray, 
             size=f"{CARGO_RADIUS_M} {CARGO_HALF_LEN_M}",
             density="700",
             rgba="0.20 0.62 0.16 1",
-            # Match test_basket_deposit: a released virtual-grasp pod collides
-            # with the basket but not the non-actuated hand/UMI proxy.
-            contype="0" if held else "4",
-            conaffinity="0" if held else "1",
+            # Match test_basket_deposit: the pod contacts the basket even while
+            # virtually grasped, so the transfer cannot pass through the rim.
+            # Its category is disjoint from the non-actuated hand/UMI proxy.
+            contype="4",
+            conaffinity="1",
         )
         if held:
             equality = root.find("equality")
@@ -281,11 +282,14 @@ def _deposit_from_pose(scene: Path, q_reach: np.ndarray, tip_world: np.ndarray, 
     for label, target, solution in (("entry", ENTRY_TORSO, q_entry), ("drop", DROP_TORSO, q_drop)):
         deepest, pairs, torso_pairs = _advance(rig, solution, seconds=DEPOSIT_MOVE_SECONDS)
         tip_err = float(np.linalg.norm(rig.tip_torso(np.asarray(TIP_OFFSET)) - target))
-        arm_basket = [p for p in pairs if "cargo_okra" not in p]
+        arm_basket = [p for p in pairs if not any("cargo_okra" in geom for geom in p)]
+        carried_pod_basket = [p for p in pairs if "cargo_okra_pod" in p]
         if tip_err > DEPOSIT_TRACK_TOL_M:
             failures.append(f"{label}: tip error {tip_err * 1000:.1f} mm")
         if arm_basket:
             failures.append(f"{label}: arm touched basket ({arm_basket[0]})")
+        if carried_pod_basket:
+            failures.append(f"{label}: carried okra touched basket ({carried_pod_basket[0]})")
         if torso_pairs:
             failures.append(f"{label}: arm/UMI touched torso ({torso_pairs[0]})")
     if failures:

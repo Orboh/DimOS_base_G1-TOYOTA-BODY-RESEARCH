@@ -176,7 +176,13 @@ class VideoRecorder:
 
 
 def _advance_recorded(
-    rig: SimRig, q_goal: np.ndarray, seconds: float, rec: VideoRecorder, frame_every: int
+    rig: SimRig,
+    q_goal: np.ndarray,
+    seconds: float,
+    rec: VideoRecorder,
+    frame_every: int,
+    *,
+    allow_cargo_basket_contact: bool = False,
 ) -> None:
     """Same ramp as ``test_basket_deposit._advance``, but grabs a frame every N steps."""
     q_start = rig.q_right()
@@ -190,6 +196,12 @@ def _advance_recorded(
             b = mujoco.mj_id2name(rig.model, mujoco.mjtObj.mjOBJ_GEOM, contact.geom2) or "<unnamed>"
             if "torso_collision_core" in (a, b):
                 raise RuntimeError(f"unsafe arm/UMI-to-torso contact while rendering: {a} vs {b}")
+            if not allow_cargo_basket_contact and "cargo_okra_pod" in (a, b) and (
+                "basket_" in a or "basket_" in b
+            ):
+                raise RuntimeError(
+                    f"unsafe carried-okra-to-basket contact while rendering: {a} vs {b}"
+                )
         if i % frame_every == 0:
             rec.grab(rig.data)
 
@@ -292,7 +304,14 @@ def render(
 
     rec.rebind(rig.model)
     rec.hold(rig.data, hold_frames // 2)
-    _advance_recorded(rig, q_retreat, seconds=SETTLE_SECONDS, rec=rec, frame_every=frame_every)
+    _advance_recorded(
+        rig,
+        q_retreat,
+        seconds=SETTLE_SECONDS,
+        rec=rec,
+        frame_every=frame_every,
+        allow_cargo_basket_contact=True,
+    )
     cargo_t = _cargo_torso(rig, cargo_body)
     cargo_speed = float(np.linalg.norm(rig.data.qvel[cargo_qvel : cargo_qvel + 3]))
     rec.hold(rig.data, hold_frames)

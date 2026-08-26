@@ -102,13 +102,18 @@ WRIST_RES = (320, 240)
 # Spectator camera so the run is watchable in rerun without a MuJoCo GL window.
 SPECTATOR_RES = (640, 480)
 
-# Okra target, in torso_link frame. Chosen to satisfy three constraints simultaneously:
+# Okra target, in torso_link frame. The default is the representative fruit position
+# observed in Yokote's 2026-08-26 deployment photographs: in front of the robot and on
+# the right-arm side of the body, at approximately mid-torso height. It is deliberately
+# the centre of the validated front-side harvesting envelope rather than a measurement
+# claim about any one fruit; deployment calibration must replace it with perception.
+# It also satisfies three simulation constraints simultaneously:
 #   - inside IkReachBridge's workspace box (ws_x[0.05,0.65] ws_y[-0.75,0.20] ws_z[-0.35,0.85])
 #   - >= 0.35 m from the chest camera (the ZED Mini's minimum measurement distance)
 #   - reachable by the right arm (neutral tip sits at torso [0.245,-0.152,0.051])
 SIM_OKRA_ENV = "SIM_OKRA_IN_TORSO"
 OKRA_IN_TORSO = [
-    float(v) for v in os.getenv(SIM_OKRA_ENV, "0.45,-0.20,0.10").split(",")
+    float(v) for v in os.getenv(SIM_OKRA_ENV, "0.45,-0.20,0.15").split(",")
 ]
 OKRA_RADIUS = 0.013
 OKRA_HALF_LEN = 0.045
@@ -670,6 +675,9 @@ def _add_scene_furniture(root: ET.Element, floor_z: float, okra_world: np.ndarra
         type="capsule",
         size=f"{OKRA_RADIUS:.4f} {OKRA_HALF_LEN:.4f}",
         rgba="0.20 0.62 0.16 1",
+        # This mocap target is only the unpicked visual/reference fruit. Its collision
+        # is intentionally disabled: collision of the *carried* fruit is tested through
+        # ``cargo_okra_pod`` in test_basket_deposit.py, where its dynamic state exists.
         contype="0",
         conaffinity="0",
     )

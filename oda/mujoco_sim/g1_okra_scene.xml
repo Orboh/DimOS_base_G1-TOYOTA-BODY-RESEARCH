@@ -235,8 +235,8 @@
     <geom name="floor" type="plane" pos="0 0 0.000000" size="3 3 0.05" material="grid_mat" />
     <light pos="0.8 0.4 2.4" dir="-0.3 -0.15 -1" diffuse="0.8 0.8 0.8" />
     <light pos="-0.8 -0.8 2.0" dir="0.3 0.3 -1" diffuse="0.35 0.35 0.35" />
-    <camera name="spectator" pos="1.2960 -0.9500 1.3509" xyaxes="0.66 0.75 0 -0.28 0.25 0.93" fovy="45" />
-    <body name="okra" pos="0.446037 -0.200000 0.930864" mocap="true">
+    <camera name="spectator" pos="1.2960 -0.9500 1.4009" xyaxes="0.66 0.75 0 -0.28 0.25 0.93" fovy="45" />
+    <body name="okra" pos="0.446037 -0.200000 0.980864" mocap="true">
       <geom name="okra_pod" type="capsule" size="0.0130 0.0450" rgba="0.20 0.62 0.16 1" contype="0" conaffinity="0" />
       <geom name="okra_stem" type="capsule" fromto="0 0 0.0450 0 0 0.2650" size="0.005" rgba="0.30 0.45 0.18 1" contype="0" conaffinity="0" />
     </body>
