@@ -96,6 +96,7 @@ all_blueprints = {
     "unitree-g1-left-elbow-nudge": "dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_left_elbow_nudge:unitree_g1_left_elbow_nudge",
     "unitree-g1-left-shoulder-gravity-nudge": "dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_left_shoulder_gravity_nudge:unitree_g1_left_shoulder_gravity_nudge",
     "unitree-g1-left-shoulder-gravity-probe": "dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_left_shoulder_gravity_probe:unitree_g1_left_shoulder_gravity_probe",
+    "unitree-g1-left-shoulder-gravity25-nudge": "dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_left_shoulder_gravity25_nudge:unitree_g1_left_shoulder_gravity25_nudge",
     "unitree-g1-left-shoulder-pitch-kp160-nudge": "dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_left_shoulder_pitch_kp160_nudge:unitree_g1_left_shoulder_pitch_kp160_nudge",
     "unitree-g1-left-shoulder-pitch-nudge": "dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_left_shoulder_pitch_nudge:unitree_g1_left_shoulder_pitch_nudge",
     "unitree-g1-mid360-fastlio": "dimos.robot.unitree.g1.blueprints.navigation.unitree_g1_mid360_fastlio:unitree_g1_mid360_fastlio",
