@@ -47,6 +47,7 @@ class G1SingleJointNudgeConfig(ModuleConfig):
 
     # Index in the 14-joint arm target order: left arm 0..6, right arm 7..13.
     joint_index: int = 4  # global joint 19: LeftWristRoll
+    joint_name: str = "LeftWristRoll"
     delta_rad: float = 0.020
     rate_rad_s: float = 0.010
     settle_before_move_s: float = 6.5
@@ -112,8 +113,9 @@ class G1SingleJointNudge(Module):
             self._baseline = measured.copy()
             self._move_t = now
             logger.warning(
-                "G1SingleJointNudge: BEGIN left-wrist-roll nudge from %.4f rad; "
+                "G1SingleJointNudge: BEGIN %s nudge from %.4f rad; "
                 "physical STOP remains the primary abort.",
+                self.config.joint_name,
                 self._baseline[self.config.joint_index],
             )
 

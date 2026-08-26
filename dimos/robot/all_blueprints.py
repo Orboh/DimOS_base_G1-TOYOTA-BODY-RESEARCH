@@ -93,6 +93,7 @@ all_blueprints = {
     "unitree-g1-ik-camera": "dimos.robot.unitree.g1.blueprints.perceptive.unitree_g1_ik_camera:unitree_g1_ik_camera",
     "unitree-g1-ik-reach": "dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_ik_reach:unitree_g1_ik_reach",
     "unitree-g1-joystick": "dimos.robot.unitree.g1.blueprints.basic.unitree_g1_joystick:unitree_g1_joystick",
+    "unitree-g1-left-elbow-nudge": "dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_left_elbow_nudge:unitree_g1_left_elbow_nudge",
     "unitree-g1-mid360-fastlio": "dimos.robot.unitree.g1.blueprints.navigation.unitree_g1_mid360_fastlio:unitree_g1_mid360_fastlio",
     "unitree-g1-nav-dual-cam": "dimos.robot.unitree.g1.blueprints.navigation.unitree_g1_nav_dual_cam:unitree_g1_nav_dual_cam",
     "unitree-g1-nav-laptop": "dimos.robot.unitree.g1.blueprints.navigation.unitree_g1_nav_laptop:unitree_g1_nav_laptop",
