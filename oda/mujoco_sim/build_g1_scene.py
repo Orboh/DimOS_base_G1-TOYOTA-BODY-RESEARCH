@@ -15,9 +15,11 @@ policy, lidar rings, office mesh) which is irrelevant to an arm-only reach test.
 
 Three transforms this file has to get right, because everything downstream depends on them:
 
-1. **Mesh strip.** The repo ships no STLs, so every ``<visual>``/``<collision>`` that
-   references a mesh is dropped. Link *inertials* are explicit in the URDF and are kept, so
-   the dynamics stay right. Visual bones are then synthesized (see ``_add_bones``).
+1. **Visual meshes, simplified collision.** The repository does not version the G1 STL
+   assets, but this workstation has a complete Unitree G1 mesh bundle. At build time the
+   visual mesh paths are resolved from that bundle (or ``G1_VISUAL_MESH_DIR``); mesh
+   *collisions* are still stripped. Link inertials are explicit in the URDF and are kept,
+   while the reviewed primitive right-arm/basket collision geometry remains authoritative.
 2. **Base weld.** The URDF root is a floating joint. This rig tests an arm on a standing
    robot, so the free joint is removed and the pelvis is welded at standing height. No
    locomotion policy, no falling over, no confounding base drift in the FK comparison.
@@ -44,6 +46,14 @@ import numpy as np
 _REPO = Path(__file__).resolve().parents[2]
 _URDF = _REPO / "dimos" / "robot" / "unitree" / "g1" / "g1.urdf"
 _OUT = Path(__file__).resolve().parent / "g1_okra_scene.xml"
+_MESH_DIR_ENV = "G1_VISUAL_MESH_DIR"
+# These are deliberately outside this repository: STL assets are large third-party files
+# and are not checked in here. Set G1_VISUAL_MESH_DIR on a different machine. The first
+# entry is the verified bundle on this workstation.
+_MESH_DIR_CANDIDATES = (
+    Path("/home/techshare/unitree_lerobot/unitree_lerobot/eval_robot/assets/g1"),
+    Path("/home/techshare/drl_kit/mujoco_ws/ts_mujoco-main/unitree_robots/g1"),
+)
 
 # ---------------------------------------------------------------------------
 # Home posture. 29-DOF canonical order (== make_humanoid_joints("g1")).
@@ -106,17 +116,16 @@ OKRA_HALF_LEN = 0.045
 FOV_MARGIN = 0.75
 
 # Right-arm collision capsules (20260825 review decision B: minimum viable set -- only the
-# parts that can plausibly reach the basket get real collision; left arm and legs stay
-# visual-only bones). No STL exists for these links to measure a radius from, so these
-# reuse radii already present and reviewed elsewhere in this file/URDF rather than
-# invented numbers: 0.03 m is the shoulder collision cylinder radius already in g1.urdf
+# parts that can plausibly reach the basket get real collision; left arm and legs keep the
+# visual-only STL geometry). This first visual-mesh stage intentionally keeps collision
+# simple, using radii already present and reviewed elsewhere in this file/URDF rather than
+# inventing new measurements: 0.03 m is the shoulder collision cylinder radius in g1.urdf
 # (right_shoulder_roll_link's <collision>), 0.026 m is the wrist/hand "tip" sphere radius
-# _add_bones() already draws for every leaf link.
+# used by the right-hand stand-in below.
 ARM_COLLISION_RADIUS_LIMB = 0.03
 ARM_COLLISION_RADIUS_WRIST = 0.026
 # (parent_body, child_body, radius): one capsule per segment, spanning parent origin to
-# child origin -- same geometry _add_bones() already draws as a visual-only bone, just
-# with collision turned on for this specific chain.
+# child origin for this specific chain.
 _ARM_COLLISION_SEGMENTS = [
     ("right_shoulder_yaw_link", "right_elbow_link", ARM_COLLISION_RADIUS_LIMB),        # upper arm
     ("right_elbow_link", "right_wrist_roll_link", ARM_COLLISION_RADIUS_LIMB),          # forearm
@@ -145,24 +154,79 @@ _ARM_COLLISION_EXCLUDE_PAIRS = [
 # instead make the *simulated* box bigger than the real cardboard box by this margin on
 # every face. A too-big keepout volume in sim is a false positive the arm just avoids a
 # little early; a too-small one is a real collision the sim never sees. Only the 5 named
-# basket collision plates (basket_back/top/bottom/left/right, see g1.urdf) are padded --
+# basket collision plates (basket_back/front/bottom/left/right, see g1.urdf) are padded --
 # the visual plates keep the true dimensions so renders still look like the actual box.
 BASKET_COLLISION_MARGIN_M = 0.015
 _BASKET_COLLISION_NAMES = [
-    "basket_back", "basket_top", "basket_bottom", "basket_left", "basket_right",
+    "basket_back", "basket_front", "basket_bottom", "basket_left", "basket_right",
 ]
 
 
-def _strip_meshes(root: ET.Element) -> int:
-    """Drop every visual/collision that references a mesh file. Returns the drop count."""
-    dropped = 0
+def _resolve_visual_mesh_dir(root: ET.Element, requested: Path | None = None) -> Path:
+    """Return a directory containing every mesh named by the URDF's visual elements.
+
+    The builder writes absolute paths into its generated, ignored MJCF so a caller does
+    not need to copy or symlink third-party STL files into this development repository.
+    A missing bundle is an actionable build error, never a silent fallback to a stick
+    figure: visual review must show the physical G1 form factor.
+    """
+    mesh_names = {
+        mesh.get("filename", "")
+        for visual in root.findall(".//visual")
+        for mesh in visual.findall(".//mesh")
+    }
+    candidates = ([requested] if requested is not None else [])
+    env_dir = os.getenv(_MESH_DIR_ENV)
+    if env_dir:
+        candidates.append(Path(env_dir))
+    candidates.extend(_MESH_DIR_CANDIDATES)
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        candidate = candidate.expanduser().resolve()
+        if all((candidate / mesh).is_file() for mesh in mesh_names):
+            return candidate
+    example = sorted(mesh_names)[0] if mesh_names else "meshes/<link>.STL"
+    searched = ", ".join(str(path) for path in candidates if path is not None)
+    raise RuntimeError(
+        "G1 visual mesh bundle is incomplete or unavailable. "
+        f"Set {_MESH_DIR_ENV} to the directory containing {example}. Searched: {searched}"
+    )
+
+
+def _prepare_mesh_geometry(root: ET.Element, mesh_dir: Path) -> tuple[int, int]:
+    """Keep visual STLs (rewritten as absolute paths) and drop mesh collision geoms.
+
+    Returns ``(visual_meshes_kept, collision_meshes_dropped)``. This intentionally
+    separates appearance from contact: Phase 4 keeps its reviewed primitive collision
+    model until a measured mesh-collision migration is explicitly validated.
+    """
+    compiler = root.find("./mujoco/compiler")
+    if compiler is None:
+        raise RuntimeError("G1 URDF has no <mujoco><compiler> element for mesh resolution")
+    # MuJoCo's URDF importer gives <compiler meshdir> precedence over an absolute
+    # ``filename`` attribute. Point it at the actual STL directory and retain only the
+    # filename, rather than relying on that importer-specific precedence rule.
+    compiler.set("meshdir", str((mesh_dir / "meshes").resolve()))
+
+    visual_kept = 0
+    collision_dropped = 0
     for link in root.findall("link"):
-        for tag in ("visual", "collision"):
-            for el in list(link.findall(tag)):
-                if el.find(".//mesh") is not None:
-                    link.remove(el)
-                    dropped += 1
-    return dropped
+        for visual in link.findall("visual"):
+            for mesh in visual.findall(".//mesh"):
+                filename = mesh.get("filename")
+                if not filename:
+                    raise RuntimeError("visual mesh without a filename")
+                path = (mesh_dir / filename).resolve()
+                if not path.is_file():
+                    raise RuntimeError(f"visual mesh missing: {path}")
+                mesh.set("filename", Path(filename).name)
+                visual_kept += 1
+        for collision in list(link.findall("collision")):
+            if collision.find(".//mesh") is not None:
+                link.remove(collision)
+                collision_dropped += 1
+    return visual_kept, collision_dropped
 
 
 def _urdf_to_mjcf(urdf_xml: str) -> str:
@@ -265,75 +329,12 @@ def _add_camera(
     )
 
 
-def _add_bones(root: ET.Element, model: mujoco.MjModel) -> int:
-    """Add one visual capsule per link, so the stripped model is still watchable.
-
-    Each body gets a capsule from its own origin to each child body's origin ("bones"),
-    which traces the real kinematic chain. Leaf bodies get a small sphere. These are
-    ``contype=0 conaffinity=0`` -- visual only, they must not change the physics that the
-    IK/diffusion loop is being measured against.
-    """
-    children: dict[str, list[str]] = {}
-    for bid in range(1, model.nbody):
-        name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, bid)
-        parent = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, model.body_parentid[bid])
-        if name and parent:
-            children.setdefault(parent, []).append(name)
-
-    added = 0
-    for body in root.iter("body"):
-        name = body.get("name")
-        if not name:
-            continue
-        bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, name)
-        if bid < 0:
-            continue
-        kids = children.get(name, [])
-        drawn = False
-        for kid in kids:
-            kid_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, kid)
-            offset = np.asarray(model.body_pos[kid_id], dtype=float)
-            if float(np.linalg.norm(offset)) < 0.02:
-                continue  # too short to be a useful bone
-            ET.SubElement(
-                body,
-                "geom",
-                name=f"bone_{name}_{kid}",
-                type="capsule",
-                fromto=f"0 0 0 {offset[0]:.6f} {offset[1]:.6f} {offset[2]:.6f}",
-                size="0.022",
-                rgba="0.62 0.66 0.70 1",
-                contype="0",
-                conaffinity="0",
-                group="1",
-                mass="0",
-            )
-            added += 1
-            drawn = True
-        if not drawn:
-            ET.SubElement(
-                body,
-                "geom",
-                name=f"tip_{name}",
-                type="sphere",
-                size="0.026",
-                rgba="0.62 0.66 0.70 1",
-                contype="0",
-                conaffinity="0",
-                group="1",
-                mass="0",
-            )
-            added += 1
-    return added
-
-
 def _add_arm_collision(root: ET.Element, model: mujoco.MjModel) -> int:
     """Add real (collidable) capsules along the right arm, per 20260825 decision B.
 
-    ``_add_bones()`` already draws a capsule of this exact shape along every link, but
-    with contype=conaffinity=0 (visual only -- see its docstring: the IK/diffusion loop
-    must not be measured against fake geometry). That leaves the basket unenforceable no
-    matter how solid it is, because nothing on the arm side can register a contact.
+    The display uses real STL meshes, but their collision geometry is intentionally off in
+    this stage. These capsules make the basket enforceable without treating display meshes
+    as validated contact geometry.
     ``filterparent`` (MuJoCo's default) suppresses the parent/child false positives this
     would otherwise create against the existing shoulder collision cylinders.
     """
@@ -357,8 +358,7 @@ def _add_arm_collision(root: ET.Element, model: mujoco.MjModel) -> int:
 
     # right_rubber_hand collapses into right_wrist_yaw_link at compile time (fixed joint,
     # see g1.urdf right_hand_palm_joint), so a collidable sphere at the wrist origin is the
-    # hand stand-in -- same radius as the visual "tip" sphere _add_bones() already draws
-    # there.
+    # Hand stand-in at the wrist origin.
     wrist_body = _find_body(root, "right_wrist_yaw_link")
     ET.SubElement(
         wrist_body,
@@ -610,7 +610,7 @@ def _check_home_contacts(model: mujoco.MjModel) -> int:
 
     Done here, at build time, for the same reason as ``_check_chest_fov``: with the right
     arm now carrying real collision geoms (``_add_arm_collision``), any overlap baked into
-    the geometry itself -- e.g. a capsule radius fat enough to graze the torso bone, or the
+    the geometry itself -- e.g. a capsule radius fat enough to graze the torso visual mesh, or the
     basket sitting closer to the hip than its wall lets on -- shows up as a nonzero-penetration
     contact from frame zero, before any motion is ever commanded. Better to fail the build
     than to discover it as "the diffusion loop diverged" later. Returns the contact count
@@ -641,11 +641,16 @@ def _check_home_contacts(model: mujoco.MjModel) -> int:
     return len(unexpected)
 
 
-def build(out_path: Path = _OUT, verbose: bool = True) -> Path:
+def build(
+    out_path: Path = _OUT,
+    verbose: bool = True,
+    mesh_dir: Path | None = None,
+) -> Path:
     horiz, vert, cam_dist = _check_chest_fov(CHEST_RES, CHEST_FOVY_DEG)
 
     urdf_root = ET.parse(_URDF).getroot()
-    dropped = _strip_meshes(urdf_root)
+    resolved_mesh_dir = _resolve_visual_mesh_dir(urdf_root, mesh_dir)
+    visual_meshes, collision_meshes_dropped = _prepare_mesh_geometry(urdf_root, resolved_mesh_dir)
     mjcf_text = _urdf_to_mjcf(ET.tostring(urdf_root, encoding="unicode"))
     root = ET.fromstring(mjcf_text)
     root.set("model", "g1_okra_sim")
@@ -667,7 +672,6 @@ def build(out_path: Path = _OUT, verbose: bool = True) -> Path:
         raise RuntimeError(f"expected 29 hinge joints, generator found {len(joints)}: {joints}")
 
     _weld_base(root, pelvis_z)
-    _add_bones(root, probe_model)
     arm_collision_n = _add_arm_collision(root, probe_model)
     _add_contact_excludes(root, _ARM_COLLISION_EXCLUDE_PAIRS)
     basket_pad_n = _pad_basket_collision(root, BASKET_COLLISION_MARGIN_M)
@@ -701,7 +705,8 @@ def build(out_path: Path = _OUT, verbose: bool = True) -> Path:
 
     if verbose:
         print(f"wrote {out_path}")
-        print(f"  mesh geoms dropped : {dropped}")
+        print(f"  visual STL meshes  : {visual_meshes} ({resolved_mesh_dir})")
+        print(f"  mesh collisions off: {collision_meshes_dropped} (primitive contacts retained)")
         print(f"  arm collision geoms: {arm_collision_n}")
         print(f"  basket geoms padded: {basket_pad_n} (+{BASKET_COLLISION_MARGIN_M * 1000:.0f} mm/face)")
         print(f"  gravcomp bodies    : {gravcomp_n}")
@@ -721,8 +726,13 @@ def build(out_path: Path = _OUT, verbose: bool = True) -> Path:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", default=str(_OUT), help="output MJCF path")
+    ap.add_argument(
+        "--mesh-dir",
+        type=Path,
+        help=f"directory containing meshes/*.STL (defaults to ${_MESH_DIR_ENV} or known local bundles)",
+    )
     args = ap.parse_args()
-    build(Path(args.out))
+    build(Path(args.out), mesh_dir=args.mesh_dir)
     return 0
 
 

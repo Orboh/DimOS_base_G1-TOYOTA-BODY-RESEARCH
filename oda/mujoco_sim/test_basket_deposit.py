@@ -32,12 +32,12 @@ from dimos.robot.unitree.g1.ik_reach.right_arm_model import load_g1_right_arm_ik
 from oda.mujoco_sim.build_g1_scene import _OUT
 from oda.mujoco_sim.smoke_sim_arm import TIP_OFFSET, SimRig
 
-# The basket is open in +X.  These targets approach through that opening, place
-# the pod above the bottom panel, then retreat through the same opening.  Values
-# are metres in torso_link frame; they deliberately do not depend on world pose.
-ENTRY_TORSO = np.array([0.310, 0.000, -0.085])
+# The basket is open in +Z. These targets arrive above its centre, lower the pod
+# vertically into the volume, then return upward through the same opening. Values are
+# metres in torso_link frame; they deliberately do not depend on world pose.
+ENTRY_TORSO = np.array([0.155, 0.000, 0.020])
 DROP_TORSO = np.array([0.155, 0.000, -0.129])
-RETREAT_TORSO = np.array([0.310, 0.000, -0.040])
+RETREAT_TORSO = np.array([0.155, 0.000, 0.020])
 
 CARGO_RADIUS_M = 0.013
 CARGO_HALF_LEN_M = 0.045
@@ -175,7 +175,7 @@ def main() -> int:
         print(f"    {label:7s} target={np.round(target, 4).tolist()} q={np.round(solution, 4).tolist()}")
 
     failures: list[str] = []
-    print("[2] carry through the open (+X) face")
+    print("[2] carry down through the open (+Z) face")
     for label, target, solution in (("entry", ENTRY_TORSO, q_entry), ("drop", DROP_TORSO, q_drop)):
         deepest, pairs = _advance(rig, solution, seconds=2.0)
         tip_err = float(np.linalg.norm(rig.tip_torso(np.asarray(TIP_OFFSET)) - target))

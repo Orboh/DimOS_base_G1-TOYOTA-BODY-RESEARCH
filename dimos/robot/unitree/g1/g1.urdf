@@ -67,11 +67,11 @@
        caliper-measured: team decision (20260825) to accept the ~+/-10mm photo-based
        uncertainty rather than block on a real-world measurement pass. Revisit with calipers
        before the 3D-printed (non-cardboard) version, where this tolerance matters more.
-       Modeled as 5 thin plates (back + top + bottom + left + right); the far face (local
-       +x) is left open as the drop-in opening, matching the physical cardboard box (120mm W
-       x 210mm D x 120mm H, 5mm wall). The real protrusion/cutout is not modeled here (it
+       Modeled as 5 thin plates (back + front + bottom + left + right), leaving local +Z
+       open for top-down insertion, matching the physical cardboard box (120mm W x 210mm D
+       x 120mm H, 5mm wall). The real protrusion/cutout is not modeled here (it
        has no URDF/STL counterpart, see 作業ログ.md), so the back plate is solid.
-       The 5 <collision> plates are named (basket_back/top/bottom/left/right) so
+       The 5 <collision> plates are named (basket_back/front/bottom/left/right) so
        build_g1_scene.py's _pad_basket_collision() can find and inflate just these: see
        that function's docstring for why (20260825 decision, Ueda + Yokote: accept the
        placement uncertainty above rather than chase it with calipers, and instead
@@ -86,7 +86,7 @@
       <mass value="0.05"/>
       <inertia ixx="1e-4" ixy="0" ixz="0" iyy="1e-4" iyz="0" izz="1e-4"/>
     </inertial>
-    <visual>
+    <visual name="basket_back_visual">
       <origin xyz="0.0025 0 0" rpy="0 0 0"/>
       <geometry><box size="0.005 0.120 0.120"/></geometry>
       <material name="cardboard"/>
@@ -95,7 +95,7 @@
       <origin xyz="0.0025 0 0" rpy="0 0 0"/>
       <geometry><box size="0.005 0.120 0.120"/></geometry>
     </collision>
-    <visual>
+    <visual name="basket_bottom_visual">
       <origin xyz="0.105 0 -0.0575" rpy="0 0 0"/>
       <geometry><box size="0.210 0.120 0.005"/></geometry>
       <material name="cardboard"/>
@@ -105,13 +105,13 @@
       <geometry><box size="0.210 0.120 0.005"/></geometry>
     </collision>
     <visual>
-      <origin xyz="0.105 0 0.0575" rpy="0 0 0"/>
-      <geometry><box size="0.210 0.120 0.005"/></geometry>
+      <origin xyz="0.2075 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.005 0.120 0.120"/></geometry>
       <material name="cardboard"/>
     </visual>
-    <collision name="basket_top">
-      <origin xyz="0.105 0 0.0575" rpy="0 0 0"/>
-      <geometry><box size="0.210 0.120 0.005"/></geometry>
+    <collision name="basket_front">
+      <origin xyz="0.2075 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.005 0.120 0.120"/></geometry>
     </collision>
     <visual>
       <origin xyz="0.105 -0.0575 0" rpy="0 0 0"/>
