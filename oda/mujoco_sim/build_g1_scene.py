@@ -160,6 +160,15 @@ UMI_BASE_POS = (0.0860, 0.0000, 0.0291)  # centre in right_wrist_yaw_link [m]
 # physically measured.  WRIST_MOUNT is the same hardware transform used by the
 # simulated UMI camera below.
 UMI_GOPRO_BODY_FULL_EXTENTS = (0.0436, 0.0810, 0.0650)  # x, y, z [m]
+
+# The visual torso mesh spans x=[-66.6, 83.6], y=[-107.7, 107.7], and
+# z=[-8.9, 311.6] mm in ``torso_link``.  Mesh contacts remain intentionally
+# disabled in this phase, so retain a conservative primitive envelope for the
+# part of the body that the moving right arm and wrist-mounted UMI can reach.
+# A box is used here (rather than an ellipsoid) on purpose: an arm hidden
+# inside the visible chest must register as a collision, even near a corner.
+TORSO_CORE_CENTER = (0.0085, 0.0000, 0.1510)
+TORSO_CORE_HALF_EXTENTS = (0.0755, 0.1080, 0.1605)
 # (parent_body, child_body, radius): one capsule per segment, spanning parent origin to
 # child origin for this specific chain.
 _ARM_COLLISION_SEGMENTS = [
@@ -180,6 +189,11 @@ _ARM_COLLISION_SEGMENTS = [
 # (2026-08-25) and excluded explicitly rather than shrinking radii, which would just move
 # the same problem to a different pair of segments.
 _ARM_COLLISION_EXCLUDE_PAIRS = [
+    # The upper-arm capsule starts at the shoulder, immediately beside the
+    # torso shell.  This neighbouring pair is an intentional mechanical
+    # adjacency, not an arm-through-chest event.  All elbow, wrist, hand and
+    # UMI bodies remain collidable with the torso core.
+    ("torso_link", "right_shoulder_yaw_link"),
     ("right_elbow_link", "right_wrist_pitch_link"),   # forearm vs wrist_pitch->wrist_yaw
     ("right_wrist_roll_link", "right_wrist_yaw_link"),  # wrist_roll->wrist_pitch vs hand
 ]
@@ -472,6 +486,29 @@ def _add_arm_collision(root: ET.Element, model: mujoco.MjModel) -> int:
     )
     added += 1
     return added
+
+
+def _add_torso_collision(root: ET.Element) -> int:
+    """Add the simplified torso keepout used for right-arm self-collision.
+
+    It is deliberately an independent primitive, not a switch back to
+    unvalidated STL collision meshes.  ``contype=1, conaffinity=2`` makes it
+    pair with the right-arm/hand/UMI proxy geoms (2/1) while preserving their
+    existing basket contacts.
+    """
+    torso = _find_body(root, "torso_link")
+    ET.SubElement(
+        torso,
+        "geom",
+        name="torso_collision_core",
+        type="box",
+        pos=" ".join(f"{v:.6f}" for v in TORSO_CORE_CENTER),
+        size=" ".join(f"{v:.6f}" for v in TORSO_CORE_HALF_EXTENTS),
+        contype="1",
+        conaffinity="2",
+        rgba="0.30 0.45 0.90 0.18",
+    )
+    return 1
 
 
 def _add_contact_excludes(root: ET.Element, pairs: list[tuple[str, str]]) -> int:
@@ -774,6 +811,7 @@ def build(
         raise RuntimeError(f"expected 29 hinge joints, generator found {len(joints)}: {joints}")
 
     _weld_base(root, pelvis_z)
+    torso_collision_n = _add_torso_collision(root)
     arm_collision_n = _add_arm_collision(root, probe_model)
     _add_contact_excludes(root, _ARM_COLLISION_EXCLUDE_PAIRS)
     basket_pad_n = _pad_basket_collision(root, BASKET_COLLISION_MARGIN_M)
@@ -809,6 +847,7 @@ def build(
         print(f"wrote {out_path}")
         print(f"  visual STL meshes  : {visual_meshes} ({resolved_mesh_dir})")
         print(f"  mesh collisions off: {collision_meshes_dropped} (primitive contacts retained)")
+        print(f"  torso collision geoms: {torso_collision_n}")
         print(f"  arm collision geoms: {arm_collision_n}")
         print(f"  basket geoms padded: {basket_pad_n} (+{BASKET_COLLISION_MARGIN_M * 1000:.0f} mm/face)")
         print(f"  gravcomp bodies    : {gravcomp_n}")

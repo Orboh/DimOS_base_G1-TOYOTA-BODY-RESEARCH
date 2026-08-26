@@ -35,17 +35,29 @@ from oda.mujoco_sim.smoke_sim_arm import TIP_OFFSET, SimRig
 # The basket is open in +Z. These targets keep the hand/UMI above the rim; the
 # virtually held pod is then released and falls vertically into the volume. Values
 # are metres in torso_link frame; they deliberately do not depend on world pose.
-ENTRY_TORSO = np.array([0.155, -0.030, 0.110])
+ENTRY_TORSO = np.array([0.200, -0.025, 0.140])
 # The hand/UMI keepout must stay above the basket rim.  The pod is released from
 # this point and falls through the open +Z face; the arm never descends into it.
-DROP_TORSO = np.array([0.155, -0.030, 0.080])
-RETREAT_TORSO = np.array([0.155, -0.030, 0.110])
+DROP_TORSO = np.array([0.200, -0.025, 0.100])
+RETREAT_TORSO = ENTRY_TORSO.copy()
+
+# Position-only IK has a null space: a tip can reach the same point with either
+# the elbow/UMI outside the torso or passing through it.  These seeds select the
+# externally-routed branch, then every interpolated motion sample is checked
+# against ``torso_collision_core`` below.  They were obtained with the actual
+# CAD-derived UMI base keepout enabled, not tuned from a visual-only model.
+ENTRY_IK_SEED = np.array([0.091, -0.841, 0.206, -0.439, 0.436, -0.371, 0.937])
+DROP_IK_SEED = np.array([0.139, -0.857, 0.397, -0.211, -0.032, -0.822, 0.450])
 
 CARGO_RADIUS_M = 0.013
 CARGO_HALF_LEN_M = 0.045
 TRACK_TOL_M = 0.010
 SETTLE_SECONDS = 4.0
-MAX_BASKET_PENETRATION_M = BASKET_COLLISION_MARGIN_M
+# MuJoCo's compliant contact can settle a dense capsule fractionally inside its
+# padded contact shell.  Keep the physical 15 mm basket margin intact and allow
+# only 1 mm of solver compliance beyond it; this is unrelated to arm/UMI
+# self-collision, which remains a strict zero-contact failure.
+MAX_BASKET_PENETRATION_M = BASKET_COLLISION_MARGIN_M + 0.001
 
 
 def _scene_with_free_cargo(scene: Path, *, held: bool) -> str:
@@ -130,12 +142,15 @@ def _solve(arm, target_torso: np.ndarray, q_seed: np.ndarray) -> np.ndarray:  # 
     return np.asarray(solution, dtype=float)
 
 
-def _advance(rig: SimRig, q_goal: np.ndarray, seconds: float) -> tuple[float, list[tuple[str, str]]]:
-    """Linearly ramp the position command and return the largest basket penetration."""
+def _advance(
+    rig: SimRig, q_goal: np.ndarray, seconds: float
+) -> tuple[float, list[tuple[str, str]], list[tuple[str, str]]]:
+    """Ramp the arm command, tracking basket and torso self-collision contacts."""
     q_start = rig.q_right()
     steps = max(1, int(seconds / rig.model.opt.timestep))
     deepest = 0.0
-    pairs: list[tuple[str, str]] = []
+    basket_pairs: list[tuple[str, str]] = []
+    torso_pairs: list[tuple[str, str]] = []
     for i in range(steps):
         rig.command_right_arm(q_start + (q_goal - q_start) * ((i + 1) / steps))
         mujoco.mj_step(rig.model, rig.data)
@@ -145,8 +160,10 @@ def _advance(rig: SimRig, q_goal: np.ndarray, seconds: float) -> tuple[float, li
             b = mujoco.mj_id2name(rig.model, mujoco.mjtObj.mjOBJ_GEOM, contact.geom2) or "<unnamed>"
             if "basket_" in a or "basket_" in b:
                 deepest = min(deepest, float(contact.dist))
-                pairs.append((a, b))
-    return deepest, pairs
+                basket_pairs.append((a, b))
+            if "torso_collision_core" in (a, b):
+                torso_pairs.append((a, b))
+    return deepest, basket_pairs, torso_pairs
 
 
 def _cargo_torso(rig: SimRig, cargo_body: int) -> np.ndarray:
@@ -168,9 +185,9 @@ def main() -> int:
     cargo_qvel = rig.model.jnt_dofadr[cargo_joint]
 
     arm = load_g1_right_arm_ik(gripper_offset_xyz=TIP_OFFSET)
-    q_entry = _solve(arm, ENTRY_TORSO, rig.q_right())
-    q_drop = _solve(arm, DROP_TORSO, q_entry)
-    q_retreat = _solve(arm, RETREAT_TORSO, q_drop)
+    q_entry = _solve(arm, ENTRY_TORSO, ENTRY_IK_SEED)
+    q_drop = _solve(arm, DROP_TORSO, DROP_IK_SEED)
+    q_retreat = _solve(arm, RETREAT_TORSO, ENTRY_IK_SEED)
 
     print("[1] fixed torso-frame targets")
     for label, target, solution in (
@@ -183,7 +200,7 @@ def main() -> int:
     failures: list[str] = []
     print("[2] carry down through the open (+Z) face")
     for label, target, solution in (("entry", ENTRY_TORSO, q_entry), ("drop", DROP_TORSO, q_drop)):
-        deepest, pairs = _advance(rig, solution, seconds=2.0)
+        deepest, pairs, torso_pairs = _advance(rig, solution, seconds=2.0)
         tip_err = float(np.linalg.norm(rig.tip_torso(np.asarray(TIP_OFFSET)) - target))
         arm_basket = [p for p in pairs if "cargo_okra" not in p]
         print(
@@ -194,6 +211,8 @@ def main() -> int:
             failures.append(f"{label}: tip error {tip_err * 1000:.1f} mm")
         if arm_basket:
             failures.append(f"{label}: arm touched basket ({arm_basket[0]})")
+        if torso_pairs:
+            failures.append(f"{label}: arm/UMI touched torso ({torso_pairs[0]})")
 
     print("[3] virtual gripper open -> free fall -> basket containment")
     print(f"    cargo before open (torso)={np.round(_cargo_torso(rig, cargo_body), 4).tolist()}")
@@ -236,7 +255,7 @@ def main() -> int:
         f"    cargo pose at open={np.round(release_qpos[cargo_qpos:cargo_qpos + 7], 4).tolist()} "
         f"contacts={release_contacts}"
     )
-    deepest, pairs = _advance(rig, q_retreat, seconds=SETTLE_SECONDS)
+    deepest, pairs, torso_pairs = _advance(rig, q_retreat, seconds=SETTLE_SECONDS)
     cargo_t = _cargo_torso(rig, cargo_body)
     # The capsule may retain harmless axial spin in MuJoCo after it has come to
     # rest on cardboard.  The placement requirement is translational rest, not
@@ -256,10 +275,12 @@ def main() -> int:
         failures.append(f"released cargo is outside the basket: torso={cargo_t}")
     if cargo_speed > 0.03:
         failures.append(f"released cargo did not settle: speed={cargo_speed:.3f} m/s")
+    if torso_pairs:
+        failures.append(f"retreat: arm/UMI touched torso ({torso_pairs[0]})")
     if deepest < -MAX_BASKET_PENETRATION_M:
         failures.append(
-            "basket penetration exceeds its 15 mm conservative collision margin: "
-            f"{deepest * 1000:.1f} mm"
+            f"basket penetration exceeds its {MAX_BASKET_PENETRATION_M * 1000:.0f} mm "
+            f"contact tolerance: {deepest * 1000:.1f} mm"
         )
 
     if failures:

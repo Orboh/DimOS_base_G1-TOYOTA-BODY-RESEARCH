@@ -57,7 +57,9 @@ from oda.mujoco_sim.build_g1_scene import _OUT
 from oda.mujoco_sim.render_basket_deposit import render as render_deposit
 from oda.mujoco_sim.smoke_sim_arm import STANDOFF_M, TIP_OFFSET, TRACK_TOL_M
 from oda.mujoco_sim.test_basket_deposit import (
+    DROP_IK_SEED,
     DROP_TORSO,
+    ENTRY_IK_SEED,
     ENTRY_TORSO,
     MAX_BASKET_PENETRATION_M,
     RETREAT_TORSO,
@@ -251,21 +253,23 @@ def _deposit_from_pose(scene: Path, q_reach: np.ndarray, tip_world: np.ndarray, 
     cargo_qpos_adr = rig.model.jnt_qposadr[cargo_joint]
 
     try:
-        q_entry = _solve(arm, ENTRY_TORSO, rig.q_right())
-        q_drop = _solve(arm, DROP_TORSO, q_entry)
-        q_retreat = _solve(arm, RETREAT_TORSO, q_drop)
+        q_entry = _solve(arm, ENTRY_TORSO, ENTRY_IK_SEED)
+        q_drop = _solve(arm, DROP_TORSO, DROP_IK_SEED)
+        q_retreat = _solve(arm, RETREAT_TORSO, ENTRY_IK_SEED)
     except RuntimeError as exc:
         return {"ok": False, "stage": "deposit_ik", "reason": str(exc)}
 
     failures: list[str] = []
     for label, target, solution in (("entry", ENTRY_TORSO, q_entry), ("drop", DROP_TORSO, q_drop)):
-        deepest, pairs = _advance(rig, solution, seconds=2.0)
+        deepest, pairs, torso_pairs = _advance(rig, solution, seconds=2.0)
         tip_err = float(np.linalg.norm(rig.tip_torso(np.asarray(TIP_OFFSET)) - target))
         arm_basket = [p for p in pairs if "cargo_okra" not in p]
         if tip_err > DEPOSIT_TRACK_TOL_M:
             failures.append(f"{label}: tip error {tip_err * 1000:.1f} mm")
         if arm_basket:
             failures.append(f"{label}: arm touched basket ({arm_basket[0]})")
+        if torso_pairs:
+            failures.append(f"{label}: arm/UMI touched torso ({torso_pairs[0]})")
     if failures:
         return {"ok": False, "stage": "deposit_carry", "reason": "; ".join(failures)}
 
@@ -285,7 +289,7 @@ def _deposit_from_pose(scene: Path, q_reach: np.ndarray, tip_world: np.ndarray, 
     rig.command_right_arm(q_drop)
     mujoco.mj_forward(rig.model, rig.data)
 
-    deepest, pairs = _advance(rig, q_retreat, seconds=SETTLE_SECONDS)
+    deepest, pairs, torso_pairs = _advance(rig, q_retreat, seconds=SETTLE_SECONDS)
     cargo_t = _cargo_torso(rig, cargo_body)
     cargo_speed = float(np.linalg.norm(rig.data.qvel[cargo_qvel : cargo_qvel + 3]))
     cargo_basket_contacts = [p for p in pairs if "cargo_okra_pod" in p]
@@ -301,11 +305,16 @@ def _deposit_from_pose(scene: Path, q_reach: np.ndarray, tip_world: np.ndarray, 
         }
     if cargo_speed > 0.03:
         return {"ok": False, "stage": "deposit_release", "reason": f"cargo did not settle: speed={cargo_speed:.3f} m/s"}
+    if torso_pairs:
+        return {"ok": False, "stage": "deposit_release", "reason": f"retreat arm/UMI touched torso: {torso_pairs[0]}"}
     if deepest < -MAX_BASKET_PENETRATION_M:
         return {
             "ok": False,
             "stage": "deposit_release",
-            "reason": f"basket penetration exceeds 15 mm margin: {deepest * 1000:.1f} mm",
+            "reason": (
+                f"basket penetration exceeds {MAX_BASKET_PENETRATION_M * 1000:.0f} mm "
+                f"contact tolerance: {deepest * 1000:.1f} mm"
+            ),
         }
 
     return {"ok": True, "cargo_torso": cargo_t.tolist(), "cargo_speed": cargo_speed}

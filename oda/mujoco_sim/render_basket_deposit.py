@@ -40,7 +40,9 @@ from dimos.robot.unitree.g1.ik_reach.right_arm_model import load_g1_right_arm_ik
 from oda.mujoco_sim.build_g1_scene import _BASKET_COLLISION_NAMES, _OUT
 from oda.mujoco_sim.smoke_sim_arm import TIP_OFFSET, SimRig
 from oda.mujoco_sim.test_basket_deposit import (
+    DROP_IK_SEED,
     DROP_TORSO,
+    ENTRY_IK_SEED,
     ENTRY_TORSO,
     RETREAT_TORSO,
     SETTLE_SECONDS,
@@ -181,6 +183,12 @@ def _advance_recorded(
     for i in range(steps):
         rig.command_right_arm(q_start + (q_goal - q_start) * ((i + 1) / steps))
         mujoco.mj_step(rig.model, rig.data)
+        for j in range(rig.data.ncon):
+            contact = rig.data.contact[j]
+            a = mujoco.mj_id2name(rig.model, mujoco.mjtObj.mjOBJ_GEOM, contact.geom1) or "<unnamed>"
+            b = mujoco.mj_id2name(rig.model, mujoco.mjtObj.mjOBJ_GEOM, contact.geom2) or "<unnamed>"
+            if "torso_collision_core" in (a, b):
+                raise RuntimeError(f"unsafe arm/UMI-to-torso contact while rendering: {a} vs {b}")
         if i % frame_every == 0:
             rec.grab(rig.data)
 
@@ -245,9 +253,9 @@ def render(
     cargo_qpos = rig.model.jnt_qposadr[cargo_joint]
 
     arm = load_g1_right_arm_ik(gripper_offset_xyz=TIP_OFFSET)
-    q_entry = _solve(arm, ENTRY_TORSO, rig.q_right())
-    q_drop = _solve(arm, DROP_TORSO, q_entry)
-    q_retreat = _solve(arm, RETREAT_TORSO, q_drop)
+    q_entry = _solve(arm, ENTRY_TORSO, ENTRY_IK_SEED)
+    q_drop = _solve(arm, DROP_TORSO, DROP_IK_SEED)
+    q_retreat = _solve(arm, RETREAT_TORSO, ENTRY_IK_SEED)
     if verbose:
         print("[render] targets solved: entry/drop/retreat OK")
 

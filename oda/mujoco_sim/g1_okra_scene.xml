@@ -226,6 +226,7 @@
                 </body>
               </body>
             </body>
+            <geom name="torso_collision_core" type="box" pos="0.008500 0.000000 0.151000" size="0.075500 0.108000 0.160500" contype="1" conaffinity="2" rgba="0.30 0.45 0.90 0.18" />
             <camera name="chest_cam" pos="0.109000 0.030000 0.248000" quat="0.558436200 0.433761467 -0.433761467 -0.558436200" fovy="70.0000" />
           </body>
         </body>
@@ -241,6 +242,7 @@
     </body>
   </worldbody>
   <contact>
+    <exclude name="exclude_torso_link_right_shoulder_yaw_link" body1="torso_link" body2="right_shoulder_yaw_link" />
     <exclude name="exclude_right_elbow_link_right_wrist_pitch_link" body1="right_elbow_link" body2="right_wrist_pitch_link" />
     <exclude name="exclude_right_wrist_roll_link_right_wrist_yaw_link" body1="right_wrist_roll_link" body2="right_wrist_yaw_link" />
   </contact>
