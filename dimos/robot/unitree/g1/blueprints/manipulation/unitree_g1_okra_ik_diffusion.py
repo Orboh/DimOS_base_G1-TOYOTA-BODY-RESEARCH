@@ -152,7 +152,6 @@ _UMI_REQUIRE_CAMERA = os.getenv("UMI_REQUIRE_CAMERA_OK", "1").strip() != "0"
 # same, and an adjustment that refused to start looks like nothing at all. The LangGraph
 # harvest app announces every phase; this gives the bridge pipeline the same cue.
 # Needs pyopenjtalk + scipy in the venv; without them it degrades to [VOICE] log lines.
-_ANCHOR_DRIFT = float(os.getenv("UMI_MAX_ANCHOR_DRIFT_M", "0.05"))
 _VOICE = os.getenv("OKRA_VOICE", "").strip() == "1"
 _VOICE_VOLUME = int(os.getenv("OKRA_VOICE_VOLUME", "100"))
 
@@ -261,7 +260,6 @@ _MODULES = [
         tip_extra_com_xyz=_TIP_EXTRA_COM,
     ),
     UmiDiffusionBridge.blueprint(
-        max_anchor_drift_m=_ANCHOR_DRIFT,
         server_addr=_UMI_SERVER,
         control_hz=_UMI_CONTROL_HZ,
         n_exec_per_infer=_UMI_N_EXEC,

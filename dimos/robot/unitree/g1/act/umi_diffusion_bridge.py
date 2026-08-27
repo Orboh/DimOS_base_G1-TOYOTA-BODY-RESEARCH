@@ -248,13 +248,6 @@ class UmiDiffusionBridgeConfig(ModuleConfig):
     max_joint_delta_deg: float = 20.0  # per-cycle cap (tighter than IkReach's one-shot 90°)
     max_reach_pos_err_m: float = 0.05
     require_converged: bool = True
-    # Leash on how far the policy may carry the tip from where IK parked it.
-    # The policy anchors every chunk on the MEASURED pose, so a persistent bias in its
-    # output integrates without bound: on 2026-08-25 the tip drifted +76 mm up / -40 mm
-    # back over 24 s and never converged. The workspace box below is far too coarse to
-    # catch that (it is the whole reachable volume). Okra fine-adjustment is a few cm of
-    # work, so anything past this radius means the policy is running away, not adjusting.
-    max_anchor_drift_m: float = 0.05   # 0 disables
     ws_x: list[float] = [0.05, 0.65]
     ws_y: list[float] = [-0.75, 0.20]
     ws_z: list[float] = [-0.35, 0.85]
@@ -558,7 +551,6 @@ class UmiDiffusionBridge(Module):
             self._voice.say_phase("end:" + reason, {
                 "converged": "微調整が完了しました",
                 "max_duration": "時間切れで微調整を終了します",
-                "anchor_drift": "ポリシーが逸脱したため微調整を中止します",
                 "server_misses": "推論サーバーが応答しません。中止します",
                 "camera_dead": "手首カメラの映像が使えません。中止します",
                 "camera_unreachable": "推論サーバーに接続できません。中止します",
@@ -752,24 +744,6 @@ class UmiDiffusionBridge(Module):
                     f"[wp{i_wp}/{n_slice}of{chunk_n} tip(torso){np.round(tip_meas_torso, 3)} "
                     f"q_meas={np.round(q_right, 3)}]"
                 )
-
-                # Anchor-drift gate: stop the unbounded integration described on
-                # `max_anchor_drift_m`. Ends the episode rather than skipping the single
-                # waypoint -- once the policy is this far off, every later chunk repeats
-                # the same bias, so skipping just spins until max_duration.
-                anchor = stats.get("tip_first")
-                if self.config.max_anchor_drift_m > 0.0 and anchor is not None:
-                    drift_v = p_torso - anchor
-                    drift = float(np.linalg.norm(drift_v))
-                    if drift > self.config.max_anchor_drift_m:
-                        logger.error(
-                            f"UmiDiffusionBridge[{ep}]: policy ran {drift * 1000:.0f} mm from the IK "
-                            f"anchor (limit {self.config.max_anchor_drift_m * 1000:.0f} mm) "
-                            f"dxyz={np.round(drift_v * 1000, 1)} mm; it is drifting, not converging. "
-                            f"Stopping (arm HELD, no adjust_done). {where}"
-                        )
-                        _end("anchor_drift")
-                        return
 
                 # workspace gate in torso frame
                 if not (
