@@ -140,7 +140,32 @@ def main(record, bridge_trace, out, fps):
     out = out or os.path.join(record, "analysis.mp4")
 
     if cam_idx:
-        frames = [(r["t"], os.path.join(record, "cam_%06d.png" % r["n"])) for r in cam_idx]
+        # cam_index.jsonl is appended to across server restarts and `n` restarts at 1 each
+        # time, so older sessions' entries point at files a later session overwrote. Keep
+        # only the last monotonic run of n -- that is the session that produced the frames
+        # currently on disk.
+        if any("tag" in r for r in cam_idx):
+            # Newer servers stamp a per-session tag, so frames never collide and the
+            # sessions can simply be separated by it.
+            last = [r["tag"] for r in cam_idx if "tag" in r][-1]
+            dropped = len(cam_idx) - sum(1 for r in cam_idx if r.get("tag") == last)
+            if dropped:
+                print(f"cam_index: {dropped} entries from earlier sessions ignored")
+            cam_idx = [r for r in cam_idx if r.get("tag") == last]
+            frames = [(r["t"], os.path.join(record, "cam_%s_%06d.png" % (r["tag"], r["n"])))
+                      for r in cam_idx]
+        else:
+            # Legacy layout: `n` restarted at 1 each session into a shared namespace, so a
+            # restart overwrote the previous run's files. Keep the last monotonic run only.
+            cut = 0
+            for i in range(len(cam_idx) - 1, 0, -1):
+                if cam_idx[i]["n"] <= cam_idx[i - 1]["n"]:
+                    cut = i
+                    break
+            if cut:
+                print(f"cam_index: dropping {cut} entries from earlier server sessions")
+                cam_idx = cam_idx[cut:]
+            frames = [(r["t"], os.path.join(record, "cam_%06d.png" % r["n"])) for r in cam_idx]
         frames = [(t, p) for t, p in frames if os.path.exists(p)]
         src = "capture stream"
     else:
@@ -152,9 +177,12 @@ def main(record, bridge_trace, out, fps):
         raise SystemExit(f"no frames in {record}")
     # The capture log spans the server's whole lifetime; the episode is the slice where
     # inference actually ran. Keep a little lead-in/out so the IK reach is visible too.
-    if srv:
-        t_lo = min(r["t"] for r in srv) - 4.0
-        t_hi = max(r["t"] for r in srv) + 3.0
+    # Prefer the bridge trace for the window: server_trace.jsonl also accumulates across
+    # restarts, so its min/max can span hours of idle recording.
+    win = [r["t"] for r in brg] or [r["t"] for r in srv]
+    if win:
+        t_lo = min(win) - 4.0
+        t_hi = max(win) + 3.0
         n_all = len(frames)
         frames = [(t, f) for t, f in frames if t_lo <= t <= t_hi]
         print(f"trimmed to episode window: {n_all} -> {len(frames)} frames")

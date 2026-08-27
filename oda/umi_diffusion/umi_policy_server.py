@@ -124,7 +124,7 @@ class CameraThread:
     """Grab BGR frames from a UVC device (or a dummy) and keep a timestamped ring buffer."""
 
     def __init__(self, device, preproc, dummy=False, cap_res=(1920, 1080), buf=16,
-                 record_dir=None, record_fps=15.0):
+                 record_dir=None, record_fps=15.0, record_lead_s=6.0):
         self._device = device
         self._preproc = preproc
         self._dummy = dummy
@@ -137,12 +137,21 @@ class CameraThread:
         # ~7 frames in 10 s, which is a slideshow, not a video -- you cannot see the arm
         # move between decisions. This writes the capture stream itself, decimated to
         # record_fps, so the analysis video plays at something like real time.
+        # Gated on inference: the first version logged from server start to server stop and
+        # left 199,850 frames / 3.4 GB after a five-hour session, nearly all of it an idle
+        # camera pointed at nothing. Frames are only worth keeping around an episode.
         self._rec_dir = record_dir
         self._rec_period = 1.0 / max(1e-6, record_fps)
+        self._rec_active_until = 0.0
+        self._rec_lead = record_lead_s
         self._rec_n = 0
         self._rec_last = 0.0
         self._rec_index = None
         self._rec_warned = False
+        # Per-session prefix. `n` restarts at 1 on every server start, so a shared
+        # cam_%06d.png namespace means a restart silently overwrites the previous run's
+        # frames while its index entries still point at them.
+        self._rec_tag = time.strftime("%H%M%S")
 
     def start(self):
         self._thread = threading.Thread(target=self._run, daemon=True, name="gopro-cam")
@@ -171,7 +180,8 @@ class CameraThread:
             now = time.time()
             with self._lock:
                 self._buf.append((now, img))
-            if self._rec_dir is not None and (now - self._rec_last) >= self._rec_period:
+            if (self._rec_dir is not None and now <= self._rec_active_until
+                    and (now - self._rec_last) >= self._rec_period):
                 # Recording is diagnostics. An exception here used to kill this thread --
                 # the buffer then went stale and the bridge refused to run with
                 # "camera STALE", pointing at the USB cable instead of at this code.
@@ -181,11 +191,13 @@ class CameraThread:
                     self._rec_n += 1
                     import cv2 as _cv2
                     _cv2.imwrite(
-                        os.path.join(self._rec_dir, "cam_%06d.png" % self._rec_n),
+                        os.path.join(self._rec_dir,
+                                     "cam_%s_%06d.png" % (self._rec_tag, self._rec_n)),
                         (np.clip(img, 0.0, 1.0) * 255).astype(np.uint8)[..., ::-1])
                     if self._rec_index is None:
                         self._rec_index = open(os.path.join(self._rec_dir, "cam_index.jsonl"), "a")
-                    self._rec_index.write(json.dumps({"n": self._rec_n, "t": now}) + "\n")
+                    self._rec_index.write(json.dumps(
+                        {"n": self._rec_n, "t": now, "tag": self._rec_tag}) + "\n")
                     self._rec_index.flush()
                 except Exception as exc:
                     if not self._rec_warned:
@@ -297,7 +309,14 @@ class PolicyServer:
                            f"Media Mod seating and that it is in clean-HDMI output mode.")
         return h
 
+    def note_activity(self):
+        """Open the capture-recording window. Called on every predict request."""
+        cam = self._cam
+        if getattr(cam, "_rec_dir", None) is not None:
+            cam._rec_active_until = time.time() + cam._rec_lead
+
     def predict(self, t_now, pos, aa):
+        self.note_activity()
         """-> (actions (N,6) absolute pos+aa in ROOT, diag dict for logging/trace)."""
         self.push_pose(t_now, pos, aa)
         if self._episode_start is None:
@@ -419,6 +438,8 @@ def load_policy(ckpt, device):
                    "frames are ~21% (the mask); ~100% means no HDMI signal / GoPro off")
 @click.option("--record-fps", default=15.0, type=float,
               help="rate to log the capture stream at when --record is set")
+@click.option("--record-lead-s", default=6.0, type=float,
+              help="keep logging this long after the last inference (idle time is not recorded)")
 @click.option("--record", default=None,
               help="directory to dump every fed 224x224 frame + trace.jsonl "
                    "(implies --trace <dir>/server_trace.jsonl)")
@@ -430,7 +451,7 @@ def load_policy(ckpt, device):
               help="disable both camera guards (debug only — the robot will then act on "
                    "whatever the camera last produced, however old or black)")
 def main(ckpt, addr, cam_device, dummy_cam, control_hz, fisheye, camera_intrinsics, sim_fov,
-         gripper_width, gripper_mask, record, record_fps,
+         gripper_width, gripper_mask, record, record_fps, record_lead_s,
          no_mirror, log_every, quiet, trace, max_cam_age_ms, max_black_frac, no_camera_check):
     import zmq
     import msgpack
@@ -458,7 +479,8 @@ def main(ckpt, addr, cam_device, dummy_cam, control_hz, fisheye, camera_intrinsi
     print("gripper mask: {} ({})".format(
         "ON" if gripper_mask else "OFF",
         "stock UMI datasets" if gripper_mask else "roboharvest datasets"), flush=True)
-    cam = CameraThread(cam_device, preproc, dummy=dummy_cam, record_dir=record, record_fps=record_fps)
+    cam = CameraThread(cam_device, preproc, dummy=dummy_cam, record_dir=record, record_fps=record_fps,
+                       record_lead_s=record_lead_s)
     cam.start()
     # --dummy-cam feeds all-zero frames on purpose, so the black guard would fire on every
     # request and break the offline IPC check. Keep the staleness guard (the dummy thread
