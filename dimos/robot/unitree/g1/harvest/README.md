@@ -244,3 +244,6 @@ a real subsystem — contracts below:
 
 - `okra_harvest_workflow.md` — the procedure (single source of truth).
 - Memory `g1-okra-harvest-workflow-langgraph` — the design decision + skill gap.
+- `DETECTION_3D_PIPELINE.md` — YOLO-seg + ZED による重心3D算出パイプラインの説明
+  （座標系規約、`OKRA_CAM_TO_TORSO` 校正方法、類似実装との違い）。
+- `DEPTH_ACCURACY_EXPERIMENT.md` — 距離算出精度の検証実験計画（未実施）。
