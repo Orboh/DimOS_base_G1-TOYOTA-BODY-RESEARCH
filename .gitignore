@@ -108,3 +108,13 @@ usd_file/
 *.rrd
 # pyopenjtalk で生成する日本語アナウンス音声。ソース（文言）から再生成可能。
 docs/sim-setup/audio_samples/
+
+# --- oda/ZED_M_Depth_check: vendor SDK installers + YOLO finetune artifacts ---
+# Keep only ZED_SDK_Install_Guide.md, zed_*.py, finetune/test/validate scripts.
+oda/ZED_M_Depth_check/*.run
+oda/ZED_M_Depth_check/*.whl
+oda/ZED_M_Depth_check/finetune_V5/dataset/
+oda/ZED_M_Depth_check/finetune_V5/output/
+oda/ZED_M_Depth_check/finetune_V5/runs/
+oda/ZED_M_Depth_check/finetune_V5/model/
+oda/ZED_M_Depth_check/**/*.pt
