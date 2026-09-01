@@ -56,12 +56,33 @@ def ensure_channel_factory(network_interface: str = "") -> None:
             route — usually NOT the robot LAN).
     """
     global _initialized
+    import os
+
+    import unitree_sdk2py.core.channel as _ch
     from unitree_sdk2py.core.channel import ChannelFactoryInitialize
 
     with _lock:
         if _initialized:
             return
         nic = network_interface or ""
+        # --- sim-in-the-loop: 非マルチキャスト経路(tailscale 等)向け unicast Peers 注入 ---
+        # unitree_sdk2py は CYCLONEDDS_URI を無視し config を固定するため、テンプレ自体に
+        # <Peers> を差し込む。env DIMOS_DDS_PEERS 設定時のみ有効＝通常運用には無影響。nic 必須。
+        # (merge 2026-09-01: fix/zed-intrinsics-no-guess-fallback より輸入)
+        _peers = os.getenv("DIMOS_DDS_PEERS", "").strip()
+        if _peers and nic:
+            _pj = "".join(f'<Peer address="{p.strip()}"/>' for p in _peers.split(",") if p.strip())
+            _ch.ChannelConfigHasInterface = (
+                '<?xml version="1.0" encoding="UTF-8" ?><CycloneDDS><Domain Id="any">'
+                '<General><Interfaces>'
+                '<NetworkInterface name="$__IF_NAME__$" priority="default" multicast="false"/>'
+                '</Interfaces><AllowMulticast>false</AllowMulticast>'
+                '<EnableMulticastLoopback>false</EnableMulticastLoopback></General>'
+                '<Discovery><ParticipantIndex>auto</ParticipantIndex>'
+                f'<MaxAutoParticipantIndex>32</MaxAutoParticipantIndex><Peers>{_pj}</Peers>'
+                '</Discovery></Domain></CycloneDDS>'
+            )
+            logger.info(f"DDS unicast Peers injected (sim-in-the-loop): {_peers}")
         logger.info(f"Initializing Unitree DDS channel factory interface={nic!r}...")
         try:
             ChannelFactoryInitialize(0, nic) if nic else ChannelFactoryInitialize(0)
