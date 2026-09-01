@@ -103,8 +103,6 @@ all_blueprints = {
     "unitree-g1-okra-harvest": "dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_okra_harvest:unitree_g1_okra_harvest",
     "unitree-g1-okra-harvest-full": "dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_okra_harvest_full:unitree_g1_okra_harvest_full",
     "unitree-g1-okra-harvest-ik": "dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_okra_harvest_ik:unitree_g1_okra_harvest_ik",
-    # NOTE (merge 2026-09-01): the harvest/ branch's blueprint of this same name was
-    # renamed -langgraph to avoid clashing with the click->IK->ACT one above.
     "unitree-g1-okra-harvest-langgraph": "dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_okra_harvest_langgraph:unitree_g1_okra_harvest_langgraph",
     "unitree-g1-okra-harvest-live": "dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_okra_harvest_live:unitree_g1_okra_harvest_live",
     "unitree-g1-okra-harvest-live-arm": "dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_okra_harvest_live_arm:unitree_g1_okra_harvest_live_arm",
@@ -249,6 +247,7 @@ all_modules = {
     "terrain-analysis": "dimos.navigation.nav_stack.modules.terrain_analysis.terrain_analysis.TerrainAnalysis",
     "terrain-map-ext": "dimos.navigation.nav_stack.modules.terrain_map_ext.terrain_map_ext.TerrainMapExt",
     "twist-teleop-module": "dimos.teleop.quest.quest_extensions.TwistTeleopModule",
+    "umi-diffusion-bridge": "dimos.robot.unitree.g1.act.umi_diffusion_bridge.UmiDiffusionBridge",
     "unitree-g1-skill-container": "dimos.robot.unitree.g1.skill_container.UnitreeG1SkillContainer",
     "unitree-skill-container": "dimos.robot.unitree.unitree_skill_container.UnitreeSkillContainer",
     "unity-bridge-module": "dimos.simulation.unity.module.UnityBridgeModule",
