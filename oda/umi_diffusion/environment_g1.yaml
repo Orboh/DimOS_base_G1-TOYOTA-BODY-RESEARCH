@@ -1,0 +1,55 @@
+# UMI conda env trimmed for G1 diffusion-policy INFERENCE (not training / not UR/sim).
+# Correctness-critical conda deps (torch2.1 / diffusers0.18.2 / timm0.9.7) kept EXACT to match
+# the training env of ~/umi/epoch=0110-train_loss=0.012.ckpt.
+# Dropped vs conda_environment.yaml (UR5 / SpaceMouse / MuJoCo-sim only, not needed on G1):
+#   ray[default], ur-rtde, spnav, free-mujoco-py, robosuite, pynput, wandb, boto3, gym, scikit-fda, k3d
+# Kept camera/codec/util pip deps needed by uvc_camera + zarr dataset reads + policy.
+name: umi
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+dependencies:
+  - python=3.9
+  - pip=22.1
+  - pytorch=2.1.0
+  - pytorch-cuda=12.1
+  - torchvision=0.16.0
+  - numpy=1.24
+  - scipy=1.11
+  - numba=0.57
+  - pandas=2.1
+  - py-opencv=4.7
+  - av=10.0
+  - pyyaml=6.0
+  - tqdm=4.65
+  - zarr=2.16
+  - numcodecs=0.11
+  - hydra-core=1.2.0
+  - dill=0.3.7
+  - einops=0.6.1
+  - diffusers=0.18.2
+  - scikit-video=1.1
+  - llvm-openmp=14
+  - python-lmdb=1.4
+  - timm=0.9.7
+  - cython=0.29
+  - accelerate=0.24
+  - aiohttp=3.9
+  - aiofiles=23.2
+  - pip:
+    - threadpoolctl==3.2
+    - atomics==1.0.2
+    - fastcrc==0.2
+    - imagecodecs==2023.9.18
+    - robomimic==0.2.0
+    - v4l2py==2.2
+    # wandb is imported at load by TrainDiffusionUnetImageWorkspace (the ckpt's
+    # hydra _target_), so it is REQUIRED even for inference-only.
+    - wandb
+    # timm 0.9.7 imports huggingface_hub.cached_download, REMOVED in hub>=0.26.
+    # Pin to the last release that still has it (verified 2026-07-24).
+    - huggingface_hub==0.25.2
+    # IPC to the DimOS UmiDiffusionBridge.
+    - pyzmq
+    - msgpack

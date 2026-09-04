@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """右腕をホーム姿勢(垂れ下げ)へ滑らかに戻す(2026-07-22, 試行間リセット用).
 
 10回テストで「毎回腕が伸びっぱなしで次がやりづらい」対策。アプリ(コマンドB)が
@@ -22,6 +36,7 @@
                         空文字で無効。挟んだまま腕を引くと支柱ごと持っていく
                         事故(2026-07-22実発生)の再発防止 — 既定でまず開く
 """
+
 from __future__ import annotations
 
 import os
@@ -70,8 +85,10 @@ def main() -> int:
         for _ in range(3):
             gpub.publish(
                 JointState(
-                    name=["g1/right_gripper"], position=[OPEN_Q],
-                    velocity=[0.0], effort=[0.0],
+                    name=["g1/right_gripper"],
+                    position=[OPEN_Q],
+                    velocity=[0.0],
+                    effort=[0.0],
                 )
             )
             time.sleep(0.2)

@@ -5,6 +5,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """UVC (V4L2) → ZMQ publisher for the G1 NX — pyrealsense2-free fallback.
 
@@ -47,6 +61,7 @@ except ImportError:  # NX ships u-msgpack-python (module name `umsgpack`) instea
     def _packb(obj: dict) -> bytes:
         return umsgpack.packb(obj)  # always bin-type on py3; no kwarg supported
 
+
 # The D435i exposes ~6 V4L2 nodes (depth/IR/RGB/metadata); only the RGB
 # node yields a valid 3-channel YUYV frame, which auto-detection relies on.
 MAX_PROBE_DEVICES = 10
@@ -56,7 +71,7 @@ DEFAULT_COLOR_DEVICE = 4
 WARMUP_FRAMES = 30
 
 
-def _open_capture(device: int, width: int, height: int, fps: int) -> "cv2.VideoCapture":
+def _open_capture(device: int, width: int, height: int, fps: int) -> cv2.VideoCapture:
     """Open one V4L2 device configured for YUYV color at the given size."""
     cap = cv2.VideoCapture(device, cv2.CAP_V4L2)
     cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"YUYV"))
@@ -114,7 +129,9 @@ def main() -> int:
     if not cap.isOpened():
         print(f"[cam] ERROR: cannot open /dev/video{device}", flush=True)
         return 1
-    print(f"[cam] UVC started: /dev/video{device} {args.width}x{args.height}@{args.fps}", flush=True)
+    print(
+        f"[cam] UVC started: /dev/video{device} {args.width}x{args.height}@{args.fps}", flush=True
+    )
 
     # Discard warmup frames so auto-exposure settles before the first publish.
     for _ in range(WARMUP_FRAMES):
@@ -153,7 +170,10 @@ def main() -> int:
             frames_sent += 1
             now = time.monotonic()
             if now - t_report >= 5.0:
-                print(f"[cam] sent {frames_sent} frames, ~{frames_sent/(now-t_report):.1f} fps", flush=True)
+                print(
+                    f"[cam] sent {frames_sent} frames, ~{frames_sent / (now - t_report):.1f} fps",
+                    flush=True,
+                )
                 frames_sent = 0
                 t_report = now
     finally:

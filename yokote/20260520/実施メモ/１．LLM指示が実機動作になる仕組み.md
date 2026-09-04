@@ -358,4 +358,3 @@ Go2 の基本 stack は `dimos/robot/unitree/go2/blueprints/basic/unitree_go2_ba
 - `dimos/agents/skills/person_follow.py`
 - `dimos/agents/system_prompt.py`
 - `dimos/robot/unitree/g1/system_prompt.py`
-

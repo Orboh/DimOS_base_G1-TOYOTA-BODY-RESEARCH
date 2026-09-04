@@ -339,7 +339,7 @@ def main() -> None:
     """Run the jogger UI standalone.
 
     Note: This only runs the UI. The coordinator must be started separately:
-        Terminal 1: dimos run coordinator-cartesian-ik-mock
+        Terminal 1: dimos run unitree-g1-coordinator
         Terminal 2: python -m dimos.control.examples.cartesian_ik_jogger
     """
     run_jogger_ui()

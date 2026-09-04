@@ -5,14 +5,10 @@ Motion planning for robotic manipulators. Backend-agnostic design with Drake imp
 ## Quick Start
 
 ```bash
-# 1. Verify manipulation dependencies load correctly (standalone, no hardware):
-dimos run xarm6-planner-only
-
-# 2. Keyboard teleop with mock arm (single command):
-dimos run keyboard-teleop-xarm7
-
-# 3. Interactive RPC client (plan, preview, execute from Python):
-dimos run xarm7-planner-coordinator                                    # terminal 1
+# The xArm / Piper planner blueprints were removed with the vendor arm stacks.
+# The planning library itself is unchanged — run a coordinator and drive it from
+# the interactive RPC client:
+dimos run unitree-g1-coordinator                                       # terminal 1
 python -i -m dimos.manipulation.planning.examples.manipulation_client  # terminal 2
 ```
 

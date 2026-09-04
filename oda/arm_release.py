@@ -1,15 +1,33 @@
 #!/usr/bin/env python3
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """arm_sdk 権限をオンボード制御へ返す(クリーン停止と同じ weight 1->0 ランプ).
 
 g1_arm_sdk_connection.py の start()/stop() の忠実な最小再現:
 現在測定姿勢を保持指令しつつ weight(idx29) を 1.0->0.0 に2秒でランプ。
 腕は跳ねずに、そのままオンボード制御へ滑らかに引き継がれる。
 """
+
 import time
 
 import numpy as np
 from unitree_sdk2py.core.channel import (
-    ChannelFactoryInitialize, ChannelPublisher, ChannelSubscriber)
+    ChannelFactoryInitialize,
+    ChannelPublisher,
+    ChannelSubscriber,
+)
 from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowCmd_
 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_, LowState_
 from unitree_sdk2py.utils.crc import CRC
@@ -23,8 +41,7 @@ WRIST_IDX = {19, 20, 21, 26, 27, 28}
 ChannelFactoryInitialize(0, NIC)
 state = {}
 sub = ChannelSubscriber("rt/lowstate", LowState_)
-sub.Init(lambda m: state.update(mm=m.mode_machine,
-                                q=[m.motor_state[i].q for i in range(29)]), 10)
+sub.Init(lambda m: state.update(mm=m.mode_machine, q=[m.motor_state[i].q for i in range(29)]), 10)
 t0 = time.time()
 while "q" not in state and time.time() - t0 < 5:
     time.sleep(0.05)

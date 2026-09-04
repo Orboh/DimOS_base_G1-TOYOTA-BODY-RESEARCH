@@ -12,7 +12,6 @@ Phone Browser  ──WebSocket──→  Embedded HTTPS Server  ──→  Phone
 ## Running
 
 ```bash
-dimos run teleop-phone-go2     # Go2
 dimos run teleop-phone         # Generic ground robot
 ```
 

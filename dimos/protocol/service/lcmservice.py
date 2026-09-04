@@ -54,6 +54,11 @@ class LCMConfig(BaseConfig):
 
 
 _LCM_LOOP_TIMEOUT = 50
+# How long start() waits for the handler thread to complete its first poll cycle.
+# Generous, because sibling modules in the same worker process can hog the CPU
+# during their own start() — e.g. the ZED SDK's blocking open() with NEURAL depth
+# takes >5s cold, which starved this thread and failed the whole blueprint.
+_LCM_START_TIMEOUT_S = float(os.getenv("DIMOS_LCM_START_TIMEOUT_S", "20"))
 
 
 # this class just sets up cpp LCM instance
@@ -121,8 +126,10 @@ class LCMService(Service):
         self._thread = threading.Thread(target=self._lcm_loop)
         self._thread.daemon = True
         self._thread.start()
-        if not self._loop_running.wait(timeout=5.0):
-            raise RuntimeError("LCM handler thread failed to start within 5s")
+        if not self._loop_running.wait(timeout=_LCM_START_TIMEOUT_S):
+            raise RuntimeError(
+                f"LCM handler thread failed to start within {_LCM_START_TIMEOUT_S:g}s"
+            )
 
     def _lcm_loop(self) -> None:
         """LCM message handling loop."""

@@ -60,11 +60,11 @@ _ARM_START = 15
 _NUM_ARM = 14
 _NUM_GRIPPER = 2
 _STATE_DIM = _NUM_ARM + _NUM_GRIPPER  # 16
-_LEFT_GRIP_IDX = _NUM_ARM       # state/action[14] = left gripper (constant 0, unused)
+_LEFT_GRIP_IDX = _NUM_ARM  # state/action[14] = left gripper (constant 0, unused)
 _RIGHT_GRIP_IDX = _NUM_ARM + 1  # state/action[15] = right gripper (the real Dex1)
 _LEFT_SLICE = slice(_ARM_START, _ARM_START + 7)  # measured left-arm q (held; basket hand)
 _RIGHT_SLICE = slice(_ARM_START + 7, _ARM_START + _NUM_ARM)  # measured right-arm q (22:29)
-_NUM_ARM_HALF = _NUM_ARM // 2   # 7: action[0:7]=left arm, action[7:14]=right arm
+_NUM_ARM_HALF = _NUM_ARM // 2  # 7: action[0:7]=left arm, action[7:14]=right arm
 # 8-DoF right-only layout (tree-right model): state/action = [right arm 7, right grip 1].
 _RIGHT_ONLY_DIM = 8
 
@@ -109,13 +109,13 @@ class ActBridge(Module):
 
     config: ActBridgeConfig
 
-    color_image: In[Image]               # head / cam_high
-    right_wrist_image: In[Image]          # cam_right_wrist (2-cam models; optional otherwise)
+    color_image: In[Image]  # head / cam_high
+    right_wrist_image: In[Image]  # cam_right_wrist (2-cam models; optional otherwise)
     motor_states: In[JointState]
     right_gripper_state: In[JointState]  # measured right Dex1 q (position[0])
-    arm_target: Out[JointState]          # 14 arm targets -> G1ArmSdkConnection
-    gripper_target: Out[JointState]      # right Dex1 target q (position[0]) -> gripper module
-    reach_done: In[Bool]                 # IK settled at pre-grasp -> start one grasp window
+    arm_target: Out[JointState]  # 14 arm targets -> G1ArmSdkConnection
+    gripper_target: Out[JointState]  # right Dex1 target q (position[0]) -> gripper module
+    reach_done: In[Bool]  # IK settled at pre-grasp -> start one grasp window
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -127,9 +127,9 @@ class ActBridge(Module):
         self._stop_event = threading.Event()
         self._thread: Thread | None = None
         # IK->ACT trigger gating (only meaningful when config.trigger_mode).
-        self._active = threading.Event()    # set => the policy loop is running
-        self._deadline = 0.0                # wall-clock end of the current grasp window
-        self._reset_pending = True          # send reset=True on the first frame of a window
+        self._active = threading.Event()  # set => the policy loop is running
+        self._deadline = 0.0  # wall-clock end of the current grasp window
+        self._reset_pending = True  # send reset=True on the first frame of a window
 
     @rpc
     def start(self) -> None:
@@ -197,7 +197,9 @@ class ActBridge(Module):
         self._deadline = time.time() + self.config.grasp_duration_s
         self._reset_pending = True
         self._active.set()
-        logger.info(f"ActBridge: reach_done -> starting grasp window ({self.config.grasp_duration_s}s).")
+        logger.info(
+            f"ActBridge: reach_done -> starting grasp window ({self.config.grasp_duration_s}s)."
+        )
 
     def _build_state(self, state: JointState, right_grip: float) -> list[float] | None:
         """Assemble the policy state from a 29-DOF G1 JointState.
@@ -296,7 +298,9 @@ class ActBridge(Module):
                                 count += 1
                                 self._handle_action(action, count)
                             except zmq.error.Again:
-                                logger.warning("ACT service timeout; is act_service.py --serve running?")
+                                logger.warning(
+                                    "ACT service timeout; is act_service.py --serve running?"
+                                )
                                 sock.close()
                                 sock = ctx.socket(zmq.REQ)
                                 sock.setsockopt(zmq.RCVTIMEO, self.config.recv_timeout_ms)
@@ -324,14 +328,14 @@ class ActBridge(Module):
         """
         right_grip: float | None
         if self.config.arm_only:
-            right_arm = [float(x) for x in action[0:_NUM_ARM_HALF]]   # 7-dim: action[0:7]=right arm
-            right_grip = None                                         # no gripper dim (held open out-of-band)
+            right_arm = [float(x) for x in action[0:_NUM_ARM_HALF]]  # 7-dim: action[0:7]=right arm
+            right_grip = None  # no gripper dim (held open out-of-band)
         elif self.config.right_only:
-            right_arm = [float(x) for x in action[0:_NUM_ARM_HALF]]   # 8-dim: action[0:7]=right arm
-            right_grip = float(action[_RIGHT_ONLY_DIM - 1])           # action[7]=right grip
+            right_arm = [float(x) for x in action[0:_NUM_ARM_HALF]]  # 8-dim: action[0:7]=right arm
+            right_grip = float(action[_RIGHT_ONLY_DIM - 1])  # action[7]=right grip
         else:
             right_arm = [float(x) for x in action[_NUM_ARM_HALF:_NUM_ARM]]  # 16-dim: action[7:14]
-            right_grip = float(action[_RIGHT_GRIP_IDX])               # action[15]
+            right_grip = float(action[_RIGHT_GRIP_IDX])  # action[15]
         with self._lock:
             st = self._latest_state
         left_hold: list[float] | None = None
@@ -368,7 +372,11 @@ class ActBridge(Module):
                 f"{n.split('/')[-1]}={v:.3f}" for n, v in zip(_ARM_JOINT_NAMES, arm14, strict=False)
             )
             tag = "dry-run" if self.config.dry_run else "LIVE→arm_sdk+dex1"
-            layout = "7d-arm" if self.config.arm_only else ("8d-right" if self.config.right_only else "16d")
+            layout = (
+                "7d-arm"
+                if self.config.arm_only
+                else ("8d-right" if self.config.right_only else "16d")
+            )
             grip_str = "held-open" if right_grip is None else f"{right_grip:.3f}"
             logger.info(
                 f"[{tag}] ACT action #{count} ({layout}): "

@@ -38,9 +38,16 @@ text "Twist" italic at (M4.x, Nav.s.y - 0.45in)
 </details>
 
 ![output](assets/go2nav_dataflow.svg)
+<Note>
+This walkthrough was written against the Unitree Go2, which this fork no longer
+carries; the code links point at the upstream repository. The nav stack itself is
+unchanged and is what the G1 blueprints (`unitree-g1-nav-*`, `unitree-g1-mid360-fastlio`)
+use.
+</Note>
+
 ## Pipeline Steps
 
-### 1. LiDAR Frame — [`GO2Connection`](/dimos/robot/unitree/go2/connection.py)
+### 1. LiDAR Frame — [`GO2Connection`](https://github.com/dimensionalOS/dimos/blob/main/dimos/robot/unitree/go2/connection.py)
 
 We don't connect to the LiDAR directly — instead we use Unitree's WebRTC client (via [legion's webrtc driver](https://github.com/legion1581/unitree_webrtc_connect)), which streams a heavily preprocessed 5cm voxel grid rather than raw point cloud data. This allows us to support stock, unjailbroken Go2 Air and Pro models out of the box.
 
@@ -153,7 +160,7 @@ Goal candidates are filtered through a **safe mask** — the free-space region e
 
 ## Blueprint Composition
 
-The navigation stack is composed in the [`unitree_go2`](/dimos/robot/unitree/go2/blueprints/smart/unitree_go2.py) blueprint:
+The navigation stack is composed in the [`unitree_go2`](https://github.com/dimensionalOS/dimos/blob/main/dimos/robot/unitree/go2/blueprints/smart/unitree_go2.py) blueprint:
 
 ```python skip fold output=assets/go2_blueprint.svg
 from dimos.core.coordination.blueprints import autoconnect

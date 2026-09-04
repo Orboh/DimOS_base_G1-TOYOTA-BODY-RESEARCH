@@ -67,7 +67,7 @@ hf download Kota0612/okra11n-seg-v5 model/okra11n-seg.pt --local-dir /tmp/okra-w
 mkdir -p data/models_yolo && mv /tmp/okra-w/model/okra11n-seg.pt data/models_yolo/
 ```
 
-配布元: [`Kota0612/okra11n-seg-v5`](https://huggingface.co/Kota0612/okra11n-seg-v5)（public / ultralytics / 学習データセット同梱）
+配布元: [Kota0612/okra11n-seg-v5](https://huggingface.co/Kota0612/okra11n-seg-v5)（public / ultralytics / 学習データセット同梱）
 
 ### 停止
 

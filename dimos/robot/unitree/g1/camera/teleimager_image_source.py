@@ -5,6 +5,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """Image source backed by the Unitree/teleimager ``image_server``.
 
@@ -30,11 +44,13 @@ importable ``module.path:ClassName``.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
 import importlib
 import os
 import threading
 import time
-from dataclasses import dataclass
+from typing import Any
 
 import cv2
 import numpy as np
@@ -68,7 +84,7 @@ def _load_image_client_cls() -> type:
         try:
             module = importlib.import_module(mod_name)
             return getattr(module, cls_name)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             errors.append(f"{spec}: {exc}")
     raise ImportError(
         "Could not import teleimager's ImageClient. Install teleimager into the "
@@ -128,7 +144,7 @@ class TeleimagerImageSource:
             else:
                 next_t = time.perf_counter()
 
-    def _poll_frame(self, getter, frame_id) -> Image | None:  # noqa: ANN001
+    def _poll_frame(self, getter: Callable[[], Any], frame_id: str) -> Image | None:
         try:
             frame = getter()
             if frame is None:
@@ -142,7 +158,7 @@ class TeleimagerImageSource:
             rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
             ts = float(getattr(frame, "timestamp", None) or time.time())
             return Image.from_numpy(rgb, format=ImageFormat.RGB, frame_id=frame_id, ts=ts)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("TeleimagerImageSource: frame poll failed", error=str(exc))
             return None
 
@@ -165,7 +181,7 @@ class TeleimagerImageSource:
         if self._client is not None:
             try:
                 self._client.close()  # type: ignore[attr-defined]
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             self._client = None
 

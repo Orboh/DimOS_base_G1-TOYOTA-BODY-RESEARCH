@@ -78,8 +78,8 @@ _WEIGHT_IDX = 29  # kNotUsedJoint0: arm_sdk authority weight (0..1)
 _MODE_MACHINE_WAIT_S = 10.0
 
 # Canonical 29-DOF G1 order (matches Unitree G1_29_JointIndex):
-_WAIST_IDX = [12, 13, 14]            # waist yaw/roll/pitch — held at startup pose
-_ARM_IDX = list(range(15, 29))       # left arm 15-21, right arm 22-28 (14 joints)
+_WAIST_IDX = [12, 13, 14]  # waist yaw/roll/pitch — held at startup pose
+_ARM_IDX = list(range(15, 29))  # left arm 15-21, right arm 22-28 (14 joints)
 _WRIST_IDX = {19, 20, 21, 26, 27, 28}
 _G1_JOINTS = make_humanoid_joints("g1")
 _ARM_JOINT_NAMES = _G1_JOINTS[15:29]
@@ -87,7 +87,7 @@ _ARM_JOINT_NAMES = _G1_JOINTS[15:29]
 
 class G1ArmSdkConnectionConfig(ModuleConfig):
     network_interface: str = Field(default="")
-    publish_rate_hz: float = 250.0   # reference control_dt = 1/250
+    publish_rate_hz: float = 250.0  # reference control_dt = 1/250
     # Proven arm gains (unitree_lerobot G1_29_ArmController): shoulder/elbow vs wrist.
     kp_arm: float = 80.0
     kd_arm: float = 3.0
@@ -97,8 +97,40 @@ class G1ArmSdkConnectionConfig(ModuleConfig):
     kp_waist: float = 300.0
     kd_waist: float = 3.0
     # SAFETY knobs.
-    weight_ramp_s: float = 2.0        # 0->1 authority handover time [s]
-    arm_velocity_limit: float = 20.0  # per-cycle clip toward target [rad/s] (reference value)
+    weight_ramp_s: float = 2.0  # 0->1 authority handover time [s]
+    # Caps how fast the published target may slew toward a distant goal [rad/s].
+    #
+    # DO NOT lower this to make motion gentler. `_clip_to_measured` keeps the command within
+    # arm_velocity_limit/publish_rate_hz of the MEASURED pose, so this value also sets a
+    # CEILING ON PD AUTHORITY:
+    #
+    #     tau_pd_max = kp_arm * (arm_velocity_limit / publish_rate_hz)
+    #     20 rad/s -> 6.40 N*m      4 rad/s -> 1.28 N*m
+    #
+    # Below what friction + gravity-model error demand, the arm stalls short of the target
+    # and the command stalls with it -- a standoff that never closes. Dropping 20 -> 4 for
+    # safety on 2026-08-25 left a permanent 0.176 rad (10 deg) tracking error, and because
+    # IkReachBridge fires reach_done on a TIMER (not on arrival), diffusion then started
+    # from a pose 25 deg off the clicked target.
+    #
+    # Gentleness is the runaway guard's job, not this value's: it re-anchors and holds
+    # instead of slewing back, so the snap-back this used to cap no longer happens.
+    arm_velocity_limit: float = 12.0  # per-cycle clip toward target [rad/s] -> 3.84 N*m PD
+    # Runaway guard: if the measured pose departs this far from the commanded target, the
+    # arm is no longer ours (the robot's own controller moved it). Fighting it back is what
+    # causes the collision, so re-anchor the target onto the measured pose and hold.
+    runaway_track_err_rad: float = 0.35  # ~20 deg
+    # A large gap alone does NOT mean runaway: a fresh IK reach legitimately commands a
+    # ~1 rad move, and the gap is large until the arm slews there. The discriminator is
+    # DIRECTION -- while slewing to a new target the gap shrinks monotonically, whereas a
+    # yank makes it grow. So runaway = gap over the limit AND still growing AND no new
+    # target has arrived. (Getting this wrong once cancelled a real reach mid-flight.)
+    runaway_growth_rad: float = 0.002  # per-cycle gap growth that counts as "moving away"
+    runaway_release: bool = True
+    # Spoken warning when the runaway guard trips (shares the one process-wide G1 speaker).
+    voice: bool = False
+    voice_nic: str = ""
+    voice_volume: int = 100
     motor_states_rate_hz: float = 50.0
     frame_id: str = "g1_pelvis"
     # Throttle for the tracking-error log [cycles]; 250 == ~1/s at 250 Hz. This
@@ -126,10 +158,38 @@ class G1ArmSdkConnectionConfig(ModuleConfig):
     # (next reach). Gravity g(q) from the reduced right-arm model (pinocchio rnea, v=a=0),
     # same as xr_teleoperate robot_arm_ik.py. Verified on hw 2026-06-24 (Step 0/0b PASS).
     collection_mode: bool = False
-    compliant_kp_ramp_s: float = 1.5   # right-arm kp 80->0 ramp time on going compliant [s]
-    gravity_tau_scale: float = 1.0     # scale on the gravity feedforward tau
-    urdf_path: str = ""                # gravity model URDF (empty = right_arm_model DEFAULT_URDF)
-    kd_compliant: float = 1.0          # small joint damping while compliant (kp=0)
+    compliant_kp_ramp_s: float = 1.5  # right-arm kp 80->0 ramp time on going compliant [s]
+    gravity_tau_scale: float = 1.0  # scale on the gravity feedforward tau
+    urdf_path: str = ""  # gravity model URDF (empty = right_arm_model DEFAULT_URDF)
+    # GRAVITY FEEDFORWARD DURING STIFF POSITION TRACKING (default off = no behavior change).
+    # Without it the right arm is a pure PD position loop (tau=0), so holding a pose against
+    # gravity requires a permanent position error e = tau_gravity / kp — measured at 3-7 deg
+    # (45-90 mm at the tip) on hw 2026-08-24 with kp_arm=80 plus the wrist GoPro/mount payload.
+    # That droop is what stalls the UMI diffusion loop: the policy commands "measured + delta",
+    # the arm settles "commanded - droop", and when delta ~= droop the tip never advances.
+    # Feeding g(q) forward cancels the gravity term so the PD only handles the residual.
+    # The model is the SAME reduced right-arm URDF used for IK, so it covers the bare arm only:
+    # anything bolted on (GoPro, Media Mod, capture hardware, cabling) is NOT in it — trim with
+    # gravity_tau_scale (>1 adds the missing payload). Start LOW (0.6-0.8) and raise while
+    # watching `arm track`: too high pushes the arm up on its own.
+    gravity_ff: bool = False
+    # TIP PAYLOAD added to the gravity model (0 = model unchanged).
+    # The reduced right-arm URDF ends in a 0.170 kg `right_rubber_hand` — the display hand
+    # G1 ships with. Nothing that is ACTUALLY bolted on (Dex1-1 gripper, GoPro + Media Mod,
+    # capture hardware, mount, cabling) exists in it, so g(q) covers roughly half the real
+    # load and the arm keeps drooping even with gravity_ff on (measured 2026-08-24: model
+    # 5.61 N*m vs 10.72 N*m implied by the residual position error).
+    # This is the mass to ADD on top of what the URDF already models, i.e.
+    #   tip_extra_mass_kg = (real payload) - 0.170   when the rubber hand was removed.
+    # Adding the mass (rather than scaling g(q)) keeps the torque distributed correctly:
+    # a tip payload loads the shoulder far more than the wrist, which a uniform
+    # gravity_tau_scale cannot express.
+    tip_extra_mass_kg: float = 0.0
+    # Payload CoM in the WRIST-YAW joint frame [m]. Reference points along +X:
+    #   0.0415 = wrist-yaw -> hand mount face, 0.1845 = wrist-yaw -> fingertip.
+    # Default 0.113 ~= mid-gripper, a reasonable guess for a Dex1-1 + wrist-cam stack.
+    tip_extra_com_xyz: list[float] = [0.113, -0.003, 0.0]
+    kd_compliant: float = 1.0  # small joint damping while compliant (kp=0)
 
 
 class G1ArmSdkConnection(Module):
@@ -137,28 +197,55 @@ class G1ArmSdkConnection(Module):
 
     config: G1ArmSdkConnectionConfig
 
-    arm_target: In[JointState]      # 14 arm joint targets (left 7, right 7) [rad]
-    motor_states: Out[JointState]   # full 29-DOF state, for the ACT observation
-    reach_done: In[Bool]            # (collection_mode) IK settled -> right arm goes compliant
-    disconnect: In[Bool]            # (enable_disconnect) operator cut: ramp weight->0, hold, stay alive
+    arm_target: In[JointState]  # 14 arm joint targets (left 7, right 7) [rad]
+    motor_states: Out[JointState]  # full 29-DOF state, for the ACT observation
+    reach_done: In[Bool]  # (collection_mode) IK settled -> right arm goes compliant
+    disconnect: In[Bool]  # (enable_disconnect) operator cut: ramp weight->0, hold, stay alive
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         # Kinesthetic-collection compliant state (only used when collection_mode).
-        self._compliant = False          # right arm hand-guidable (kp->0 + gravity tau)
-        self._comp_t0 = 0.0              # kp-ramp start time
+        self._compliant = False  # right arm hand-guidable (kp->0 + gravity tau)
+        self._comp_t0 = 0.0  # kp-ramp start time
         self._grav_model = None
         self._grav_data = None
-        if self.config.collection_mode:
-            import pinocchio  # noqa: F401  (ensure available; used in the loop)
+        # The same reduced right-arm model serves both consumers of g(q): the compliant
+        # hand-guide (collection_mode) and the stiff-tracking feedforward (gravity_ff).
+        if self.config.collection_mode or self.config.gravity_ff:
+            import pinocchio
 
             from dimos.robot.unitree.g1.ik_reach.right_arm_model import (
                 DEFAULT_URDF,
                 load_g1_right_arm_ik,
             )
+
             urdf = self.config.urdf_path or str(DEFAULT_URDF)
             _arm = load_g1_right_arm_ik(urdf)
-            self._grav_model = _arm.ik.model      # reduced 7-DOF right arm (q[0..6] = motors 22-28)
+            self._grav_model = _arm.ik.model  # reduced 7-DOF right arm (q[0..6] = motors 22-28)
+            # Fold the real end-effector payload into the last link BEFORE createData():
+            # pinocchio.Data caches inertia-derived quantities, so it must be built after.
+            extra = float(self.config.tip_extra_mass_kg)
+            if extra > 0.0:
+                com = np.asarray(self.config.tip_extra_com_xyz, dtype=np.float64)
+                if com.shape != (3,) or not np.all(np.isfinite(com)) or not np.isfinite(extra):
+                    raise ValueError(
+                        f"tip_extra_mass_kg / tip_extra_com_xyz malformed: {extra!r} {com!r}"
+                    )
+                last = self._grav_model.njoints - 1  # wrist-yaw: the frame the payload hangs off
+                before = float(self._grav_model.inertias[last].mass)
+                # Point mass: rotational inertia is irrelevant here — g(q) is RNEA with
+                # v=a=0, where only mass and CoM lever contribute.
+                self._grav_model.inertias[last] = self._grav_model.inertias[
+                    last
+                ] + pinocchio.Inertia(extra, com, np.zeros((3, 3)))
+                logger.warning(
+                    "G1ArmSdkConnection: gravity model tip payload +%.3f kg at %s "
+                    "(last link %.3f -> %.3f kg). URDF models a 0.170 kg rubber hand only.",
+                    extra,
+                    list(com),
+                    before,
+                    float(self._grav_model.inertias[last].mass),
+                )
             self._grav_data = self._grav_model.createData()
         self._publisher: ChannelPublisher | None = None
         self._subscriber: ChannelSubscriber | None = None
@@ -166,17 +253,28 @@ class G1ArmSdkConnection(Module):
         self._low_state: Any = None
         self._crc: CRC | None = None
         self._mode_machine: int | None = None
+        self._mm_warned = False
+        self._runaway = False
+        self._target_epoch = 0  # bumped on every /g1/arm_target
+        self._seen_epoch = 0
+        self._prev_gap = 0.0
+        from dimos.robot.unitree.g1.act.phase_voice import LogAnnouncer, PhaseVoice
+
+        self._voice = PhaseVoice(LogAnnouncer())
+        from dimos.robot.unitree.g1.act.phase_voice import LogAnnouncer, PhaseVoice
+
+        self._voice = PhaseVoice(LogAnnouncer())
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread: Thread | None = None
         self._target_q: np.ndarray | None = None  # 14-vector ACT arm target [rad]
         self._t_start: float = 0.0
         # Operator-disconnect (2-stage stop) state.
-        self._disconnect = False         # True => ramp weight->0 + hold, stay alive
-        self._disc_t0 = 0.0              # disconnect-ramp start time
-        self._weight_at_disc = 1.0       # weight value when disconnect fired (ramp from here)
-        self._disc_logged = False        # log "transmission cut" once weight reaches 0
-        self._last_weight = 0.0          # last weight commanded (so stop() ramps from here, not 1.0)
+        self._disconnect = False  # True => ramp weight->0 + hold, stay alive
+        self._disc_t0 = 0.0  # disconnect-ramp start time
+        self._weight_at_disc = 1.0  # weight value when disconnect fired (ramp from here)
+        self._disc_logged = False  # log "transmission cut" once weight reaches 0
+        self._last_weight = 0.0  # last weight commanded (so stop() ramps from here, not 1.0)
 
     @rpc
     def start(self) -> None:
@@ -230,8 +328,10 @@ class G1ArmSdkConnection(Module):
                 # Slew (at the safe velocity limit) to the dataset start pose so the
                 # policy begins in-distribution, instead of holding the current pose.
                 self._target_q = np.array([float(x) for x in init])
-                logger.info(f"arm_sdk: slewing to configured initial_arm_pose (max move "
-                            f"{float(np.max(np.abs(self._target_q - arm_q))):.3f} rad)")
+                logger.info(
+                    f"arm_sdk: slewing to configured initial_arm_pose (max move "
+                    f"{float(np.max(np.abs(self._target_q - arm_q))):.3f} rad)"
+                )
             else:
                 self._target_q = arm_q.copy()  # hold current pose until ACT sends targets
             # Pin the waist command to the current pose ONCE; it is held thereafter.
@@ -239,7 +339,15 @@ class G1ArmSdkConnection(Module):
                 self._low_cmd.motor_cmd[i].q = float(self._low_state.motor_state[i].q)
                 self._low_cmd.motor_cmd[i].dq = 0.0
                 self._low_cmd.motor_cmd[i].tau = 0.0
-        logger.info(f"arm_sdk ready (mode_machine={self._mode_machine}); holding current upper-body pose")
+        logger.info(
+            f"arm_sdk ready (mode_machine={self._mode_machine}); holding current upper-body pose"
+        )
+        if self.config.voice:
+            from dimos.robot.unitree.g1.act.phase_voice import build_phase_voice
+
+            self._voice = build_phase_voice(
+                True, self.config.voice_nic, init_dds=False, volume=self.config.voice_volume
+            )
 
         self.register_disposable(Disposable(self.arm_target.subscribe(self._on_arm_target)))
         if self.config.collection_mode:
@@ -255,6 +363,14 @@ class G1ArmSdkConnection(Module):
             rate_hz=self.config.publish_rate_hz,
             weight_ramp_s=self.config.weight_ramp_s,
             arm_velocity_limit=self.config.arm_velocity_limit,
+            kp_arm=self.config.kp_arm,
+            # Explicit in the log: gravity_ff silently doing nothing (model failed to load)
+            # looks exactly like gravity_ff having no effect on the droop.
+            gravity_ff=(
+                f"ON x{self.config.gravity_tau_scale:g}"
+                if (self.config.gravity_ff and self._grav_model is not None)
+                else ("REQUESTED but NO MODEL" if self.config.gravity_ff else "off")
+            ),
         )
 
     @rpc
@@ -265,7 +381,9 @@ class G1ArmSdkConnection(Module):
         with self._lock:
             self._compliant = False
         if self.config.collection_mode:
-            time.sleep(2.0 * (1.0 / float(self.config.publish_rate_hz)) + 0.05)  # let a few cycles re-stiffen
+            time.sleep(
+                2.0 * (1.0 / float(self.config.publish_rate_hz)) + 0.05
+            )  # let a few cycles re-stiffen
         self._stop_event.set()
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=2.0)
@@ -314,6 +432,18 @@ class G1ArmSdkConnection(Module):
             self._low_state = msg
             if self._mode_machine is None:
                 self._mode_machine = msg.mode_machine
+            elif msg.mode_machine != self._mode_machine and not self._mm_warned:
+                # We latch mode_machine at startup and echo it in every LowCmd. If the robot
+                # switches mode, our echoed value goes stale and the robot can stop honouring
+                # rt/arm_sdk -- the arm reverts to the onboard controller and swings on its
+                # own. Surfacing the change is how we tell that apart from a rogue publisher.
+                self._mm_warned = True
+                logger.error(
+                    f"G1ArmSdkConnection: robot mode_machine CHANGED "
+                    f"{self._mode_machine} -> {msg.mode_machine}. arm_sdk commands may be "
+                    "ignored while this holds; the arm can move on its own. STOP and re-do "
+                    "the startup sequence (L2+B, L2+Up, R1+Y)."
+                )
 
     def _on_reach_done(self, _msg: Bool) -> None:
         # Collection: the IK reach settled at the pre-grasp -> make the RIGHT arm
@@ -322,7 +452,9 @@ class G1ArmSdkConnection(Module):
             if not self._compliant:
                 self._compliant = True
                 self._comp_t0 = time.perf_counter()
-        logger.info("G1ArmSdkConnection: reach_done -> RIGHT arm compliant (hand-guide; support it).")
+        logger.info(
+            "G1ArmSdkConnection: reach_done -> RIGHT arm compliant (hand-guide; support it)."
+        )
 
     def _on_disconnect(self, msg: Bool) -> None:
         # Operator pressed 'd': cut G1 transmission. Ramp weight->0 from its current
@@ -356,6 +488,7 @@ class G1ArmSdkConnection(Module):
             return
         with self._lock:
             self._target_q = target
+            self._target_epoch += 1
 
     def _clip_to_measured(self, target_q: np.ndarray, measured_q: np.ndarray) -> np.ndarray:
         """Scale (target - measured) so the largest joint step <= vel_limit * dt.
@@ -401,13 +534,61 @@ class G1ArmSdkConnection(Module):
                                 "back on the onboard controller). Safe to quit the program ('q')."
                             )
                     else:
+                        # Runaway guard: a large target-vs-measured gap means the robot moved
+                        # the arm itself (arm_sdk not being honoured). Slewing back into that
+                        # gap is a high-speed swing through whatever is now in the way, so
+                        # re-anchor onto where the arm actually is and hold there instead.
+                        gap = float(np.max(np.abs(target - measured)))
+                        if self._target_epoch != self._seen_epoch:
+                            # A newly commanded pose. The gap it opens is intentional, so
+                            # clear any latch and let the arm slew there.
+                            self._seen_epoch = self._target_epoch
+                            self._prev_gap = gap
+                            if self._runaway:
+                                self._runaway = False
+                                logger.info(
+                                    "G1ArmSdkConnection: new arm_target received; runaway latch "
+                                    "cleared, tracking resumed."
+                                )
+                        growing = gap > self._prev_gap + self.config.runaway_growth_rad
+                        self._prev_gap = gap
+                        if (
+                            self.config.runaway_release
+                            and not self._runaway
+                            and growing
+                            and gap > self.config.runaway_track_err_rad
+                        ):
+                            if True:
+                                self._runaway = True
+                                logger.error(
+                                    f"G1ArmSdkConnection: RUNAWAY -- measured pose is {gap:.3f} rad "
+                                    f"({np.degrees(gap):.0f} deg) from the commanded target; the arm "
+                                    "was moved by something other than us. Re-anchoring to the "
+                                    "measured pose and HOLDING (not slewing back). Re-click to resume."
+                                )
+                                self._voice.say("腕の制御を失いました。その場で保持します")
+                        if self._runaway:
+                            # Latched until a new arm_target arrives -- re-anchoring makes the
+                            # gap zero, so clearing on gap alone would unlatch instantly and the
+                            # hold would never actually hold.
+                            self._target_q = measured.copy()
+                            self._prev_gap = 0.0
+                            target = measured
                         clipped = self._clip_to_measured(target, measured)
                     # Collection: RIGHT arm (motors 22-28 == _ARM_IDX[7:14]) compliant.
                     comp = self._compliant and not self._disconnect
+                    # Gravity feedforward during stiff tracking. Dropped while disconnecting:
+                    # the upper body is being handed back to the onboard controller (weight
+                    # ramping to 0), so injecting torque there would fight the handover.
+                    grav_ff = self.config.gravity_ff and not self._disconnect
                     g = None
-                    if comp and self._grav_model is not None:
-                        a_ramp = min(1.0, (now - self._comp_t0) / max(1e-3, self.config.compliant_kp_ramp_s))
+                    if comp:
+                        a_ramp = min(
+                            1.0, (now - self._comp_t0) / max(1e-3, self.config.compliant_kp_ramp_s)
+                        )
+                    if (comp or grav_ff) and self._grav_model is not None:
                         import pinocchio
+
                         g = pinocchio.computeGeneralizedGravity(
                             self._grav_model, self._grav_data, measured[7:14].astype(np.float64)
                         )
@@ -417,16 +598,29 @@ class G1ArmSdkConnection(Module):
                         if comp and i >= 22:  # right-arm joint -> compliant (hand-guided)
                             self._low_cmd.motor_cmd[i].kp = float(base_kp * (1.0 - a_ramp))
                             self._low_cmd.motor_cmd[i].kd = float(self.config.kd_compliant)
-                            self._low_cmd.motor_cmd[i].q = float(measured[k])  # follow measured (no position fight)
+                            self._low_cmd.motor_cmd[i].q = float(
+                                measured[k]
+                            )  # follow measured (no position fight)
                             self._low_cmd.motor_cmd[i].dq = 0.0
-                            self._low_cmd.motor_cmd[i].tau = float(g[k - 7]) * self.config.gravity_tau_scale
-                        else:                 # stiff position track (left arm always; right when not compliant)
-                            if i >= 22:       # restore right-arm gains after compliant
+                            self._low_cmd.motor_cmd[i].tau = (
+                                float(g[k - 7]) * self.config.gravity_tau_scale
+                            )
+                        else:  # stiff position track (left arm always; right when not compliant)
+                            if i >= 22:  # restore right-arm gains after compliant
                                 self._low_cmd.motor_cmd[i].kp = float(base_kp)
-                                self._low_cmd.motor_cmd[i].kd = float(self.config.kd_wrist if is_wrist else self.config.kd_arm)
+                                self._low_cmd.motor_cmd[i].kd = float(
+                                    self.config.kd_wrist if is_wrist else self.config.kd_arm
+                                )
                             self._low_cmd.motor_cmd[i].q = float(clipped[k])
                             self._low_cmd.motor_cmd[i].dq = 0.0
-                            self._low_cmd.motor_cmd[i].tau = 0.0
+                            # g(q) covers the RIGHT arm only (motors 22-28): it is the reduced
+                            # 7-DOF model, and g[k-7] is only indexable for k >= 7. Left arm and
+                            # waist keep tau=0 (they hold static poses, no droop problem).
+                            self._low_cmd.motor_cmd[i].tau = (
+                                float(g[k - 7]) * self.config.gravity_tau_scale
+                                if (grav_ff and i >= 22 and g is not None)
+                                else 0.0
+                            )
                     self._low_cmd.motor_cmd[_WEIGHT_IDX].q = weight
                     self._last_weight = weight  # so stop() ramps from here, not always 1.0
                     if self._mode_machine is not None:
@@ -451,7 +645,9 @@ class G1ArmSdkConnection(Module):
                     names = list(_G1_JOINTS)
                     pos = [float(low_state.motor_state[i].q) for i in range(_NUM_MOTORS)]
                     vel = [float(low_state.motor_state[i].dq) for i in range(_NUM_MOTORS)]
-                    js = JointState(name=names, position=pos, velocity=vel, effort=[0.0] * _NUM_MOTORS)
+                    js = JointState(
+                        name=names, position=pos, velocity=vel, effort=[0.0] * _NUM_MOTORS
+                    )
                     js.frame_id = self.config.frame_id
                     self.motor_states.publish(js)
 

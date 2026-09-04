@@ -1,7 +1,7 @@
 # Unitree G1 — ラップトップ単体でのクリック移動（Orboh版手順）
 
 **検証済み: 2026-06-05（実機G1）** — PCのdimosだけでG1をクリックナビゲーションさせる手順。
-公式の [`index.md`](./index.md) はロボットのNX上でdimosを動かす構成（`unitree-g1-nav-onboard`）だが、本手順は **G1側に何もインストールしない**。
+公式の [`docs/platforms/humanoid/g1/index.md`](/docs/platforms/humanoid/g1/index.md#L83) はロボットのNX上でdimosを動かす構成（`unitree-g1-nav-onboard`）だが、本手順は **G1側に何もインストールしない**。
 
 使用ブループリント: **`unitree-g1-nav-laptop`**
 （`unitree-g1-nav-onboard` のバリアント。LiDAR受信IPとDDSのNICをPC側で自動検出する）

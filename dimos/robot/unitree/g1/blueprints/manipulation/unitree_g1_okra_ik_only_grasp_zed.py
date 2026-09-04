@@ -66,7 +66,7 @@ from dimos.visualization.vis_module import vis_module
 
 logger = setup_logger()
 
-# ---- robot side (identical to unitree_g1_okra_ik_only_grasp.py) -------------
+# robot side (identical to unitree_g1_okra_ik_only_grasp.py)
 _NIC = os.getenv("ROBOT_INTERFACE", "enp46s0")
 _LIVE = os.getenv("IK_REACH_LIVE", "").strip() == "1"
 _ARM_VEL_LIMIT = float(os.getenv("IK_ARM_VEL_LIMIT", "20.0"))
@@ -132,7 +132,7 @@ _DEX1_PREFIX = os.getenv("OKRA_DEX1_PREFIX", "rt/dex1/left").strip()
 _GRIP_KP = float(os.getenv("OKRA_GRIP_KP", "5.0"))
 _GRIP_KD = float(os.getenv("OKRA_GRIP_KD", "0.05"))
 
-# ---- chest-ZED camera (same knobs as unitree_g1_zed_ik_view.py) -------------
+# chest-ZED camera (same knobs as unitree_g1_zed_ik_view.py)
 _ZED_SERIAL = os.getenv("ZED_SERIAL", "").strip() or None
 _PC_FPS = float(os.getenv("ZED_PC_FPS", "3.0"))
 _DEPTH_MODE = os.getenv("ZED_DEPTH_MODE", "NEURAL")
@@ -148,8 +148,7 @@ _DEPTH_TRUNC = float(os.getenv("ZED_DEPTH_TRUNC", "0.8"))
 # "x,y,z,roll,pitch,yaw" [m]/[rad]. Default = 2026-07-16 measurement (see module
 # docstring). PLACEHOLDER until hand-eye calibration; override via env to tune.
 _ZED_MOUNT = [
-    float(v)
-    for v in os.getenv("ZED_MOUNT_XYZRPY", "0.109,0.030,0.248,0.0,-0.0209,0.0").split(",")
+    float(v) for v in os.getenv("ZED_MOUNT_XYZRPY", "0.109,0.030,0.248,0.0,-0.0209,0.0").split(",")
 ]
 
 # Tool-tip offset from the wrist (right_wrist_yaw_joint), WRIST frame [m] —
@@ -161,10 +160,7 @@ _ZED_MOUNT = [
 # notch relative to the bare fingertip and set e.g.
 # OKRA_TIP_OFFSET_XYZ="0.21,-0.03,0" (sign of y: verify with one reach, flip
 # if the miss doubles).
-_TIP_OFFSET = [
-    float(v)
-    for v in os.getenv("OKRA_TIP_OFFSET_XYZ", "0.1845,-0.003,0.0").split(",")
-]
+_TIP_OFFSET = [float(v) for v in os.getenv("OKRA_TIP_OFFSET_XYZ", "0.1845,-0.003,0.0").split(",")]
 
 
 def _camera_info_overlay(ci):  # type: ignore[no-untyped-def]
