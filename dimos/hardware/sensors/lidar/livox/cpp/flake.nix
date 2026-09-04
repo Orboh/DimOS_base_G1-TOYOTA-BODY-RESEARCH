@@ -23,13 +23,16 @@
 
         livox-sdk2 = pkgs.stdenv.mkDerivation rec {
           pname = "livox-sdk2";
-          version = "1.2.5";
+          # 1.3.1 adds kLivoxLidarTypeMid360s (dev_type 35).  1.2.5's enum stops
+          # at PA=16, so a Mid-360S is dropped during device detection and the
+          # SDK never registers it — no point cloud, no IMU, no error message.
+          version = "1.3.1";
 
           src = pkgs.fetchFromGitHub {
             owner = "Livox-SDK";
             repo = "Livox-SDK2";
             rev = "v${version}";
-            hash = "sha256-NGscO/vLiQ17yQJtdPyFzhhMGE89AJ9kTL5cSun/bpU=";
+            hash = "sha256-XM2jhytXbLVd3jkeZrpxDjegPWPiXCaVQ3nYm1DD928=";
           };
 
           # macOS socket fixes (SO_RCVBUF too large, broadcast bind fails).
