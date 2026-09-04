@@ -1,286 +1,215 @@
 <div align="center">
 
-<img width="1000" alt="banner_bordered_trimmed" src="https://github.com/user-attachments/assets/64f13b39-da06-4f58-add0-cfc44f04db4e" />
+<img src="assets/readme/okra_g1_field.jpg" alt="オクラ畑の畝間に立つ Unitree G1" width="100%">
 
-<h2>The Agentive Operating System for Physical Space</h2>
+# オクラ収穫ヒューマノイド — Unitree G1 × DimOS
 
-[![Discord](https://img.shields.io/discord/1341146487186391173?style=flat-square&logo=discord&logoColor=white&label=Discord&color=5865F2)](https://discord.gg/dimos)
-[![Stars](https://img.shields.io/github/stars/dimensionalOS/dimos?style=flat-square)](https://github.com/dimensionalOS/dimos/stargazers)
-[![Forks](https://img.shields.io/github/forks/dimensionalOS/dimos?style=flat-square)](https://github.com/dimensionalOS/dimos/fork)
-[![Contributors](https://img.shields.io/github/contributors/dimensionalOS/dimos?style=flat-square)](https://github.com/dimensionalOS/dimos/graphs/contributors)
-![Nix](https://img.shields.io/badge/Nix-flakes-5277C3?style=flat-square&logo=NixOS&logoColor=white)
-![NixOS](https://img.shields.io/badge/NixOS-supported-5277C3?style=flat-square&logo=NixOS&logoColor=white)
-![CUDA](https://img.shields.io/badge/CUDA-supported-76B900?style=flat-square&logo=nvidia&logoColor=white)
-[![Docker](https://img.shields.io/badge/Docker-ready-2496ED?style=flat-square&logo=docker&logoColor=white)](https://www.docker.com/)
-
-<a href="https://trendshift.io/repositories/23169" target="_blank"><img src="https://trendshift.io/api/badge/repositories/23169" alt="dimensionalOS%2Fdimos | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-
-<big><big>
-
-[Hardware](#hardware) •
-[Installation](#installation) •
-[Agent CLI & MCP](#agent-cli-and-mcp) •
-[Blueprints](#blueprints) •
-[Development](#development)
-
-⚠️ **Pre-Release Beta** ⚠️
-
-</big></big>
+**畑に立った人型ロボットが、支柱の間から実ったオクラを1本選び、刃を差し込んで切り落とす。**
+そのために必要なものだけを積んだリポジトリです。
 
 </div>
 
-# Intro
+---
 
-Dimensional is the modern operating system for generalist robotics. We are setting the next-generation SDK standard, integrating with the majority of robot manufacturers.
+## これは何か
 
-With a simple install and no ROS required, build physical applications entirely in python that run on any humanoid, quadruped, or drone.
+鹿児島県の圃場で動かしている、**Unitree G1 によるオクラ収穫システム**の実装です。
+「オクラを見つける → 腕を伸ばす → 切って掴む」を、実機で通すところまで作り込んであります。
 
-Dimensional is agent native -- "vibecode" your robots in natural language and build (local & hosted) multi-agent systems that work seamlessly with your hardware. Agents run as native modules — subscribing to any embedded stream, from perception (lidar, camera) and spatial memory down to control loops and motor drivers.
-<table>
-  <tr>
-    <td align="center" width="50%">
-      <a href="docs/capabilities/navigation/native/index.md"><img src="assets/readme/navigation.gif" alt="Navigation" width="100%"></a>
-    </td>
-    <td align="center" width="50%">
-      <img src="assets/readme/perception.png" alt="Perception" width="100%">
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
-      <h3><a href="docs/capabilities/navigation/native/index.md">Navigation and Mapping</a></h3>
-      SLAM, dynamic obstacle avoidance, route planning, and autonomous exploration — via both DimOS native and ROS<br><a href="https://x.com/stash_pomichter/status/2010471593806545367">Watch video</a>
-    </td>
-    <td align="center" width="50%">
-      <h3>Perception</h3>
-      Detectors, 3d projections, VLMs, Audio processing
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
-      <a href="docs/capabilities/agents/readme.md"><img src="assets/readme/agentic_control.gif" alt="Agents" width="100%"></a>
-    </td>
-    <td align="center" width="50%">
-      <img src="assets/readme/spatial_memory.gif" alt="Spatial Memory" width="100%">
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
-      <h3><a href="docs/capabilities/agents/readme.md">Agentive Control, MCP</a></h3>
-      "hey Robot, go find the kitchen"<br><a href="https://x.com/stash_pomichter/status/2015912688854200322">Watch video</a>
-    </td>
-    <td align="center" width="50%">
-      <h3>Spatial Memory</a></h3>
-      Spatio-temporal RAG, Dynamic memory, Object localization and permanence<br><a href="https://x.com/stash_pomichter/status/1980741077205414328">Watch video</a>
-    </td>
-  </tr>
-</table>
+- **腕は7自由度の逆運動学で、狙った1点へ一発で伸ばす。** 到達したら刃を自動で閉じる。
+- **狙う点は「人がクリック」でも「YOLOが検出」でも同じ。** 検出器の出力を人のクリックと
+  **完全に同一のメッセージ**にしたので、下流のIKは入力元が人かAIかを知らない。
+  自動と手動をワンスイッチで切り替えられる = 現場で詰まっても止まらない。
+- **最後の数センチは学習ポリシーに任せられる。** 手首カメラ映像から拡散ポリシー（UMI）が
+  手先を閉ループ微調整する経路も実装済み。
+- **畑はオフラインで、ネットも人手も足りない。** だから電源投入の順番から e-stop の構え方、
+  マルチキャスト経路の張り方まで、現場手順そのものをリポジトリに入れています。
 
+土台は [Dimensional](https://dimensionalos.com) の **DimOS** です（[謝辞](#謝辞)）。
+このフォークは G1 とオクラ収穫に必要なものだけを残し、他機種向けのコードは削除しています。
 
-# Hardware
+---
 
-<table>
-  <tr>
-    <td align="center" width="50%">
-      <h3>Humanoid</h3>
-      <img width="245" height="1" src="assets/readme/spacer.png">
-    </td>
-    <td align="center" width="50%">
-      <h3>Misc</h3>
-      <img width="245" height="1" src="assets/readme/spacer.png">
-    </td>
-  </tr>
+## 実機で確かめたこと（2026年7月）
 
-  <tr>
-    <td align="center" width="50%">
-      🟨 <a href="docs/platforms/humanoid/g1/index.md">Unitree G1</a><br>
-      🟨 <a href="docs/platforms/humanoid/g1/index_orboh_make.md">Unitree G1 (Orboh セットアップ)</a><br>
-    </td>
-    <td align="center" width="50%">
-      🟥 <a href="https://github.com/dimensionalOS/openFT-sensor">Force Torque Sensor</a><br>
-    </td>
-  </tr>
-</table>
-<br>
-<div align="right">
-🟩 stable 🟨 beta 🟧 alpha 🟥 experimental
+| 項目 | 結果 | 根拠 |
+|---|---|---|
+| 実機での把持 | クリック→IKリーチ→自動全閉まで **LIVE 成功**（2026-07-15） | [AGX_ORIN_PORT_SPEC.md](oda/AGX_ORIN_PORT_SPEC.md) |
+| 成功率 | **3/10**（位置ランダム・二重クリック確定方式・D435i構成、2026-07-22） | [REPORT_10TRIAL_2026-07-22.md](oda/REPORT_10TRIAL_2026-07-22.md) |
+| 位置精度 | **全試行でズレ2cm以内**。爪の開口4cmに対し、成功/失敗の境界まで到達 | [ERROR_BUDGET.md](oda/ERROR_BUDGET.md) |
+| 誤差の分解 | 誤差源9項目を実測で分解。上位2項（刃の+4cmオフセット／手首姿勢の不定）で**全体の8割**を占め、両方とも対策済み | [ERROR_BUDGET.md](oda/ERROR_BUDGET.md) |
+| 自動検出 | 農場画像でオクラ2本を conf 0.95 / 0.81 で検出。既定は DRY-RUN、Enterゲート越しでのみ発火 | [DEMO_PLAN_2026-07-24.md](oda/DEMO_PLAN_2026-07-24.md) |
+| 拡散ポリシー | 1ステップ **88ms**（要件100ms以下）でオフライン検証通過。実機統合は未 | [umi_diffusion/RUN.md](oda/umi_diffusion/RUN.md) |
 
-</div>
+> ズレの原因は人のクリックではありません。同じ的を2回狙うと**同じ方向に同じ量**ズレます。
+> 機体の幾何誤差（組立公差＋サーボたわみ）が主因で、次の一手はハンドアイ校正です。
+> 精度の問題は、すでに「最後の1〜2cm」まで来ています。
 
-> [!IMPORTANT]
-> 🤖 Direct your favorite Agent (OpenClaw, Claude Code, etc.) to [AGENTS.md](AGENTS.md) and our [CLI and MCP](#agent-cli-and-mcp) interfaces to start building powerful Dimensional applications.
+---
 
-# Installation
+## 仕組み
 
-## Interactive Install
-
-```sh skip
-curl -fsSL https://raw.githubusercontent.com/dimensionalOS/dimos/main/scripts/install.sh | bash
+```
+┌─────────── 知覚 ───────────┐  ┌──── 判断 ────┐  ┌──────── 動作 ────────┐
+ ZED Mini ──► YOLO seg 推論 ──► 3D点算出 ──► /clicked_point ──► IK reach ──► 把持
+  (胸部)      (okra11n-seg)     (点群投影)   (人クリックと同契約)  (固定向き)   (自動全閉)
+└────────────────────────────┘  └──────────────┘  └──────────────────────┘
+      ラップトップ in-process        ブリッジ or 人         ブループリント本体
 ```
 
-> See [`scripts/install.sh --help`](scripts/install.sh) for non-interactive and advanced options.
+**設計の勘所**
 
-## Manual System Install
+1. **`/clicked_point` という1本の契約**。YOLOブリッジが出すのは、人がビューアでクリックした
+   ときと同一の `PointStamped`。下流は入力元を区別しないので、自動化の失敗が把持の失敗に
+   ならない（人が代われば続行できる）。
+2. **手首の向きを毎回固定する**。7自由度の冗長性が「1発目は必ずズレる」の正体だったので、
+   成功姿勢の向きを固定目標にした（`OKRA_FIXED_ORI_XYZW`）。
+3. **安全は多重ゲート**。既定DRY-RUN／連続自動発火なし／Enterごとに1本／鮮度2秒／
+   0.8m超の点は拒否／ワークスペース外と関節90°超の delta はブループリントが拒否。
+4. **送信の継ぎ目は1か所**。実機への送信は `G1ArmSdkConnection`（250Hz、clip-to-measured、
+   weightランプ）に集約。制御ラインを増やしてもここは変えない。
 
-To set up your system dependencies, follow one of these guides:
+詳細: [PIPELINE_業務フロー.md](oda/PIPELINE_業務フロー.md)（P0〜P11のフェーズ表・データフロー・縮退プラン）
 
-- 🟩 [Ubuntu 22.04 / 24.04](docs/installation/ubuntu.md)
-- 🟩 [NixOS / General Linux](docs/installation/nix.md)
-- 🟧 [macOS](docs/installation/osx.md)
+---
 
-> Full system requirements, tested configs, and dependency tiers: [docs/requirements.md](docs/requirements.md)
+## 3つの制御ライン
 
-## Python Install
+| ライン | ブループリント | 標的の決め方 | 最後の数cm | 状態 |
+|---|---|---|---|---|
+| ① クリック→IK把持 | `unitree-g1-okra-ik-only-grasp` / `-zed` | 人が点群をクリック | スクリプト全閉 | **実機検証済** |
+| ② YOLO自動検出 | `unitree-g1-okra-ik-only-grasp-zed` ＋ [yolo_click_bridge.py](oda/yolo_click_bridge.py) | okra11n-seg のマスク重心 | スクリプト全閉 | 検出は動作／実機発火は未検証 |
+| ③ 拡散ポリシー微調整 | `unitree-g1-okra-ik-diffusion` | 人クリック（IKでpre-grasp） | 手首GoPro映像でUMI拡散ポリシーが閉ループ調整 | オフライン検証済 |
 
-### Quickstart
+ACT（Action Chunking with Transformers）ラインは `unitree-g1-okra-harvest` / `-collect` に、キネステティック教示による
+データ収集ごと残してあります（[STAGE_B_PLAN.md](dimos/robot/unitree/g1/act/STAGE_B_PLAN.md)）。
+
+---
+
+## ハードウェア
+
+| 部位 | 構成 | 備考 |
+|---|---|---|
+| 機体 | Unitree G1（29DOF・上半身のみ使用） | 腕は `arm_sdk` 経由、歩行は使わない |
+| ハンド | Dex1 グリッパ ＋ 収穫用カッター | 刃の前方オフセットは `OKRA_TIP_OFFSET_XYZ` で補正 |
+| カメラ（現行） | ZED Mini（胸部・PC直結USB3） | 画角要件のため2026-07-23にこちらへ転換 |
+| カメラ（従来） | RealSense D435i（頭部・Jetson NX でLCM中継） | `scripts/install_nx_cam_service.sh` でsystemd常駐化 |
+| 手首カメラ | GoPro / UVC（Elgato経由） | UMI拡散ポリシーの唯一の入力 |
+| LiDAR | Livox Mid-360 ＋ FastLIO2 | ナビゲーション系ライン用 |
+| 計算機 | ラップトップ（RTX 3070） | 移植先候補は Jetson AGX Orin 64GB（[移植仕様書](oda/AGX_ORIN_PORT_SPEC.md)） |
+
+---
+
+## 畑での動かし方
+
+オフライン環境向けの3ステップ。詳細は [README_FARM.md](oda/README_FARM.md) と
+[FARM_QUICKSTART.md](oda/FARM_QUICKSTART.md)、環境変数の一覧は
+[RUN_CHEATSHEET.md](oda/RUN_CHEATSHEET.md) にあります。
 
 ```bash
-uv venv --python "3.12"
-source .venv/bin/activate
-uv pip install 'dimos[base,unitree]'
+# 0) 準備: G1電源ON（刃は閉じてから）→ リモコン L2+↑ → R1+Y
+#    ZEDはUSB3ポート4-4へ、PCはAC電源、ロボットLANは有線、e-stop(L2+B)を手元に
 
-# Run the humanoid stack in simulation (no hardware needed)
-# NOTE: First run downloads the MuJoCo scene from LFS
-dimos --simulation run unitree-g1-sim
+# 1) 段階1 — DRY-RUN（腕は動かさず、検出した3D座標だけ表示）
+bash oda/start_zed_yolo_auto.sh
+
+# 2) 段階2 — ホバー（狙い点の5cm手前で停止。掴まずに奥行きを検証）
+bash oda/start_zed_yolo_auto.sh --hover
+
+# 3) 段階3 — 本番（IKリーチ＋自動全閉）
+bash oda/start_zed_yolo_auto.sh --live
 ```
+
+起動後は同じ端末で **Enter = オクラ1本を検出して収穫 / q+Enter = 全停止**
+（q+Enter でアプリとビューアも片付きます）。
+
+段階を飛ばさないこと。DRY-RUN → ホバー → 本番の順に上げるのが、この構成の安全設計です。
+試行のあいだは必ず腕を初期姿勢へ戻します（伸ばしっぱなしは事故になります）。
 
 ```bash
-# Install with simulation support
-uv pip install 'dimos[base,unitree,sim]'
-
-# Humanoid in MuJoCo simulation
-dimos --simulation run unitree-g1-sim
-
-# Humanoid + LLM agent + MCP server in simulation
-dimos --simulation run unitree-g1-agentic-sim
+.venv/bin/python oda/arm_home.py      # 爪を開いて腕を引く
+.venv/bin/python oda/gripper_open.py  # 爪だけ開く
 ```
+
+---
+
+## 主要ブループリント
 
 ```bash
-# Control a real robot (Unitree G1 over WebRTC)
-export ROBOT_IP=<YOUR_ROBOT_IP>
-dimos run unitree-g1-basic
+.venv/bin/dimos list                  # 全ブループリント一覧
 ```
 
-# Featured Runfiles
+| コマンド | 何をするか |
+|---|---|
+| `dimos run unitree-g1-okra-ik-only-grasp` | 頭部D435i、クリック→IKリーチ→スクリプト把持 |
+| `dimos run unitree-g1-okra-ik-only-grasp-zed` | 胸部ZED Mini版（現行の本番構成） |
+| `dimos run unitree-g1-okra-ik-diffusion` | IKでpre-grasp後、UMI拡散ポリシーが手先を微調整 |
+| `dimos run unitree-g1-okra-harvest` | クリック→IK→ACTで把持（学習ポリシーライン） |
+| `dimos run unitree-g1-okra-collect` | キネステティック教示によるデータ収集 |
+| `dimos run unitree-g1-mid360-fastlio` | Mid-360 LiDAR＋FastLIOのオドメトリ |
+| `dimos run unitree-g1-nav-laptop` | ラップトップ側からG1のナビゲーションスタックを回す |
+| `dimos --simulation run unitree-g1-sim` | 実機なしでMuJoCoシミュレーション |
 
-| Run command | What it does |
-|-------------|-------------|
-| `dimos --simulation run unitree-g1-sim` | Humanoid in MuJoCo simulation |
-| `dimos --simulation run unitree-g1-agentic-sim` | Humanoid agentic + MCP server in simulation |
-| `dimos run unitree-g1-okra-ik-only-grasp` | Okra harvesting — click a point, IK reach, grasp |
-| `dimos run unitree-g1-okra-ik-only-grasp-zed` | Okra harvesting — ZED + YOLO detection instead of clicking |
-| `dimos run unitree-g1-okra-ik-diffusion` | Okra harvesting — UMI diffusion policy |
-| `dimos run unitree-g1-mid360-fastlio` | Mid-360 LiDAR + FastLIO odometry |
-| `dimos run unitree-g1-nav-laptop` | G1 nav stack driven from the laptop |
-| `dimos run demo-camera` | Webcam demo — no hardware needed |
+---
 
-> Full blueprint docs: [docs/usage/blueprints.md](docs/usage/blueprints.md)
+## リポジトリ構成
 
-# Agent CLI and MCP
+```
+oda/                         オクラ案件の現場資産
+├── start_*.sh               畑でこれ1本叩けば全部起動するスクリプト
+├── run_okra_ik_only_grasp.py / yolo_click_bridge.py
+├── arm_home.py / gripper_*.py / gravity_calib.py    運用・診断ツール
+├── umi_diffusion/           拡散ポリシー推論サーバと前処理検証
+├── mujoco_sim/              オクラ畑シーンでの机上検証
+├── ZED_M_Depth_check/       ZEDの深度品質確認とYOLOファインチューン
+└── *.md                     計画書・運用手順・報告書・誤差予算
 
-The `dimos` CLI manages the full lifecycle — run blueprints, inspect state, interact with agents, and call skills via MCP.
+dimos/robot/unitree/g1/      G1本体の実装
+├── act/                     arm_sdk送信・グリッパ・IKリーチ・UMI/ACTブリッジ
+├── blueprints/manipulation/ unitree_g1_okra_*（収穫アプリ）
+├── blueprints/navigation/   Mid-360/FastLIO・ナビゲーション
+└── IK_REACH_PLAN.md         IKリーチの設計・ICD・段階検証計画
 
-```bash
-dimos run unitree-g1-agentic --daemon    # Start in background
-dimos status                              # Check what's running
-dimos log -f                              # Follow logs
-dimos agent-send "explore the room"       # Send agent a command
-dimos mcp list-tools                      # List available MCP skills
-dimos mcp call relative_move --arg forward=0.5  # Call a skill directly
-dimos stop                                # Shut down
+scripts/                     記録・再生・校正・カメラ配信
+├── okra_kinesthetic_capture.py / okra_lerobot_writer.py / okra_export_view.py
+├── handeye_calib.py / g1_replay.py / act_service.py
+└── install_nx_cam_service.sh / *_zmq_publisher.py
+
+yokote/                      G1のカメラ・LiDAR不具合の実地調査報告（別ライン）
+docs/                        DimOS由来のドキュメント（英語）
 ```
 
-> Full CLI reference: [docs/usage/cli.md](docs/usage/cli.md)
+---
 
+## ドキュメント地図
 
-# Usage
+**まず読む**
+- [PIPELINE_業務フロー.md](oda/PIPELINE_業務フロー.md) — 収穫1本の全工程・担当・判定ゲート
+- [README_FARM.md](oda/README_FARM.md) — 畑での作業手順（3ステップ）
+- [RUN_CHEATSHEET.md](oda/RUN_CHEATSHEET.md) — 起動前チェック・環境変数・トラブル対処
 
-## Use DimOS as a Library
+**設計・計画**
+- [IK_REACH_PLAN.md](dimos/robot/unitree/g1/IK_REACH_PLAN.md) — IKリーチの設計とICD
+- [STAGE_B_PLAN.md](dimos/robot/unitree/g1/act/STAGE_B_PLAN.md) — ACTのDimOS移植計画
+- [SETUP.md](dimos/robot/unitree/g1/act/SETUP.md) — ACTを一から動かす手順
+- [umi_diffusion/RUN.md](oda/umi_diffusion/RUN.md) — 拡散ポリシーの起動と段階的ロールアウト
+- [AGX_ORIN_PORT_SPEC.md](oda/AGX_ORIN_PORT_SPEC.md) — Jetson AGX Orin への移植仕様
 
-See below a simple robot connection module that sends streams of continuous `cmd_vel` to the robot and receives `color_image` to a simple `Listener` module. DimOS Modules are subsystems on a robot that communicate with other modules using standardized messages.
+**運用・実績**
+- [FARM_QUICKSTART.md](oda/FARM_QUICKSTART.md) / [RUN_ZED_IK.md](oda/RUN_ZED_IK.md) / [RUN_ZED_YOLO_IK_AUTO.md](oda/RUN_ZED_YOLO_IK_AUTO.md)
+- [DEMO_PLAN_2026-07-24.md](oda/DEMO_PLAN_2026-07-24.md) — デモ当日の構成と台本
+- [ERROR_BUDGET.md](oda/ERROR_BUDGET.md) — ズレの誤差予算（実測ベース）
+- [REPORT_10TRIAL_2026-07-22.md](oda/REPORT_10TRIAL_2026-07-22.md) — 10回テストの報告
+- [SETUP_THIS_PC.md](oda/SETUP_THIS_PC.md) — 開発PCの構築手順
 
-```py skip
-import threading, time, numpy as np
-from dimos.core.coordination.blueprints import autoconnect
-from dimos.core.core import rpc
-from dimos.core.module import Module
-from dimos.core.stream import In, Out
-from dimos.msgs.geometry_msgs import Twist
-from dimos.msgs.sensor_msgs import Image, ImageFormat
+**このリポジトリで作業するAIエージェント向け**
+- [AGENTS.md](AGENTS.md) — CLI・ブループリント・モジュール機構・スキル追加の作法
 
-class RobotConnection(Module):
-    cmd_vel: In[Twist]
-    color_image: Out[Image]
+---
 
-    @rpc
-    def start(self):
-        threading.Thread(target=self._image_loop, daemon=True).start()
+## 現場セットアップ
 
-    def _image_loop(self):
-        while True:
-            img = Image.from_numpy(
-                np.zeros((120, 160, 3), np.uint8),
-                format=ImageFormat.RGB,
-                frame_id="camera_optical",
-            )
-            self.color_image.publish(img)
-            time.sleep(0.2)
-
-class Listener(Module):
-    color_image: In[Image]
-
-    @rpc
-    def start(self):
-        self.color_image.subscribe(lambda img: print(f"image {img.width}x{img.height}"))
-
-if __name__ == "__main__":
-    autoconnect(
-        RobotConnection.blueprint(),
-        Listener.blueprint(),
-    ).build().loop()
-```
-
-## Blueprints
-
-Blueprints are instructions for how to construct and wire modules. We compose them with
-`autoconnect(...)`, which connects streams by `(name, type)` and returns a `Blueprint`.
-
-Blueprints can be composed, remapped, and have transports overridden if `autoconnect()` fails due to conflicting variable names or `In[]` and `Out[]` message types.
-
-A blueprint example that connects the image stream from a robot to an MCP-backed LLM agent for reasoning and action execution.
-```py skip
-from dimos.core.coordination.blueprints import autoconnect
-from dimos.core.transport import LCMTransport
-from dimos.msgs.sensor_msgs import Image
-from dimos.robot.unitree.g1.connection import G1Connection
-from dimos.agents.mcp.mcp_client import McpClient
-from dimos.agents.mcp.mcp_server import McpServer
-
-blueprint = autoconnect(
-    G1Connection.blueprint(),
-    McpServer.blueprint(),
-    McpClient.blueprint(),
-).transports({("color_image", Image): LCMTransport("/color_image", Image)})
-
-# Run the blueprint
-if __name__ == "__main__":
-    blueprint.build().loop()
-```
-
-## Library API
-
-- [Modules](docs/usage/modules.md)
-- [LCM](docs/usage/lcm.md)
-- [Blueprints](docs/usage/blueprints.md)
-- [Transports](docs/usage/transports/index.md) — LCM, SHM, DDS, ROS 2
-- [Data Streams](docs/usage/data_streams/README.md)
-- [Configuration](docs/usage/configuration.md)
-- [Visualization](docs/usage/visualization.md)
-
-## Demos
-
-<img src="assets/readme/dimos_demo.gif" alt="DimOS Demo" width="100%">
-
-## G1 初期セットアップ（Orboh — 新しい個体・NX再フラッシュ後は必須）
+### G1 初期セットアップ（Orboh — 新しい個体・NX再フラッシュ後は必須）
 
 > ⚠️ **G1の頭部カメラ配信は、ロボットのオンボードコンピュータ（NX, `192.168.123.164`）への
 > ワンタイムセットアップが必要です。** 新しいG1個体を触るとき、またはNXが再フラッシュされた後は、
@@ -299,7 +228,7 @@ scripts/install_nx_cam_service.sh
 - 詳細・トラブルシュート: `docs/platforms/humanoid/g1/index_orboh_make.md`
 - 任意（SSH快適化）: `ssh-copy-id -i ~/.ssh/id_ed25519_g1.pub unitree@192.168.123.164`
 
-## JetsonをWiFi AP化する手順（Orboh — 現場で無線直結したい時）
+### JetsonをWiFi AP化する手順（Orboh — 現場で無線直結したい時）
 
 **目的**: JetsonにノートPCを直接無線接続してSSHしたい場合、Jetson自身をWiFiアクセスポイント(AP)にする。
 社内WiFi / DHCPに依存せず、APモード時のJetsonは常に固定IP `192.168.12.1`。
@@ -314,7 +243,7 @@ scripts/install_nx_cam_service.sh
 > **WiFi以外の入口（有線 or モニタ直結）を必ず確保してから作業すること。**
 > AGX Orinには有線LANポートがあるので、下記「有線直結」を先に済ませるのが最も安全。
 
-### 1. インストール（Jetson上）
+#### 1. インストール（Jetson上）
 
 ```bash
 git clone https://github.com/oblique/create_ap && cd create_ap
@@ -326,14 +255,14 @@ sudo apt install -y hostapd dnsmasq network-manager
 > `apt install` 時に `hostapd.service failed to start` と出るのは**無害**。
 > create_ap は独自のプロセスとして hostapd を起動するため、systemd サービスとして上がる必要はない。
 
-### 2. WiFiインターフェース名とAPモード対応を確認
+#### 2. WiFiインターフェース名とAPモード対応を確認
 
 ```bash
 iw dev | grep Interface                          # AGX Orin: wlP1p1s0 / NX: wlan0
 iw list | grep -A8 "Supported interface modes"   # "* AP" があればOK
 ```
 
-### 3. `/etc/create_ap.conf` を編集
+#### 3. `/etc/create_ap.conf` を編集
 
 以下は SSID `agx` / パスワード `agx12345` の例（AGX Orin, IF名 `wlP1p1s0`）。
 IF名は手順2で確認した値に合わせること。
@@ -354,7 +283,7 @@ sudo sed -i \
 - `NO_VIRT=1` — AP仮想IF非対応アダプタ向け（安全側）
 - `INTERNET_IFACE=` — 空のまま
 
-### 4. WiFiを切断（STA/AP同時不可）
+#### 4. WiFiを切断（STA/AP同時不可）
 
 ```bash
 sudo nmcli device disconnect wlP1p1s0   # NXの場合は wlan0
@@ -362,7 +291,7 @@ sudo nmcli device disconnect wlP1p1s0   # NXの場合は wlan0
 
 STAのまま create_ap を起動しようとすると `can not be a station and an AP at the same time` エラーが出る。
 
-### 5. NMが起動時にWiFiを先取りしないよう全wifiプロファイルの自動接続をOFF
+#### 5. NMが起動時にWiFiを先取りしないよう全wifiプロファイルの自動接続をOFF
 
 ```bash
 for c in $(nmcli -t -f NAME,TYPE connection show | grep ":802-11-wireless$" | cut -d: -f1); do
@@ -370,7 +299,7 @@ for c in $(nmcli -t -f NAME,TYPE connection show | grep ":802-11-wireless$" | cu
 done
 ```
 
-### 6. create_ap を有効化・起動
+#### 6. create_ap を有効化・起動
 
 ```bash
 sudo systemctl enable --now create_ap
@@ -378,7 +307,7 @@ sudo systemctl enable --now create_ap
 
 再起動後も自動でAPが立ち上がる。
 
-### 接続方法
+#### 接続方法
 
 ノートPCのWiFiを `agx`（パスワード `agx12345`）に繋ぎ、SSHする。
 
@@ -386,7 +315,7 @@ sudo systemctl enable --now create_ap
 ssh tbr@192.168.12.1    # AGX Orin の例。ユーザー名は各機体に合わせる
 ```
 
-### 有線直結（強く推奨 — ロックアウト防止・救出用）
+#### 有線直結（強く推奨 — ロックアウト防止・救出用）
 
 AGX Orinの有線 `eno1` には NetworkManager プロファイル「Wired connection 1」で
 **静的 `192.168.123.222`** が設定済み（再起動後も維持）。
@@ -399,7 +328,7 @@ ssh tbr@192.168.123.222    # WiFiの状態に関わらず常に到達できる
 - AP化作業中はこの有線でSSHしながら作業すると安全
 - AP切り替え失敗時の救出にも使える
 
-### インターネットが必要になったとき（AP ⇄ 通常WiFi切替）
+#### インターネットが必要になったとき（AP ⇄ 通常WiFi切替）
 
 ```bash
 # 一時的に社内WiFiに戻す（ネット復活。DHCPでIPは変わる）
@@ -420,7 +349,7 @@ for c in $(nmcli -t -f NAME,TYPE connection show | grep ":802-11-wireless$" | cu
 done
 ```
 
-### 動作確認（実機検証済み 2026-06-10）
+#### 動作確認（実機検証済み 2026-06-10）
 
 AGX Orinを電源OFF→ONしても `create_ap` が自動起動することを確認済み。
 
@@ -432,26 +361,55 @@ ip addr show wlP1p1s0            # → inet 192.168.12.1/24 が割り当て済�
 
 `agx` SSID が信号強度100で発信されていること、ノートPCから `ssh tbr@192.168.12.1` で到達できることを確認済み。
 
-# Development
 
-## Develop on DimOS
+---
 
-```sh skip
-export GIT_LFS_SKIP_SMUDGE=1
-git clone https://github.com/dimensionalOS/dimos.git
-cd dimos
+## 開発
 
-# Run the default test suite (uv run syncs deps on demand; --all-groups
-# only needed for self-hosted tests / mypy — see docs/development/testing.md)
+```bash
+# 依存の同期（uv 管理・Python 3.12）
+uv sync --extra all
+
+# テスト（fast のみ。self_hosted は実機/LFSが必要）
 uv run pytest --numprocesses=auto dimos
+
+# 型チェック
+uv run mypy dimos
 ```
 
+- インストール手順: [docs/installation/](docs/installation/)（[Ubuntu](docs/installation/ubuntu.md) / [macOS](docs/installation/osx.md) / [Nix](docs/installation/nix.md)）、対話インストーラは `scripts/install.sh`
+- テストの分類と流し方: [docs/development/testing.md](docs/development/testing.md)
+- モジュールとブループリントの書き方: [docs/usage/modules.md](docs/usage/modules.md) / [docs/usage/blueprints.md](docs/usage/blueprints.md)
+- G1 のプラットフォーム資料: [docs/platforms/humanoid/g1/index.md](docs/platforms/humanoid/g1/index.md) / [Orboh 個体のセットアップ](docs/platforms/humanoid/g1/index_orboh_make.md)
 
-## Multi Language Support
+新しいブループリントを足したら、レジストリを再生成してください。
 
-Python is our glue and prototyping language, but we support many languages via LCM interop.
+```bash
+uv run pytest dimos/robot/test_all_blueprints_generation.py   # all_blueprints.py を自動生成
+```
 
-Check the language interop examples upstream:
-- [C++](https://github.com/dimensionalOS/dimos/tree/main/examples/language-interop/cpp)
-- [Lua](https://github.com/dimensionalOS/dimos/tree/main/examples/language-interop/lua)
-- [TypeScript](https://github.com/dimensionalOS/dimos/tree/main/examples/language-interop/ts)
+---
+
+## 謝辞
+
+本リポジトリは [Dimensional Inc.](https://dimensionalos.com) が開発する **DimOS**
+（[dimensionalOS/dimos](https://github.com/dimensionalOS/dimos), Apache-2.0）のフォークです。
+
+モジュール／ブループリント機構、LCMトランスポート、Pinocchio による逆運動学、点群・地図・
+Rerun 可視化、そして実機に安全に送信するための継ぎ目——農業ロボットを作るうえで本来なら
+何ヶ月もかかる土台が、最初から揃っていました。そのおかげで私たちは「畑でオクラを1本掴む」
+という一点に集中でき、フォークから実機把持まで数ヶ月で到達できました。
+
+DimOS をオープンソースとして公開してくれている Dimensional のチームに深く感謝します。
+**Thank you, Dimensional.**
+
+オクラ収穫に関するコード（`oda/`, `dimos/robot/unitree/g1/act/`, `unitree_g1_okra_*` 等）と
+現場運用ドキュメントは Orboh, Inc. が追加したものです。上流のドキュメントは
+[docs/](docs/) に残してあります。
+
+---
+
+## ライセンス
+
+[Apache License 2.0](LICENSE) — Copyright 2025 Dimensional Inc.
+本フォークでの追加・変更部分も同ライセンスで提供します。
