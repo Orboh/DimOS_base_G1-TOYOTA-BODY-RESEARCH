@@ -15,15 +15,15 @@ uv sync --extra all
 # List all runnable blueprints
 dimos list
 
-# --- Go2 quadruped ---
-dimos --replay run unitree-go2                  # perception + mapping, replay data
-dimos --replay run unitree-go2 --daemon         # same, backgrounded
-dimos --replay run unitree-go2-agentic          # + LLM agent (GPT-4o) + skills + MCP server
-dimos run unitree-go2-agentic --robot-ip 192.168.123.161  # real Go2 hardware
-
 # --- G1 humanoid ---
-dimos --simulation run unitree-g1-agentic-sim   # G1 in MuJoCo sim + agent + skills
+dimos --simulation run unitree-g1-sim           # perception + mapping in MuJoCo sim
+dimos --simulation run unitree-g1-agentic-sim   # + LLM agent (GPT-4o) + skills + MCP server
+dimos --simulation run unitree-g1-agentic-sim --daemon    # same, backgrounded
 dimos run unitree-g1-agentic --robot-ip 192.168.123.161   # real G1 hardware
+
+# --- Okra harvesting (this fork's main line of work) ---
+dimos run unitree-g1-okra-ik-only-grasp         # click a point -> IK reach -> grasp
+dimos run unitree-g1-okra-ik-only-grasp-zed     # + ZED/YOLO detection instead of clicking
 
 # --- Inspect & control ---
 dimos status
@@ -38,13 +38,13 @@ dimos restart          # stop + re-run with same original args
 
 | Blueprint | Robot | Hardware | Agent | MCP server | Notes |
 |-----------|-------|----------|-------|------------|-------|
-| `unitree-go2-agentic` | Go2 | real | via McpClient | ✓ | McpServer live |
+| `unitree-g1-agentic` | G1 | real | via McpClient | ✓ | McpServer live, FastLIO nav |
 | `unitree-g1-agentic-sim` | G1 | sim | GPT-4o (G1 prompt) | — | Full agentic sim, no real robot needed |
-| `xarm-perception-agent` | xArm | real | GPT-4o | — | Manipulation + perception + agent |
-| `xarm-perception-sim-agent` | xArm | sim | GPT-4o | — | Manipulation + perception + agent, sim |
-| `xarm7-planner-coordinator` | xArm7 | real | — | — | Trajectory planner coordinator |
-| `teleop-quest-xarm7` | xArm7 | real | — | — | Quest VR teleop |
-| `dual-xarm6-planner` | xArm6×2 | real | — | — | Dual-arm motion planner |
+| `unitree-g1-nav-laptop` | G1 | real | — | — | Nav stack driven from the laptop |
+| `unitree-g1-mid360-fastlio` | G1 | real | — | — | Mid-360 LiDAR + FastLIO odometry |
+| `unitree-g1-okra-ik-only-grasp` | G1 | real | — | — | Okra: click point → IK reach → grasp |
+| `unitree-g1-okra-ik-only-grasp-zed` | G1 | real | — | — | Okra: ZED + YOLO auto detection |
+| `unitree-g1-okra-ik-diffusion` | G1 | real | — | — | Okra: UMI diffusion policy |
 
 Run `dimos list` for the full list.
 
@@ -52,11 +52,11 @@ Run `dimos list` for the full list.
 
 ## Tools available to you (MCP)
 
-**MCP only works if the blueprint includes `McpServer`.** All shipped agentic blueprints use `McpServer` + `McpClient`. E.g.: `unitree-go2-agentic`.
+**MCP only works if the blueprint includes `McpServer`.** All shipped agentic blueprints use `McpServer` + `McpClient`. E.g.: `unitree-g1-agentic`.
 
 ```bash
 # Start the MCP-enabled blueprint first:
-dimos --replay run unitree-go2-agentic --daemon
+dimos --simulation run unitree-g1-agentic-sim --daemon
 
 # Then use MCP tools:
 dimos mcp list-tools                                              # all available skills as JSON
@@ -79,11 +79,10 @@ Use **both** `McpServer.blueprint()` and `McpClient.blueprint()`.
 from dimos.agents.mcp.mcp_client import McpClient
 from dimos.agents.mcp.mcp_server import McpServer
 
-unitree_go2_agentic = autoconnect(
-    unitree_go2_spatial,   # robot stack
-    McpServer.blueprint(), # HTTP MCP server — exposes all @skill methods on port 9990
-    McpClient.blueprint(), # LLM agent — fetches tools from McpServer
-    _common_agentic,       # skill containers
+unitree_g1_agentic = autoconnect(
+    unitree_g1,                # robot stack (connection + perception + mapping)
+    _g1_fastlio_navigation,    # LiDAR odometry + planner + movement manager
+    _agentic_skills,           # McpServer + McpClient(G1 prompt) + skill containers
 )
 ```
 
@@ -110,18 +109,15 @@ dimos/
 ├── robot/
 │   ├── cli/dimos.py         # CLI entry point (typer)
 │   ├── all_blueprints.py    # Auto-generated blueprint registry (DO NOT EDIT MANUALLY)
-│   ├── unitree/             # Unitree robot implementations (Go2, G1, B1)
-│   │   ├── unitree_skill_container.py  # Go2 @skill methods
-│   │   ├── go2/             # Go2 blueprints and connection
-│   │   └── g1/              # G1 blueprints, connection, sim, skills
-│   └── drone/               # Drone implementations (MAVLink + DJI)
-│       ├── connection_module.py        # MAVLink connection
-│       ├── camera_module.py            # DJI video stream
-│       ├── drone_tracking_module.py    # Visual object tracking
-│       └── drone_visual_servoing_controller.py  # Visual servoing
+│   └── unitree/             # Unitree robot implementations (G1 only in this fork)
+│       ├── connection.py    # WebRTC connection shared by the Unitree robots
+│       ├── type/            # LiDAR / odometry / map message conversion
+│       └── g1/              # G1 blueprints, connection, act (IK/gripper), sim, skills
+│           ├── act/         # Arm SDK, gripper, IK reach, UMI diffusion bridges
+│           └── blueprints/manipulation/  # unitree_g1_okra_* (okra harvesting)
 ├── agents/
 │   ├── agent.py             # Agent module (LangGraph-based)
-│   ├── system_prompt.py     # Default Go2 system prompt
+│   ├── system_prompt.py     # Robot-agnostic fallback system prompt
 │   ├── annotation.py        # @skill decorator
 │   ├── mcp/                 # McpServer, McpClient, McpAdapter
 │   └── skills/              # NavigationSkillContainer, SpeakSkill, etc.
@@ -281,10 +277,10 @@ my_skill_container = MySkillContainer.blueprint
 
 | Robot | File | Variable |
 |-------|------|----------|
-| Go2 (default) | `dimos/agents/system_prompt.py` | `SYSTEM_PROMPT` |
+| any (fallback) | `dimos/agents/system_prompt.py` | `SYSTEM_PROMPT` |
 | G1 humanoid | `dimos/robot/unitree/g1/system_prompt.py` | `G1_SYSTEM_PROMPT` |
 
-Pass the robot-specific prompt: `McpClient.blueprint(system_prompt=G1_SYSTEM_PROMPT)`. The default prompt is Go2-specific; using it on G1 causes hallucinated skills.
+Pass the robot-specific prompt: `McpClient.blueprint(system_prompt=G1_SYSTEM_PROMPT)` — the G1 blueprints already do this in `_agentic_skills`. The fallback prompt is robot-agnostic and lists no hardware-specific skills.
 
 ### RPC Wiring
 

@@ -80,45 +80,22 @@ Dimensional is agent native -- "vibecode" your robots in natural language and bu
 
 <table>
   <tr>
-    <td align="center" width="20%">
-      <h3>Quadruped</h3>
-      <img width="245" height="1" src="assets/readme/spacer.png">
-    </td>
-    <td align="center" width="20%">
+    <td align="center" width="50%">
       <h3>Humanoid</h3>
       <img width="245" height="1" src="assets/readme/spacer.png">
     </td>
-    <td align="center" width="20%">
-      <h3>Arm</h3>
-      <img width="245" height="1" src="assets/readme/spacer.png">
-    </td>
-    <td align="center" width="20%">
-      <h3>Drone</h3>
-      <img width="245" height="1" src="assets/readme/spacer.png">
-    </td>
-    <td align="center" width="20%">
+    <td align="center" width="50%">
       <h3>Misc</h3>
       <img width="245" height="1" src="assets/readme/spacer.png">
     </td>
   </tr>
 
   <tr>
-    <td align="center" width="20%">
-      🟩 <a href="docs/platforms/quadruped/go2/index.md">Unitree Go2 pro/air</a><br>
-      🟥 <a href="dimos/robot/unitree/b1">Unitree B1</a><br>
-    </td>
-    <td align="center" width="20%">
+    <td align="center" width="50%">
       🟨 <a href="docs/platforms/humanoid/g1/index.md">Unitree G1</a><br>
+      🟨 <a href="docs/platforms/humanoid/g1/index_orboh_make.md">Unitree G1 (Orboh セットアップ)</a><br>
     </td>
-    <td align="center" width="20%">
-      🟨 <a href="docs/capabilities/manipulation/readme.md">Xarm</a><br>
-      🟨 <a href="docs/capabilities/manipulation/readme.md">AgileX Piper</a><br>
-    </td>
-    <td align="center" width="20%">
-      🟧 <a href="dimos/robot/drone/README.md">MAVLink</a><br>
-      🟧 <a href="dimos/robot/drone/README.md">DJI Mavic</a><br>
-    </td>
-    <td align="center" width="20%">
+    <td align="center" width="50%">
       🟥 <a href="https://github.com/dimensionalOS/openFT-sensor">Force Torque Sensor</a><br>
     </td>
   </tr>
@@ -161,41 +138,40 @@ uv venv --python "3.12"
 source .venv/bin/activate
 uv pip install 'dimos[base,unitree]'
 
-# Replay a recorded quadruped session (no hardware needed)
-# NOTE: First run will show a black rerun window while ~75 MB downloads from LFS
-dimos --replay run unitree-go2
+# Run the humanoid stack in simulation (no hardware needed)
+# NOTE: First run downloads the MuJoCo scene from LFS
+dimos --simulation run unitree-g1-sim
 ```
 
 ```bash
 # Install with simulation support
 uv pip install 'dimos[base,unitree,sim]'
 
-# Run quadruped in MuJoCo simulation
-dimos --simulation run unitree-go2
-
-# Run humanoid in simulation
+# Humanoid in MuJoCo simulation
 dimos --simulation run unitree-g1-sim
+
+# Humanoid + LLM agent + MCP server in simulation
+dimos --simulation run unitree-g1-agentic-sim
 ```
 
 ```bash
-# Control a real robot (Unitree quadruped over WebRTC)
+# Control a real robot (Unitree G1 over WebRTC)
 export ROBOT_IP=<YOUR_ROBOT_IP>
-dimos run unitree-go2
+dimos run unitree-g1-basic
 ```
 
 # Featured Runfiles
 
 | Run command | What it does |
 |-------------|-------------|
-| `dimos --replay run unitree-go2` | Quadruped navigation replay — SLAM, costmap, A* planning |
-| `dimos --replay --replay-db go2_bigoffice run unitree-go2-memory` | Quadruped temporal memory replay |
-| `dimos --simulation run unitree-go2-agentic` | Quadruped agentic + MCP server in simulation |
 | `dimos --simulation run unitree-g1-sim` | Humanoid in MuJoCo simulation |
-| `dimos --replay run drone-basic` | Drone video + telemetry replay |
-| `dimos --replay run drone-agentic` | Drone + LLM agent with flight skills (replay) |
+| `dimos --simulation run unitree-g1-agentic-sim` | Humanoid agentic + MCP server in simulation |
+| `dimos run unitree-g1-okra-ik-only-grasp` | Okra harvesting — click a point, IK reach, grasp |
+| `dimos run unitree-g1-okra-ik-only-grasp-zed` | Okra harvesting — ZED + YOLO detection instead of clicking |
+| `dimos run unitree-g1-okra-ik-diffusion` | Okra harvesting — UMI diffusion policy |
+| `dimos run unitree-g1-mid360-fastlio` | Mid-360 LiDAR + FastLIO odometry |
+| `dimos run unitree-g1-nav-laptop` | G1 nav stack driven from the laptop |
 | `dimos run demo-camera` | Webcam demo — no hardware needed |
-| `dimos run keyboard-teleop-xarm7` | Keyboard teleop with mock xArm7 (requires `dimos[manipulation]` extra) |
-| `dimos --simulation run unitree-go2-agentic-ollama` | Quadruped agentic with local LLM (requires [Ollama](https://ollama.com) + `ollama serve`) |
 
 > Full blueprint docs: [docs/usage/blueprints.md](docs/usage/blueprints.md)
 
@@ -204,7 +180,7 @@ dimos run unitree-go2
 The `dimos` CLI manages the full lifecycle — run blueprints, inspect state, interact with agents, and call skills via MCP.
 
 ```bash
-dimos run unitree-go2-agentic --daemon   # Start in background
+dimos run unitree-g1-agentic --daemon    # Start in background
 dimos status                              # Check what's running
 dimos log -f                              # Follow logs
 dimos agent-send "explore the room"       # Send agent a command
@@ -275,12 +251,12 @@ A blueprint example that connects the image stream from a robot to an MCP-backed
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.transport import LCMTransport
 from dimos.msgs.sensor_msgs import Image
-from dimos.robot.unitree.go2.connection import go2_connection
+from dimos.robot.unitree.g1.connection import G1Connection
 from dimos.agents.mcp.mcp_client import McpClient
 from dimos.agents.mcp.mcp_server import McpServer
 
 blueprint = autoconnect(
-    go2_connection(),
+    G1Connection.blueprint(),
     McpServer.blueprint(),
     McpClient.blueprint(),
 ).transports({("color_image", Image): LCMTransport("/color_image", Image)})
