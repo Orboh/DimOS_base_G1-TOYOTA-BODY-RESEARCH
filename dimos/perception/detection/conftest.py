@@ -36,8 +36,8 @@ from dimos.perception.detection.type.detection3d.imageDetections3DPC import Imag
 from dimos.perception.detection.type.detection3d.pointcloud import Detection3DPC
 from dimos.protocol.tf.tf import TF
 from dimos.robot.unitree.type.odometry import Odometry
-from dimos.utils.testing import quadruped_replay
 from dimos.utils.data import get_data
+from dimos.utils.testing import quadruped_replay
 
 
 class Moment(TypedDict, total=False):

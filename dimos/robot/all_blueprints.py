@@ -149,6 +149,7 @@ all_modules = {
     "temporal-memory": "dimos.perception.experimental.temporal_memory.temporal_memory.TemporalMemory",
     "terrain-analysis": "dimos.navigation.nav_stack.modules.terrain_analysis.terrain_analysis.TerrainAnalysis",
     "terrain-map-ext": "dimos.navigation.nav_stack.modules.terrain_map_ext.terrain_map_ext.TerrainMapExt",
+    "umi-diffusion-bridge": "dimos.robot.unitree.g1.act.umi_diffusion_bridge.UmiDiffusionBridge",
     "unitree-g1-skill-container": "dimos.robot.unitree.g1.skill_container.UnitreeG1SkillContainer",
     "unity-bridge-module": "dimos.simulation.unity.module.UnityBridgeModule",
     "vlm-agent": "dimos.agents.vlm_agent.VLMAgent",

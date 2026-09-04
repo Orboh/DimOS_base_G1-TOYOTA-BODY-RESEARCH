@@ -375,7 +375,14 @@ uv run pytest --numprocesses=auto dimos
 
 # 型チェック
 uv run mypy dimos
+
+# pre-commit のフックを有効化（コミット前検査）
+uv run pre-commit install
 ```
+
+> pre-commit の Doclinks フックは `python` が PATH にあることを前提にしています。
+> コミットする前に `source .venv/bin/activate` してください（`python3` しか無い環境では
+> `Executable \`python\` not found` でコミットが止まります）。
 
 - インストール手順: [docs/installation/](docs/installation/)（[Ubuntu](docs/installation/ubuntu.md) / [macOS](docs/installation/osx.md) / [Nix](docs/installation/nix.md)）、対話インストーラは `scripts/install.sh`
 - テストの分類と流し方: [docs/development/testing.md](docs/development/testing.md)

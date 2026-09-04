@@ -89,6 +89,10 @@ dependencies = [
     # Transport Protocols
     "dimos-lcm",
     "PyTurboJPEG==1.8.2",
+    # ZMQ + msgpack: G1 の act/UMI ブリッジと NX カメラ中継の IPC
+    # (dimos/robot/unitree/g1/act/*, camera/zmq_image_source.py, scripts/*_zmq_publisher.py)
+    "pyzmq",
+    "msgpack",
     # Core
     "numpy>=1.26.4",
     "scipy>=1.15.1",
