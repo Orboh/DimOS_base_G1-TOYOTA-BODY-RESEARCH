@@ -1,17 +1,16 @@
-# Go2 × DimOS agentic blueprint — GPU portable container
+# G1 × DimOS agentic blueprint — GPU portable container
 
-`../docker/` の **GPU 対応版**です。`onnxruntime-gpu` 経由で perception の onnx
-推論を GPU に逃がして、laptop 上で CPU 飽和→徐々に重くなる問題を緩和します。
+`onnxruntime-gpu` 経由で perception の onnx 推論を GPU に逃がして、laptop 上で
+CPU 飽和→徐々に重くなる問題を緩和する GPU コンテナです。
 
-`../docker/` との違いは 2 点:
-
-1. **ベースイメージ** = `nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04`
-   (CPU 版は `ubuntu:24.04`)。`--gpus all` を付けて起動する必要があり、
-   ホスト側に NVIDIA Container Toolkit が要ります。
-2. **`requirements.txt` のスナップショット時点が新しい**:
-   - `onnxruntime`(CPU)を除外、`onnxruntime-gpu==1.26.0` のみ
-   - 他のバージョンは `../docker/` と同一(`numpy==2.3.5`, `protobuf==6.33.6` ほか)。
-     `PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python` の回避策はそのまま効きます。
+- **ベースイメージ** = `nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04`。
+  `--gpus all` を付けて起動する必要があり、ホスト側に NVIDIA Container Toolkit
+  が要ります。
+- **`requirements.txt`** は `onnxruntime`(CPU)を除外し `onnxruntime-gpu==1.26.0`
+  のみを入れた状態のスナップショット。
+  `PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python` の回避策はそのまま効きます。
+- イメージのタグ名 `go2-agentic-gpu` は、既存のビルド済みイメージ / 配布 tar を
+  そのまま使えるように残した歴史的名称です(中身は機体非依存)。
 
 ## 前提
 
@@ -54,6 +53,7 @@ docker run --rm -it \
 ```
 
 humancli を使いたいときは `docker run ... go2-agentic-gpu:latest dimos humancli`。
+既定の CMD は `dimos run unitree-g1-agentic` です。
 
 ## トラブルシュート
 

@@ -1,25 +1,22 @@
 # Unitree G1 × DimOS — 自然言語で動かす
 
-`../dimensional-applications/`(Go2)と並列に置いた G1 専用ディレクトリです。
-**venv と GPU docker イメージは Go2 側と共有**しています(dimos の同じインストールに
-G1 用 blueprint が同梱されているため、再ビルド不要)。
+自然言語で G1 を動かすための起動グル(shell + docker)です。
 
-## 共有しているもの
+- `.venv/` → リポジトリ直下の `../.venv` への symlink
+- Docker image: `go2-agentic-gpu:latest` — タグ名は既存のビルド済みイメージ /
+  配布 tar をそのまま使えるように残しています(中身は機体非依存)。
+  ビルド定義は `docker-gpu/` に同梱。
 
-- `.venv/` → `../dimensional-applications/.venv` への symlink
-- Docker image: `go2-agentic-gpu:latest`(イメージ名はそのまま使う。中身は機体非依存)
+## 使う blueprint
 
-## 機体固有のもの
-
-- `.env` の `ROBOT_IP_G1` ←→ Go2 側の `ROBOT_IP`(両方を残しておけば共存可)
-- 起動コマンドの blueprint: `unitree-g1-agentic` / `unitree-g1-agentic-sim`
+- `unitree-g1-agentic` / `unitree-g1-agentic-sim`(このディレクトリの既定)
 - ほかにも dimos には `unitree-g1-basic`, `unitree-g1-joystick`, `unitree-g1-coordinator`,
   `unitree-g1-detection`, `unitree-g1-full`, `unitree-g1-shm` 等多数。
 
 ## セットアップ
 
-1. `../.env` に `ROBOT_IP_G1=<G1の IP>` を追加(`ROBOT_IP=192.168.123.161` は Go2 用に残しておく)
-2. PC を G1 と同 LAN に置く。IP がわからなければ `.venv/bin/dimos go2tool discover` で探索
+1. `../.env` に `ROBOT_IP_G1=<G1の IP>` を追加
+2. PC を G1 と同 LAN に置く
 
 ## 起動 — venv 直叩き
 
@@ -54,14 +51,13 @@ G1 用 blueprint が同梱されているため、再ビルド不要)。
 ./docker-gpu/run.sh shell            # 中で何でも
 ```
 
-Go2 のコンテナと同時起動はできません(コンテナ名は `go2-agentic-gpu-g1` で別ですが、
-`--network host` + LCM の都合で 2 つは衝突します)。切り替えて使ってください。
+コンテナ名は `go2-agentic-gpu-g1`。`--network host` + LCM の都合で、同じ
+イメージのコンテナを複数同時に起動することはできません。
 
 ## 注意
 
-- G1 は二足歩行なので、Go2 の「FrontPounce」のような sport コマンドはありません。
-  `UnitreeG1SkillContainer` が公開するスキルは別物(`stand_up`, `bow`, `wave_hand` 系)。
+- G1 は二足歩行なので、四足機の sport コマンド相当はありません。
+  `UnitreeG1SkillContainer` が公開するスキルは `stand_up`, `bow`, `wave_hand` 系。
 - システムプロンプトは blueprint 側に同梱されているので、humancli 起動時に
   自動で G1 用のものに切り替わります。
-- WebRTC のポートや認証フローは Go2 と異なる可能性があり、初回接続でエラーが出たら
-  `.venv/lib/python3.12/site-packages/dimos/robot/unitree/g1/connection.py` を参照。
+- 初回接続で WebRTC のエラーが出たら `dimos/robot/unitree/g1/connection.py` を参照。

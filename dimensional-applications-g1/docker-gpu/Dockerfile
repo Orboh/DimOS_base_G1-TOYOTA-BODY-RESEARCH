@@ -1,12 +1,14 @@
-# Go2 x DimOS agentic blueprint -- GPU portable container.
+# G1 x DimOS agentic blueprint -- GPU portable container.
 #
-# Differs from ../docker/ in two ways:
+# Notes:
 #   1) Base = nvidia/cuda + cuDNN runtime, so onnxruntime-gpu's CUDAExecutionProvider
 #      actually loads. Required for the perception / embedding pipeline to leave
 #      the CPU.
-#   2) requirements.txt is the frozen state of dimensional-applications/.venv as of
-#      2026-05-19 after removing the CPU `onnxruntime` package so only
-#      `onnxruntime-gpu==1.26.0` is installed. Side-effect: numpy=2.4.6, protobuf=7.34.1.
+#   2) requirements.txt is the frozen state of the app venv as of 2026-05-19 after
+#      removing the CPU `onnxruntime` package so only `onnxruntime-gpu==1.26.0` is
+#      installed. Side-effect: numpy=2.4.6, protobuf=7.34.1.
+#   3) The image tag keeps its legacy `go2-agentic-gpu` name so already-built
+#      images and the shipped tar stay usable; the contents are robot-agnostic.
 #
 # Build:  docker build -t go2-agentic-gpu -f docker-gpu/Dockerfile .
 # Run:    ./docker-gpu/run.sh
@@ -48,14 +50,14 @@ COPY docker-gpu/dimos_interface_stub /tmp/dimos_interface
 RUN cp -r /tmp/dimos_interface /app/.venv/lib/python3.12/site-packages/dimos/web/dimos_interface \
  && rm -rf /tmp/dimos_interface
 
-# 3) Application scripts (run_robot.sh, say.sh, say_robot.py, standup.py).
-COPY run_robot.sh say.sh say_robot.py standup.py /app/dimensional-applications/
-RUN chmod +x /app/dimensional-applications/*.sh /app/dimensional-applications/*.py \
- && ln -s /app/.venv /app/dimensional-applications/.venv
+# 3) Application scripts (run_robot.sh, run_sim.sh, say.sh).
+COPY run_robot.sh run_sim.sh say.sh /app/dimensional-applications-g1/
+RUN chmod +x /app/dimensional-applications-g1/*.sh \
+ && ln -s /app/.venv /app/dimensional-applications-g1/.venv
 
 # 4) Entrypoint -- LCM multicast on (host-shared) loopback, then exec.
 COPY docker-gpu/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/app/entrypoint.sh"]
-CMD ["dimos", "run", "unitree-go2-agentic"]
+CMD ["dimos", "run", "unitree-g1-agentic"]

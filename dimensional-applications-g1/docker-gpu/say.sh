@@ -9,4 +9,4 @@ if [ $# -lt 1 ]; then
     exit 1
 fi
 
-exec docker exec -i go2-agentic-gpu dimos agent-send "$*"
+exec docker exec -i go2-agentic-gpu-g1 dimos agent-send "$*"

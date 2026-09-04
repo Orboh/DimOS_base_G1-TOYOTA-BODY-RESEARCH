@@ -20,11 +20,11 @@ if ! command -v nvidia-smi >/dev/null 2>&1 || ! nvidia-smi -L >/dev/null 2>&1; t
     echo "      onnxruntime will fall back to CPU and the agentic stack will be slow."
 fi
 
-# Pre-flight: warn (don't fail) if Go2 WebRTC port is unreachable.
+# Pre-flight: warn (don't fail) if the robot's WebRTC port is unreachable.
 if ! nc -z -w 2 "${ROBOT_IP}" 9991 2>/dev/null; then
-    echo "WARN: ${ROBOT_IP}:9991 is unreachable — check LAN cable / Go2 power."
+    echo "WARN: ${ROBOT_IP}:9991 is unreachable — check LAN cable / G1 power."
     echo "      Continuing anyway; dimos will fail to connect if the port stays closed."
 fi
 
-cd /app/dimensional-applications
+cd /app/dimensional-applications-g1
 exec "$@"
