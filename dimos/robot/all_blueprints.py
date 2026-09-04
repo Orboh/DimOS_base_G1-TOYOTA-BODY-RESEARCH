@@ -89,6 +89,7 @@ all_blueprints = {
     "unitree-g1-coordinator": "dimos.robot.unitree.g1.blueprints.basic.unitree_g1_coordinator:unitree_g1_coordinator",
     "unitree-g1-detection": "dimos.robot.unitree.g1.blueprints.perceptive.unitree_g1_detection:unitree_g1_detection",
     "unitree-g1-full": "dimos.robot.unitree.g1.blueprints.agentic.unitree_g1_full:unitree_g1_full",
+    "unitree-g1-gravity-hold-test": "dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_gravity_hold_test:unitree_g1_gravity_hold_test",
     "unitree-g1-ik-camera": "dimos.robot.unitree.g1.blueprints.perceptive.unitree_g1_ik_camera:unitree_g1_ik_camera",
     "unitree-g1-ik-reach": "dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_ik_reach:unitree_g1_ik_reach",
     "unitree-g1-joystick": "dimos.robot.unitree.g1.blueprints.basic.unitree_g1_joystick:unitree_g1_joystick",
