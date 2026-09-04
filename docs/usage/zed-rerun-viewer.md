@@ -88,4 +88,65 @@ PID を調べて `kill` してください。
 - ポートは `0.0.0.0` 待受・CORS `*` なので、tailnet 内なら誰でも直接ブラウザで見られます（トンネル不要）。
 - ZED は Jetson 上の 1 プロセスが 1 回だけ開くので、**視聴者が増えてもカメラ競合は起きません**。
 - スクリプトは SSD（`scripts/`）に置いてあり、再起動で消えません（旧版は `/tmp` にあり揮発していました）。
-- Jetson の torch は CPU 版のため YOLO は低速です。GPU 化は別課題（`libcudss.so.0` 欠落の修理が必要）。
+- Jetson の torch は CPU 版のため、本体 venv のままでは YOLO が低速です。GPU 化は下の「GPU 推論サービス（Jetson）」を参照（`libcudss.so.0` は欠落しておらず、ラッパーが `LD_LIBRARY_PATH` を解決します）。
+
+---
+
+## GPU 推論サービス（Jetson）
+
+Jetson の dimos venv は CPU 版 torch が入るため、重い推論はそのままでは GPU に載りません。
+**重い依存だけを別 venv に隔離して ZMQ で繋ぐ**構成を使います（`scripts/act_service.py` と同型）。
+
+```
+dimos 本体 venv (3.12, CPU torch)
+   │  ZED深度・IK・3D化・アプリ全体
+   └──ZMQ(msgpack)──▶ /mnt/ssd/yolo_gpu_venv (3.10, CUDA torch)
+                        YOLO-seg 2D検出＋mask のみ
+```
+
+### 起動
+
+**必ず `run_yolo_service.sh` 経由で起動してください。** 素の `python yolo_service.py` は
+`ImportError: libcudss.so.0` で落ちます。
+
+```bash
+bash scripts/run_yolo_service.sh --selftest --model data/models_yolo/okra11n-seg.pt  # 速度自己測定
+bash scripts/run_yolo_service.sh --model data/models_yolo/okra11n-seg.pt             # serve
+```
+
+ラッパーが `LD_LIBRARY_PATH` を設定します（システムの CUDA 12.6 cublas + venv の cudss）。
+
+> [!NOTE]
+> `libcudss.so.0` は **欠落していません**（`.../nvidia/cu12/lib/` に存在）。
+> リンカのパスに入っていないだけで、ラッパーがそれを解決します。
+> 以前この補足に「`libcudss.so.0` 欠落の修理が必要」と書かれていましたが誤りでした
+> （2026-07-29 に AGX Orin 実機で確認・訂正）。
+
+### 実測値（2026-07-29, AGX Orin, JetPack R36.5 / CUDA 12.6）
+
+```
+[yolo_service] model=okra11n-seg.pt device=0 cuda=True Orin
+[selftest] 1280x720 det=0 infer 90.4 ms (11.1 FPS)
+```
+
+環境: torch 2.11.0 (CUDA 12.6) / ultralytics 8.4.75 / Python 3.10。
+
+> [!WARNING]
+> 導入時のコミットメッセージには「CPU 367ms → GPU 30ms（約12倍）」とありますが、
+> 上記条件では **30ms は再現せず 90.4ms** でした。当時の測定条件（解像度・モデル・
+> ウォームアップ有無）が記録されていないため比較できません。速度が要件になる場合は
+> 使う条件で測り直してください。
+
+### ワイヤプロトコル（ZMQ REP, `tcp://127.0.0.1:5702`）
+
+```
+request  : {"image_jpeg": <jpeg bytes>, "conf": 0.5, "iou": 0.6,
+            "classes": ["okra"], "reset": <bool>}     # conf 以降は任意
+response : {"width": W, "height": H,
+            "detections": [{"name", "class_id", "confidence", "track_id",
+                            "bbox": [x1,y1,x2,y2], "mask_polygon": [[x,y],...]}]}
+```
+
+3D 化はしません（ZED 深度を持つのは dimos 本体側）。2D 検出＋mask 輪郭までを返します。
+
+---
