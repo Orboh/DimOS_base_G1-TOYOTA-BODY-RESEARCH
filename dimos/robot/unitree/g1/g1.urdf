@@ -56,6 +56,88 @@
     <child link="pelvis_contour_link"/>
   </joint>
 
+  <!-- Okra basket (cardboard), mounted on the front of pelvis over the crotch protrusion.
+       ESTIMATED placement, see Free-space/yokote/20260825/作業ログ.md and
+       G1股間部ジオメトリ調査.md. joint origin x=0.0614 comes from the pelvis-front-face
+       survey (most-forward point of the crotch hub, hard STL measurement). z=-0.085 is a
+       photo-based estimate of the protrusion's center height (20260825): read off the
+       hardware photo IMG_7946.HEIC against the pelvis_contour_link STL profile two
+       independent ways (margin-from-shell-top read, and direct top/bottom margin read),
+       giving -0.0823 and -0.088 respectively; z=-0.085 is their midpoint. Deliberately not
+       caliper-measured: team decision (20260825) to accept the ~+/-10mm photo-based
+       uncertainty rather than block on a real-world measurement pass. Revisit with calipers
+       before the 3D-printed (non-cardboard) version, where this tolerance matters more.
+       Modeled as 5 thin plates (back + front + bottom + left + right), leaving local +Z
+       open for top-down insertion, matching the physical cardboard box (120mm W x 210mm D
+       x 120mm H, 5mm wall). The real protrusion/cutout is not modeled here (it
+       has no URDF/STL counterpart, see 作業ログ.md), so the back plate is solid.
+       The 5 <collision> plates are named (basket_back/front/bottom/left/right) so
+       build_g1_scene.py's _pad_basket_collision() can find and inflate just these: see
+       that function's docstring for why (20260825 decision, Ueda + Yokote: accept the
+       placement uncertainty above rather than chase it with calipers, and instead
+       over-size the *collision* box in sim so the arm treats a wider volume as
+       off-limits). Visual plates are left at the true cardboard dimensions. -->
+  <material name="cardboard">
+    <color rgba="0.62 0.45 0.28 1"/>
+  </material>
+  <link name="basket_link">
+    <inertial>
+      <origin xyz="0.105 0 0" rpy="0 0 0"/>
+      <mass value="0.05"/>
+      <inertia ixx="1e-4" ixy="0" ixz="0" iyy="1e-4" iyz="0" izz="1e-4"/>
+    </inertial>
+    <visual name="basket_back_visual">
+      <origin xyz="0.0025 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.005 0.120 0.120"/></geometry>
+      <material name="cardboard"/>
+    </visual>
+    <collision name="basket_back">
+      <origin xyz="0.0025 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.005 0.120 0.120"/></geometry>
+    </collision>
+    <visual name="basket_bottom_visual">
+      <origin xyz="0.105 0 -0.0575" rpy="0 0 0"/>
+      <geometry><box size="0.210 0.120 0.005"/></geometry>
+      <material name="cardboard"/>
+    </visual>
+    <collision name="basket_bottom">
+      <origin xyz="0.105 0 -0.0575" rpy="0 0 0"/>
+      <geometry><box size="0.210 0.120 0.005"/></geometry>
+    </collision>
+    <visual>
+      <origin xyz="0.2075 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.005 0.120 0.120"/></geometry>
+      <material name="cardboard"/>
+    </visual>
+    <collision name="basket_front">
+      <origin xyz="0.2075 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.005 0.120 0.120"/></geometry>
+    </collision>
+    <visual>
+      <origin xyz="0.105 -0.0575 0" rpy="0 0 0"/>
+      <geometry><box size="0.210 0.005 0.120"/></geometry>
+      <material name="cardboard"/>
+    </visual>
+    <collision name="basket_right">
+      <origin xyz="0.105 -0.0575 0" rpy="0 0 0"/>
+      <geometry><box size="0.210 0.005 0.120"/></geometry>
+    </collision>
+    <visual>
+      <origin xyz="0.105 0.0575 0" rpy="0 0 0"/>
+      <geometry><box size="0.210 0.005 0.120"/></geometry>
+      <material name="cardboard"/>
+    </visual>
+    <collision name="basket_left">
+      <origin xyz="0.105 0.0575 0" rpy="0 0 0"/>
+      <geometry><box size="0.210 0.005 0.120"/></geometry>
+    </collision>
+  </link>
+  <joint name="basket_joint" type="fixed">
+    <origin xyz="0.0614 0 -0.085" rpy="0 0 0"/>
+    <parent link="pelvis"/>
+    <child link="basket_link"/>
+  </joint>
+
   <!-- Legs -->
   <link name="left_hip_pitch_link">
     <inertial>

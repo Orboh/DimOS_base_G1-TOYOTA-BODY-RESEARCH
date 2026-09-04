@@ -619,6 +619,9 @@ ignore = [
     "dimos/dashboard/dimos.rbl",
     "dimos/web/dimos_interface/themes.json",
     "dimos/manipulation/manipulation_module.py",
+    # 大きいのはバイナリではなく設計コメント（重力FF・HANDBACK の根拠と実測値）。
+    # largefiles は巨大バイナリの検出が目的なので、ソースは除外する。
+    "dimos/robot/unitree/g1/act/g1_arm_sdk_connection.py",
     "dimos/navigation/nav_stack/modules/*/main.cpp",
     "dimos/navigation/nav_stack/common/*.hpp",
 ]

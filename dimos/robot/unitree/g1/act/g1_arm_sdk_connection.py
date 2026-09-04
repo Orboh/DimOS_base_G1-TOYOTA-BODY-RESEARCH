@@ -76,6 +76,9 @@ logger = setup_logger()
 _NUM_MOTORS = 29
 _WEIGHT_IDX = 29  # kNotUsedJoint0: arm_sdk authority weight (0..1)
 _MODE_MACHINE_WAIT_S = 10.0
+# Handback slew (stop()): deliberately slow — this runs unattended at shutdown.
+_HANDBACK_SPEED_RAD_S = 0.5  # worst joint travels at this rate
+_HANDBACK_RATE_HZ = 50.0  # target update rate while walking back
 
 # Canonical 29-DOF G1 order (matches Unitree G1_29_JointIndex):
 _WAIST_IDX = [12, 13, 14]  # waist yaw/roll/pitch — held at startup pose
@@ -161,24 +164,12 @@ class G1ArmSdkConnectionConfig(ModuleConfig):
     compliant_kp_ramp_s: float = 1.5  # right-arm kp 80->0 ramp time on going compliant [s]
     gravity_tau_scale: float = 1.0  # scale on the gravity feedforward tau
     urdf_path: str = ""  # gravity model URDF (empty = right_arm_model DEFAULT_URDF)
-    # GRAVITY FEEDFORWARD DURING STIFF POSITION TRACKING (default off = no behavior change).
-    # Without it the right arm is a pure PD position loop (tau=0), so holding a pose against
-    # gravity requires a permanent position error e = tau_gravity / kp — measured at 3-7 deg
-    # (45-90 mm at the tip) on hw 2026-08-24 with kp_arm=80 plus the wrist GoPro/mount payload.
-    # That droop is what stalls the UMI diffusion loop: the policy commands "measured + delta",
-    # the arm settles "commanded - droop", and when delta ~= droop the tip never advances.
-    # Feeding g(q) forward cancels the gravity term so the PD only handles the residual.
-    # The model is the SAME reduced right-arm URDF used for IK, so it covers the bare arm only:
-    # anything bolted on (GoPro, Media Mod, capture hardware, cabling) is NOT in it — trim with
-    # gravity_tau_scale (>1 adds the missing payload). Start LOW (0.6-0.8) and raise while
-    # watching `arm track`: too high pushes the arm up on its own.
-    gravity_ff: bool = False
     # TIP PAYLOAD added to the gravity model (0 = model unchanged).
     # The reduced right-arm URDF ends in a 0.170 kg `right_rubber_hand` — the display hand
     # G1 ships with. Nothing that is ACTUALLY bolted on (Dex1-1 gripper, GoPro + Media Mod,
     # capture hardware, mount, cabling) exists in it, so g(q) covers roughly half the real
-    # load and the arm keeps drooping even with gravity_ff on (measured 2026-08-24: model
-    # 5.61 N*m vs 10.72 N*m implied by the residual position error).
+    # load and the arm keeps drooping even with the gravity feedforward on (measured
+    # 2026-08-24: model 5.61 N*m vs 10.72 N*m implied by the residual position error).
     # This is the mass to ADD on top of what the URDF already models, i.e.
     #   tip_extra_mass_kg = (real payload) - 0.170   when the rubber hand was removed.
     # Adding the mass (rather than scaling g(q)) keeps the torque distributed correctly:
@@ -190,6 +181,58 @@ class G1ArmSdkConnectionConfig(ModuleConfig):
     # Default 0.113 ~= mid-gripper, a reasonable guess for a Dex1-1 + wrist-cam stack.
     tip_extra_com_xyz: list[float] = [0.113, -0.003, 0.0]
     kd_compliant: float = 1.0  # small joint damping while compliant (kp=0)
+    # STIFF LEFT-ARM GRAVITY FEEDFORWARD (default OFF).  This is deliberately
+    # independent from collection_mode: it retains position gains and only adds
+    # a bounded torque estimate to the explicitly selected left-arm joints.
+    # A dedicated gate must use a small scale and finite tau limit before any
+    # LIVE trial; the reduced URDF model is an estimate, not a torque calibration.
+    stiff_gravity_compensation_left: bool = False
+    stiff_gravity_left_joint_indices: list[int] = Field(default_factory=list)
+    stiff_gravity_tau_scale: float = 1.0
+    stiff_gravity_tau_limit_nm: float = 0.0
+    stiff_gravity_ramp_s: float = 5.0
+    # STIFF RIGHT-ARM GRAVITY FEEDFORWARD (default OFF, added 2026-09-04).
+    # Same design as the left-arm gate above, for the arm IkReachBridge drives.
+    # Motivation (measured 2026-09-03): the right arm settles BELOW the commanded
+    # pose and the shortfall scales with reach — shoulder_pitch gravity torque goes
+    # 1.03 N*m at 0.30 m forward to 7.67 N*m at 0.55 m (7.5x). Because a position
+    # loop only makes torque from error (tau = kp * dq), that droop cannot be
+    # removed by gains: 1 deg at the far pose needs kp_arm ~294 (3.7x default) and
+    # 0.5 deg needs ~587. Raising kp to 2x was the practical ceiling on hardware
+    # (louder gearbox noise on the return move) and still left 19-29 mm. Cancelling
+    # g(q) in the feedforward term removes the cause instead of fighting it.
+    # SCALE: full compensation (scale=1.0) on all 7 joints is the intended
+    # operating point, not a stretch goal. The same g(q), from the same calibrated
+    # URDF, was validated on hardware via the collection_mode hold test
+    # (feat/dex1-official-urdf-gravity-test): with kp ramped to ZERO the right arm
+    # held its pose on gravity feedforward alone. Adding it here while KEEPING the
+    # position gains is a strictly easier condition than that test.
+    # SAFETY: opt-in, explicit joint list, finite tau clip, a slow ramp, and a
+    # non-finite guard in the loop (np.clip passes NaN straight through). The clip
+    # is a runaway backstop, not an operating limit: measured |g(q)| peaks at
+    # 8.50 N*m (shoulder_pitch) over reachable poses and 8.67 N*m over the full
+    # joint range, so the 12.0 N*m default never binds in normal use.
+    stiff_gravity_compensation_right: bool = False
+    stiff_gravity_right_joint_indices: list[int] = Field(default_factory=list)
+    # Gravity-model URDF for the RIGHT stiff path. Empty = fall back to urdf_path,
+    # then to the stock g1.urdf. With a Dex1-1 fitted prefer
+    # ``dimos/robot/unitree/g1/g1_dex1_1_calibrated_550g.urdf``: it models the hand
+    # as base + 2 fingers calibrated to the 550 g spec (546 g measured) instead of
+    # one lumped link, which the stock URDF places ~3.7 mm short — worth ~11 % of
+    # the shoulder torque at a far reach.
+    stiff_gravity_right_urdf_path: str = ""
+    # HANDBACK ON STOP (added 2026-09-04). The arm executes
+    #   motion-control cmd * (1 - weight) + rt/arm_sdk cmd * weight
+    # (Unitree official), so while weight ramps 1->0 the arm chases a moving blend of
+    # two DIFFERENT targets: the onboard controller's idle pose and ours. The further
+    # apart they are, the more the blended target moves — heard on hardware as the arm
+    # rattling during ik_down (2026-09-04). Same mechanism as the startup incident
+    # where the elbow bent ~90 deg unattended during the 0->1 ramp (2026-09-01).
+    # Fix: before ramping down, drive the arm BACK to the pose it was in at startup,
+    # captured while weight was still 0 — i.e. the onboard controller's own pose. With
+    # both sides commanding the same thing the blend is a no-op and nothing moves.
+    # 0.0 disables (ramp down from wherever the arm is, the old behaviour).
+    handback_to_startup_pose_s: float = 1.0  # settle time at the startup pose [s]
 
 
 class G1ArmSdkConnection(Module):
@@ -209,10 +252,14 @@ class G1ArmSdkConnection(Module):
         self._comp_t0 = 0.0  # kp-ramp start time
         self._grav_model = None
         self._grav_data = None
-        # The same reduced right-arm model serves both consumers of g(q): the compliant
-        # hand-guide (collection_mode) and the stiff-tracking feedforward (gravity_ff).
-        if self.config.collection_mode or self.config.gravity_ff:
-            import pinocchio
+        self._stiff_left_grav_model = None
+        self._stiff_right_grav_model = None
+        self._stiff_right_nonfinite_logged = False
+        self._startup_arm_q = None  # onboard pose captured at start (weight=0)
+        self._stiff_left_grav_data = None
+        self._stiff_left_grav_indices: frozenset[int] = frozenset()
+        if self.config.collection_mode:
+            import pinocchio  # ensure available; used in the loop
 
             from dimos.robot.unitree.g1.ik_reach.right_arm_model import (
                 DEFAULT_URDF,
@@ -247,6 +294,67 @@ class G1ArmSdkConnection(Module):
                     float(self._grav_model.inertias[last].mass),
                 )
             self._grav_data = self._grav_model.createData()
+        if self.config.stiff_gravity_compensation_left:
+            selected = self.config.stiff_gravity_left_joint_indices
+            if not selected:
+                raise ValueError(
+                    "stiff_gravity_compensation_left requires one or more left-arm joint indices"
+                )
+            if any(index < 0 or index >= 7 for index in selected):
+                raise ValueError("stiff_gravity_left_joint_indices must be in the range 0..6")
+            if self.config.stiff_gravity_tau_limit_nm <= 0.0:
+                raise ValueError("stiff gravity feedforward requires a positive tau limit")
+            import pinocchio
+
+            from dimos.robot.unitree.g1.ik_reach.left_arm_gravity_model import (
+                load_g1_left_arm_gravity_model,
+            )
+
+            urdf = self.config.urdf_path or ""
+            self._stiff_left_grav_model = (
+                load_g1_left_arm_gravity_model(urdf) if urdf else load_g1_left_arm_gravity_model()
+            )
+            self._stiff_left_grav_data = self._stiff_left_grav_model.createData()
+            self._stiff_left_grav_indices = frozenset(selected)
+        if self.config.stiff_gravity_compensation_right:
+            selected = self.config.stiff_gravity_right_joint_indices
+            if not selected:
+                raise ValueError(
+                    "stiff_gravity_compensation_right requires one or more right-arm joint indices"
+                )
+            if any(index < 0 or index >= 7 for index in selected):
+                raise ValueError("stiff_gravity_right_joint_indices must be in the range 0..6")
+            if self.config.stiff_gravity_tau_limit_nm <= 0.0:
+                raise ValueError("stiff gravity feedforward requires a positive tau limit")
+            if self.config.collection_mode:
+                # collection_mode ramps the right arm's kp to 0 and drives its own
+                # gravity tau for hand-guiding. Running both would fight over the
+                # same joints' tau with two different intents — refuse.
+                raise ValueError(
+                    "stiff_gravity_compensation_right cannot be combined with collection_mode "
+                    "(collection_mode releases position control on the same arm)"
+                )
+            import pinocchio
+
+            from dimos.robot.unitree.g1.ik_reach.right_arm_gravity_model import (
+                load_g1_right_arm_gravity_model,
+            )
+
+            urdf = self.config.stiff_gravity_right_urdf_path or self.config.urdf_path or ""
+            self._stiff_right_grav_model = (
+                load_g1_right_arm_gravity_model(urdf) if urdf else load_g1_right_arm_gravity_model()
+            )
+            self._stiff_right_grav_data = self._stiff_right_grav_model.createData()
+            self._stiff_right_grav_indices = frozenset(selected)
+            logger.warning(
+                "STIFF RIGHT-ARM GRAVITY FEEDFORWARD ENABLED: joints=%s scale=%.3f "
+                "limit=%.3f Nm ramp=%.1fs urdf=%s",
+                sorted(selected),
+                self.config.stiff_gravity_tau_scale,
+                self.config.stiff_gravity_tau_limit_nm,
+                self.config.stiff_gravity_ramp_s,
+                urdf or "(default g1.urdf)",
+            )
         self._publisher: ChannelPublisher | None = None
         self._subscriber: ChannelSubscriber | None = None
         self._low_cmd: LowCmd_ | None = None
@@ -323,6 +431,9 @@ class G1ArmSdkConnection(Module):
             if self._mode_machine is None or self._low_state is None:
                 raise RuntimeError("No LowState received; cannot start arm_sdk safely")
             arm_q = np.array([float(self._low_state.motor_state[i].q) for i in _ARM_IDX])
+            # Captured while weight is still 0 => this IS the onboard controller's pose.
+            # stop() drives back here so the 1->0 blend has nothing to fight over.
+            self._startup_arm_q = arm_q.copy()
             init = self.config.initial_arm_pose
             if init and len(init) == len(_ARM_IDX):
                 # Slew (at the safe velocity limit) to the dataset start pose so the
@@ -364,12 +475,20 @@ class G1ArmSdkConnection(Module):
             weight_ramp_s=self.config.weight_ramp_s,
             arm_velocity_limit=self.config.arm_velocity_limit,
             kp_arm=self.config.kp_arm,
-            # Explicit in the log: gravity_ff silently doing nothing (model failed to load)
-            # looks exactly like gravity_ff having no effect on the droop.
-            gravity_ff=(
-                f"ON x{self.config.gravity_tau_scale:g}"
-                if (self.config.gravity_ff and self._grav_model is not None)
-                else ("REQUESTED but NO MODEL" if self.config.gravity_ff else "off")
+            # Explicit in the log: a gravity feedforward silently doing nothing (model
+            # failed to load) looks exactly like it having no effect on the droop.
+            stiff_gravity_right=(
+                f"ON x{self.config.stiff_gravity_tau_scale:g} "
+                f"limit {self.config.stiff_gravity_tau_limit_nm:g}Nm"
+                if (
+                    self.config.stiff_gravity_compensation_right
+                    and self._stiff_right_grav_model is not None
+                )
+                else (
+                    "REQUESTED but NO MODEL"
+                    if self.config.stiff_gravity_compensation_right
+                    else "off"
+                )
             ),
         )
 
@@ -384,6 +503,49 @@ class G1ArmSdkConnection(Module):
             time.sleep(
                 2.0 * (1.0 / float(self.config.publish_rate_hz)) + 0.05
             )  # let a few cycles re-stiffen
+        # HANDBACK: while the control thread is still running (weight is still 1 and
+        # ours alone), walk the arm back to the pose the onboard controller had at
+        # startup. Done BEFORE stopping the thread so the normal 250 Hz
+        # clip-to-measured path does the moving — no separate slew logic here.
+        settle_s = float(self.config.handback_to_startup_pose_s)
+        if (
+            settle_s > 0.0
+            and self.config.publish_cmd
+            and self._startup_arm_q is not None
+            and self._thread is not None
+            and self._thread.is_alive()
+        ):
+            try:
+                with self._lock:
+                    measured = (
+                        np.array([float(self._low_state.motor_state[i].q) for i in _ARM_IDX])
+                        if self._low_state is not None
+                        else None
+                    )
+                start_q = measured if measured is not None else self._target_q.copy()
+                delta = float(np.max(np.abs(self._startup_arm_q - start_q)))
+                # INTERPOLATE, do not jump. Writing _target_q straight to the goal would
+                # let the 250 Hz clip run at arm_velocity_limit (20 rad/s) and throw the
+                # arm across in a fraction of a second. Same reason oda/arm_home.py walks
+                # its target over seconds instead of publishing the endpoint.
+                travel_s = min(max(delta / _HANDBACK_SPEED_RAD_S, 0.0), 6.0)
+                logger.info(
+                    "arm_sdk handback: walking back to the startup (onboard) pose before "
+                    "the weight ramp-down — max move %.3f rad over %.1fs, then %.1fs settle",
+                    delta,
+                    travel_s,
+                    settle_s,
+                )
+                steps = max(int(travel_s * _HANDBACK_RATE_HZ), 1)
+                for k in range(1, steps + 1):
+                    with self._lock:
+                        self._target_q = start_q + (self._startup_arm_q - start_q) * (k / steps)
+                    time.sleep(1.0 / _HANDBACK_RATE_HZ)
+                with self._lock:
+                    self._target_q = self._startup_arm_q.copy()
+                time.sleep(settle_s)
+            except Exception as e:  # never block shutdown on this
+                logger.warning(f"arm_sdk handback to startup pose failed: {e}")
         self._stop_event.set()
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=2.0)
@@ -577,21 +739,62 @@ class G1ArmSdkConnection(Module):
                         clipped = self._clip_to_measured(target, measured)
                     # Collection: RIGHT arm (motors 22-28 == _ARM_IDX[7:14]) compliant.
                     comp = self._compliant and not self._disconnect
-                    # Gravity feedforward during stiff tracking. Dropped while disconnecting:
-                    # the upper body is being handed back to the onboard controller (weight
-                    # ramping to 0), so injecting torque there would fight the handover.
-                    grav_ff = self.config.gravity_ff and not self._disconnect
+                    # NOTE: the stiff-tracking feedforward lives in the stiff_gravity_*
+                    # path below (per-joint list, tau clip, ramp). `g` here is the
+                    # collection_mode (compliant hand-guide) gravity term only.
                     g = None
                     if comp:
                         a_ramp = min(
                             1.0, (now - self._comp_t0) / max(1e-3, self.config.compliant_kp_ramp_s)
                         )
-                    if (comp or grav_ff) and self._grav_model is not None:
+                    if comp and self._grav_model is not None:
                         import pinocchio
 
                         g = pinocchio.computeGeneralizedGravity(
                             self._grav_model, self._grav_data, measured[7:14].astype(np.float64)
                         )
+                    stiff_left_g = None
+                    stiff_left_scale = 0.0
+                    if self._stiff_left_grav_model is not None:
+                        import pinocchio
+
+                        stiff_left_g = pinocchio.computeGeneralizedGravity(
+                            self._stiff_left_grav_model,
+                            self._stiff_left_grav_data,
+                            measured[:7].astype(np.float64),
+                        )
+                        stiff_left_scale = float(self.config.stiff_gravity_tau_scale) * min(
+                            1.0,
+                            (now - self._t_start) / max(1e-3, self.config.stiff_gravity_ramp_s),
+                        )
+                    stiff_right_g = None
+                    stiff_right_scale = 0.0
+                    if self._stiff_right_grav_model is not None:
+                        import pinocchio
+
+                        # measured[7:14] == motors 22-28 == the reduced right-arm q.
+                        stiff_right_g = pinocchio.computeGeneralizedGravity(
+                            self._stiff_right_grav_model,
+                            self._stiff_right_grav_data,
+                            measured[7:14].astype(np.float64),
+                        )
+                        stiff_right_scale = float(self.config.stiff_gravity_tau_scale) * min(
+                            1.0,
+                            (now - self._t_start) / max(1e-3, self.config.stiff_gravity_ramp_s),
+                        )
+                        # np.clip passes NaN/inf straight through, so a broken model
+                        # evaluation would reach the motors as a non-finite tau. Drop
+                        # the feedforward for this cycle instead (kp still holds).
+                        if not np.all(np.isfinite(stiff_right_g)):
+                            if not self._stiff_right_nonfinite_logged:
+                                self._stiff_right_nonfinite_logged = True
+                                logger.error(
+                                    "right stiff gravity ff: non-finite g(q)=%s at q=%s — "
+                                    "feedforward disabled for these cycles (position gains still active)",
+                                    stiff_right_g,
+                                    measured[7:14],
+                                )
+                            stiff_right_g = None
                     for k, i in enumerate(_ARM_IDX):
                         is_wrist = i in _WRIST_IDX
                         base_kp = self.config.kp_wrist if is_wrist else self.config.kp_arm
@@ -613,14 +816,35 @@ class G1ArmSdkConnection(Module):
                                 )
                             self._low_cmd.motor_cmd[i].q = float(clipped[k])
                             self._low_cmd.motor_cmd[i].dq = 0.0
-                            # g(q) covers the RIGHT arm only (motors 22-28): it is the reduced
-                            # 7-DOF model, and g[k-7] is only indexable for k >= 7. Left arm and
-                            # waist keep tau=0 (they hold static poses, no droop problem).
-                            self._low_cmd.motor_cmd[i].tau = (
-                                float(g[k - 7]) * self.config.gravity_tau_scale
-                                if (grav_ff and i >= 22 and g is not None)
-                                else 0.0
-                            )
+                            tau = 0.0
+                            if (
+                                i < 22
+                                and stiff_left_g is not None
+                                and k in self._stiff_left_grav_indices
+                            ):
+                                raw_tau = float(stiff_left_g[k]) * stiff_left_scale
+                                tau = float(
+                                    np.clip(
+                                        raw_tau,
+                                        -self.config.stiff_gravity_tau_limit_nm,
+                                        self.config.stiff_gravity_tau_limit_nm,
+                                    )
+                                )
+                            elif (
+                                i >= 22
+                                and stiff_right_g is not None
+                                and (k - 7) in self._stiff_right_grav_indices
+                            ):
+                                # k is the 0..13 arm index; the reduced right model is 0..6.
+                                raw_tau = float(stiff_right_g[k - 7]) * stiff_right_scale
+                                tau = float(
+                                    np.clip(
+                                        raw_tau,
+                                        -self.config.stiff_gravity_tau_limit_nm,
+                                        self.config.stiff_gravity_tau_limit_nm,
+                                    )
+                                )
+                            self._low_cmd.motor_cmd[i].tau = tau
                     self._low_cmd.motor_cmd[_WEIGHT_IDX].q = weight
                     self._last_weight = weight  # so stop() ramps from here, not always 1.0
                     if self._mode_machine is not None:
@@ -638,6 +862,45 @@ class G1ArmSdkConnection(Module):
                             f"arm track: max|target-measured|={track_err:.3f} rad "
                             f"weight={weight:.2f} {'LIVE' if self.config.publish_cmd else 'DRY'}"
                         )
+                        if stiff_left_g is not None:
+                            selected_tau = {
+                                _ARM_JOINT_NAMES[k]: float(
+                                    np.clip(
+                                        float(stiff_left_g[k]) * stiff_left_scale,
+                                        -self.config.stiff_gravity_tau_limit_nm,
+                                        self.config.stiff_gravity_tau_limit_nm,
+                                    )
+                                )
+                                for k in sorted(self._stiff_left_grav_indices)
+                            }
+                            logger.info(
+                                "left stiff gravity ff: "
+                                f"scale={stiff_left_scale:.3f} tau_nm={selected_tau} "
+                                f"limit={self.config.stiff_gravity_tau_limit_nm:.3f}"
+                            )
+                        if stiff_right_g is not None:
+                            limit = self.config.stiff_gravity_tau_limit_nm
+                            selected_tau = {
+                                _ARM_JOINT_NAMES[k + 7]: float(
+                                    np.clip(
+                                        float(stiff_right_g[k]) * stiff_right_scale, -limit, limit
+                                    )
+                                )
+                                for k in sorted(self._stiff_right_grav_indices)
+                            }
+                            # raw = uncapped estimate; if |raw| > limit the clip is binding
+                            # and the joint is still under-compensated.
+                            raw_tau = {
+                                _ARM_JOINT_NAMES[k + 7]: round(
+                                    float(stiff_right_g[k]) * stiff_right_scale, 3
+                                )
+                                for k in sorted(self._stiff_right_grav_indices)
+                            }
+                            logger.info(
+                                "right stiff gravity ff: "
+                                f"scale={stiff_right_scale:.3f} tau_nm={selected_tau} "
+                                f"raw_nm={raw_tau} limit={limit:.3f}"
+                            )
 
                 # Publish motor_states for the ACT observation (downsampled).
                 if low_state is not None and (now - last_ms) >= ms_period:

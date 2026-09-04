@@ -71,8 +71,18 @@ _KD_ARM = float(os.getenv("OKRA_NOACT_KD_ARM", "3.0"))
 # "measured + delta", the arm settles at "commanded - droop", so the tip never advances.
 # OKRA_GRAVITY_TAU_SCALE trims for what the URDF does NOT model (GoPro, Media Mod, mount,
 # cabling): start LOW (0.6-0.8) and raise while watching `arm track` shrink.
+# 実装は stiff_gravity_* 系（feat/g1-right-arm-gravity-ff で一本化）。関節ごとの選択・
+# トルク上限・ランプ・非有限ガードを持つ。OKRA_GRAVITY_FF / OKRA_GRAVITY_TAU_SCALE の
+# 名前は運用の手を変えないため据え置き、下の3項目へ写像する。
+# 既定値は oda/ik_up.sh と揃えた: 全7関節 / 上限 12 N*m（実測 |g(q)| 最大 8.67 N*m なので
+# 通常は張り付かない暴走時の防波堤）。
 _GRAVITY_FF = os.getenv("OKRA_GRAVITY_FF", "").strip() == "1"
-_GRAVITY_TAU_SCALE = float(os.getenv("OKRA_GRAVITY_TAU_SCALE", "0.7"))
+# 既定 1.0 = 全補償。ブランチ側の設計意図どおり（同じ校正済みURDFの g(q) を
+# collection_mode(kp=0) のホールドテストで実機検証済み、#37。位置ゲインを残したまま
+# 上乗せする今回はより緩い条件）。下げたい場合は OKRA_GRAVITY_TAU_SCALE で。
+_GRAVITY_TAU_SCALE = float(os.getenv("OKRA_GRAVITY_TAU_SCALE", "1.0"))
+_GRAVITY_JOINTS = [int(v) for v in os.getenv("OKRA_GRAVITY_JOINTS", "0,1,2,3,4,5,6").split(",")]
+_GRAVITY_TAU_LIMIT_NM = float(os.getenv("OKRA_GRAVITY_TAU_LIMIT_NM", "12.0"))
 # End-effector payload the URDF does NOT model. It ends in a 0.170 kg `right_rubber_hand`
 # (G1's display hand), so this is the mass to ADD: (real payload) - 0.170.
 # 2026-08-25 hardware: Dex1-1 550 g + GoPro HERO9 158 g + attachments 100 g = 808 g
@@ -255,8 +265,10 @@ _MODULES = [
         kp_arm=_KP_ARM,
         kd_arm=_KD_ARM,
         enable_disconnect=True,
-        gravity_ff=_GRAVITY_FF,
-        gravity_tau_scale=_GRAVITY_TAU_SCALE,
+        stiff_gravity_compensation_right=_GRAVITY_FF,
+        stiff_gravity_right_joint_indices=(_GRAVITY_JOINTS if _GRAVITY_FF else []),
+        stiff_gravity_tau_scale=_GRAVITY_TAU_SCALE,
+        stiff_gravity_tau_limit_nm=_GRAVITY_TAU_LIMIT_NM,
         tip_extra_mass_kg=_TIP_EXTRA_MASS_KG,
         tip_extra_com_xyz=_TIP_EXTRA_COM,
     ),
