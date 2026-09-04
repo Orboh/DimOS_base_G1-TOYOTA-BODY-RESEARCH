@@ -140,6 +140,29 @@ class G1ArmSdkConnectionConfig(ModuleConfig):
     stiff_gravity_tau_scale: float = 1.0
     stiff_gravity_tau_limit_nm: float = 0.0
     stiff_gravity_ramp_s: float = 5.0
+    # STIFF RIGHT-ARM GRAVITY FEEDFORWARD (default OFF, added 2026-09-04).
+    # Same design as the left-arm gate above, for the arm IkReachBridge drives.
+    # Motivation (measured 2026-09-03): the right arm settles BELOW the commanded
+    # pose and the shortfall scales with reach — shoulder_pitch gravity torque goes
+    # 1.03 N*m at 0.30 m forward to 7.67 N*m at 0.55 m (7.5x). Because a position
+    # loop only makes torque from error (tau = kp * dq), that droop cannot be
+    # removed by gains: 1 deg at the far pose needs kp_arm ~294 (3.7x default) and
+    # 0.5 deg needs ~587. Raising kp to 2x was the practical ceiling on hardware
+    # (louder gearbox noise on the return move) and still left 19-29 mm. Cancelling
+    # g(q) in the feedforward term removes the cause instead of fighting it.
+    # SAFETY: opt-in, explicit joint list, finite tau clip, and a slow ramp — the
+    # reduced URDF model is an estimate, not a torque calibration. Start with
+    # indices=[0] (shoulder_pitch): it is the only joint whose torque varies
+    # strongly with reach; the others stay near-constant.
+    stiff_gravity_compensation_right: bool = False
+    stiff_gravity_right_joint_indices: list[int] = Field(default_factory=list)
+    # Gravity-model URDF for the RIGHT stiff path. Empty = fall back to urdf_path,
+    # then to the stock g1.urdf. With a Dex1-1 fitted prefer
+    # ``dimos/robot/unitree/g1/g1_dex1_1_calibrated_550g.urdf``: it models the hand
+    # as base + 2 fingers calibrated to the 550 g spec (546 g measured) instead of
+    # one lumped link, which the stock URDF places ~3.7 mm short — worth ~11 % of
+    # the shoulder torque at a far reach.
+    stiff_gravity_right_urdf_path: str = ""
 
 
 class G1ArmSdkConnection(Module):
@@ -160,6 +183,7 @@ class G1ArmSdkConnection(Module):
         self._grav_model = None
         self._grav_data = None
         self._stiff_left_grav_model = None
+        self._stiff_right_grav_model = None
         self._stiff_left_grav_data = None
         self._stiff_left_grav_indices: frozenset[int] = frozenset()
         if self.config.collection_mode:
@@ -196,6 +220,46 @@ class G1ArmSdkConnection(Module):
             self._stiff_left_grav_model = load_g1_left_arm_gravity_model(urdf) if urdf else load_g1_left_arm_gravity_model()
             self._stiff_left_grav_data = self._stiff_left_grav_model.createData()
             self._stiff_left_grav_indices = frozenset(selected)
+        if self.config.stiff_gravity_compensation_right:
+            selected = self.config.stiff_gravity_right_joint_indices
+            if not selected:
+                raise ValueError(
+                    "stiff_gravity_compensation_right requires one or more right-arm joint indices"
+                )
+            if any(index < 0 or index >= 7 for index in selected):
+                raise ValueError(
+                    "stiff_gravity_right_joint_indices must be in the range 0..6"
+                )
+            if self.config.stiff_gravity_tau_limit_nm <= 0.0:
+                raise ValueError(
+                    "stiff gravity feedforward requires a positive tau limit"
+                )
+            if self.config.collection_mode:
+                # collection_mode ramps the right arm's kp to 0 and drives its own
+                # gravity tau for hand-guiding. Running both would fight over the
+                # same joints' tau with two different intents — refuse.
+                raise ValueError(
+                    "stiff_gravity_compensation_right cannot be combined with collection_mode "
+                    "(collection_mode releases position control on the same arm)"
+                )
+            import pinocchio  # noqa: F401  (used in the control loop)
+
+            from dimos.robot.unitree.g1.ik_reach.right_arm_gravity_model import (
+                load_g1_right_arm_gravity_model,
+            )
+            urdf = self.config.stiff_gravity_right_urdf_path or self.config.urdf_path or ""
+            self._stiff_right_grav_model = (
+                load_g1_right_arm_gravity_model(urdf) if urdf else load_g1_right_arm_gravity_model()
+            )
+            self._stiff_right_grav_data = self._stiff_right_grav_model.createData()
+            self._stiff_right_grav_indices = frozenset(selected)
+            logger.warning(
+                "STIFF RIGHT-ARM GRAVITY FEEDFORWARD ENABLED: joints=%s scale=%.3f "
+                "limit=%.3f Nm ramp=%.1fs urdf=%s",
+                sorted(selected), self.config.stiff_gravity_tau_scale,
+                self.config.stiff_gravity_tau_limit_nm, self.config.stiff_gravity_ramp_s,
+                urdf or "(default g1.urdf)",
+            )
         self._publisher: ChannelPublisher | None = None
         self._subscriber: ChannelSubscriber | None = None
         self._low_cmd: LowCmd_ | None = None
@@ -460,6 +524,20 @@ class G1ArmSdkConnection(Module):
                             1.0,
                             (now - self._t_start) / max(1e-3, self.config.stiff_gravity_ramp_s),
                         )
+                    stiff_right_g = None
+                    stiff_right_scale = 0.0
+                    if self._stiff_right_grav_model is not None:
+                        import pinocchio
+                        # measured[7:14] == motors 22-28 == the reduced right-arm q.
+                        stiff_right_g = pinocchio.computeGeneralizedGravity(
+                            self._stiff_right_grav_model,
+                            self._stiff_right_grav_data,
+                            measured[7:14].astype(np.float64),
+                        )
+                        stiff_right_scale = float(self.config.stiff_gravity_tau_scale) * min(
+                            1.0,
+                            (now - self._t_start) / max(1e-3, self.config.stiff_gravity_ramp_s),
+                        )
                     for k, i in enumerate(_ARM_IDX):
                         is_wrist = i in _WRIST_IDX
                         base_kp = self.config.kp_wrist if is_wrist else self.config.kp_arm
@@ -478,6 +556,18 @@ class G1ArmSdkConnection(Module):
                             tau = 0.0
                             if i < 22 and stiff_left_g is not None and k in self._stiff_left_grav_indices:
                                 raw_tau = float(stiff_left_g[k]) * stiff_left_scale
+                                tau = float(np.clip(
+                                    raw_tau,
+                                    -self.config.stiff_gravity_tau_limit_nm,
+                                    self.config.stiff_gravity_tau_limit_nm,
+                                ))
+                            elif (
+                                i >= 22
+                                and stiff_right_g is not None
+                                and (k - 7) in self._stiff_right_grav_indices
+                            ):
+                                # k is the 0..13 arm index; the reduced right model is 0..6.
+                                raw_tau = float(stiff_right_g[k - 7]) * stiff_right_scale
                                 tau = float(np.clip(
                                     raw_tau,
                                     -self.config.stiff_gravity_tau_limit_nm,
@@ -514,6 +604,27 @@ class G1ArmSdkConnection(Module):
                                 "left stiff gravity ff: "
                                 f"scale={stiff_left_scale:.3f} tau_nm={selected_tau} "
                                 f"limit={self.config.stiff_gravity_tau_limit_nm:.3f}"
+                            )
+                        if stiff_right_g is not None:
+                            limit = self.config.stiff_gravity_tau_limit_nm
+                            selected_tau = {
+                                _ARM_JOINT_NAMES[k + 7]: float(np.clip(
+                                    float(stiff_right_g[k]) * stiff_right_scale, -limit, limit
+                                ))
+                                for k in sorted(self._stiff_right_grav_indices)
+                            }
+                            # raw = uncapped estimate; if |raw| > limit the clip is binding
+                            # and the joint is still under-compensated.
+                            raw_tau = {
+                                _ARM_JOINT_NAMES[k + 7]: round(
+                                    float(stiff_right_g[k]) * stiff_right_scale, 3
+                                )
+                                for k in sorted(self._stiff_right_grav_indices)
+                            }
+                            logger.info(
+                                "right stiff gravity ff: "
+                                f"scale={stiff_right_scale:.3f} tau_nm={selected_tau} "
+                                f"raw_nm={raw_tau} limit={limit:.3f}"
                             )
 
                 # Publish motor_states for the ACT observation (downsampled).
