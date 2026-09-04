@@ -76,6 +76,9 @@ logger = setup_logger()
 _NUM_MOTORS = 29
 _WEIGHT_IDX = 29  # kNotUsedJoint0: arm_sdk authority weight (0..1)
 _MODE_MACHINE_WAIT_S = 10.0
+# Handback slew (stop()): deliberately slow — this runs unattended at shutdown.
+_HANDBACK_SPEED_RAD_S = 0.5   # worst joint travels at this rate
+_HANDBACK_RATE_HZ = 50.0      # target update rate while walking back
 
 # Canonical 29-DOF G1 order (matches Unitree G1_29_JointIndex):
 _WAIST_IDX = [12, 13, 14]            # waist yaw/roll/pitch — held at startup pose
@@ -170,6 +173,18 @@ class G1ArmSdkConnectionConfig(ModuleConfig):
     # one lumped link, which the stock URDF places ~3.7 mm short — worth ~11 % of
     # the shoulder torque at a far reach.
     stiff_gravity_right_urdf_path: str = ""
+    # HANDBACK ON STOP (added 2026-09-04). The arm executes
+    #   motion-control cmd * (1 - weight) + rt/arm_sdk cmd * weight
+    # (Unitree official), so while weight ramps 1->0 the arm chases a moving blend of
+    # two DIFFERENT targets: the onboard controller's idle pose and ours. The further
+    # apart they are, the more the blended target moves — heard on hardware as the arm
+    # rattling during ik_down (2026-09-04). Same mechanism as the startup incident
+    # where the elbow bent ~90 deg unattended during the 0->1 ramp (2026-09-01).
+    # Fix: before ramping down, drive the arm BACK to the pose it was in at startup,
+    # captured while weight was still 0 — i.e. the onboard controller's own pose. With
+    # both sides commanding the same thing the blend is a no-op and nothing moves.
+    # 0.0 disables (ramp down from wherever the arm is, the old behaviour).
+    handback_to_startup_pose_s: float = 1.0   # settle time at the startup pose [s]
 
 
 class G1ArmSdkConnection(Module):
@@ -192,6 +207,7 @@ class G1ArmSdkConnection(Module):
         self._stiff_left_grav_model = None
         self._stiff_right_grav_model = None
         self._stiff_right_nonfinite_logged = False
+        self._startup_arm_q = None       # onboard pose captured at start (weight=0)
         self._stiff_left_grav_data = None
         self._stiff_left_grav_indices: frozenset[int] = frozenset()
         if self.config.collection_mode:
@@ -333,6 +349,9 @@ class G1ArmSdkConnection(Module):
             if self._mode_machine is None or self._low_state is None:
                 raise RuntimeError("No LowState received; cannot start arm_sdk safely")
             arm_q = np.array([float(self._low_state.motor_state[i].q) for i in _ARM_IDX])
+            # Captured while weight is still 0 => this IS the onboard controller's pose.
+            # stop() drives back here so the 1->0 blend has nothing to fight over.
+            self._startup_arm_q = arm_q.copy()
             init = self.config.initial_arm_pose
             if init and len(init) == len(_ARM_IDX):
                 # Slew (at the safe velocity limit) to the dataset start pose so the
@@ -374,6 +393,47 @@ class G1ArmSdkConnection(Module):
             self._compliant = False
         if self.config.collection_mode:
             time.sleep(2.0 * (1.0 / float(self.config.publish_rate_hz)) + 0.05)  # let a few cycles re-stiffen
+        # HANDBACK: while the control thread is still running (weight is still 1 and
+        # ours alone), walk the arm back to the pose the onboard controller had at
+        # startup. Done BEFORE stopping the thread so the normal 250 Hz
+        # clip-to-measured path does the moving — no separate slew logic here.
+        settle_s = float(self.config.handback_to_startup_pose_s)
+        if (
+            settle_s > 0.0
+            and self.config.publish_cmd
+            and self._startup_arm_q is not None
+            and self._thread is not None
+            and self._thread.is_alive()
+        ):
+            try:
+                with self._lock:
+                    measured = (
+                        np.array([float(self._low_state.motor_state[i].q) for i in _ARM_IDX])
+                        if self._low_state is not None
+                        else None
+                    )
+                start_q = measured if measured is not None else self._target_q.copy()
+                delta = float(np.max(np.abs(self._startup_arm_q - start_q)))
+                # INTERPOLATE, do not jump. Writing _target_q straight to the goal would
+                # let the 250 Hz clip run at arm_velocity_limit (20 rad/s) and throw the
+                # arm across in a fraction of a second. Same reason oda/arm_home.py walks
+                # its target over seconds instead of publishing the endpoint.
+                travel_s = min(max(delta / _HANDBACK_SPEED_RAD_S, 0.0), 6.0)
+                logger.info(
+                    "arm_sdk handback: walking back to the startup (onboard) pose before "
+                    "the weight ramp-down — max move %.3f rad over %.1fs, then %.1fs settle",
+                    delta, travel_s, settle_s,
+                )
+                steps = max(int(travel_s * _HANDBACK_RATE_HZ), 1)
+                for k in range(1, steps + 1):
+                    with self._lock:
+                        self._target_q = start_q + (self._startup_arm_q - start_q) * (k / steps)
+                    time.sleep(1.0 / _HANDBACK_RATE_HZ)
+                with self._lock:
+                    self._target_q = self._startup_arm_q.copy()
+                time.sleep(settle_s)
+            except Exception as e:  # never block shutdown on this
+                logger.warning(f"arm_sdk handback to startup pose failed: {e}")
         self._stop_event.set()
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=2.0)
