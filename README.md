@@ -475,7 +475,7 @@ uv run pytest --numprocesses=auto dimos
 
 Python is our glue and prototyping language, but we support many languages via LCM interop.
 
-Check our language interop examples:
-- [C++](examples/language-interop/cpp/)
-- [Lua](examples/language-interop/lua/)
-- [TypeScript](examples/language-interop/ts/)
+Check the language interop examples upstream:
+- [C++](https://github.com/dimensionalOS/dimos/tree/main/examples/language-interop/cpp)
+- [Lua](https://github.com/dimensionalOS/dimos/tree/main/examples/language-interop/lua)
+- [TypeScript](https://github.com/dimensionalOS/dimos/tree/main/examples/language-interop/ts)

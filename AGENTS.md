@@ -87,7 +87,7 @@ unitree_go2_agentic = autoconnect(
 )
 ```
 
-Reference: `dimos/robot/unitree/go2/blueprints/agentic/unitree_go2_agentic.py`
+Reference: `dimos/robot/unitree/g1/blueprints/agentic/unitree_g1_agentic.py`
 
 ---
 

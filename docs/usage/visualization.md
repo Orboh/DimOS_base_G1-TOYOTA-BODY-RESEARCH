@@ -97,14 +97,16 @@ This happens on lower-end hardware (NUC, older laptops) with large maps.
 
 ### Increase Voxel Size
 
-Edit [`dimos/robot/unitree/go2/blueprints/smart/unitree_go2.py`](/dimos/robot/unitree/go2/blueprints/smart/unitree_go2.py):
+Raise `voxel_size` where the mapper is composed — e.g.
+[`uintree_g1_primitive_no_nav.py`](/dimos/robot/unitree/g1/blueprints/primitive/uintree_g1_primitive_no_nav.py)
+deploys [`VoxelGridMapper`](/dimos/mapping/voxels.py):
 
 ```python skip
 # Before (high detail, slower on large maps)
-voxel_mapper(voxel_size=0.05),  # 5cm voxels
+VoxelGridMapper.blueprint(voxel_size=0.05),  # 5cm voxels
 
 # After (lower detail, 8x faster)
-voxel_mapper(voxel_size=0.1),   # 10cm voxels
+VoxelGridMapper.blueprint(voxel_size=0.1),   # 10cm voxels
 ```
 
 **Trade-off:**

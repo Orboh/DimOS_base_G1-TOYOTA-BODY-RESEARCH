@@ -215,7 +215,7 @@ It also includes `make_header()` and `time_from_seconds()` for building ROS-comp
 
 ## Examples
 
-For language interop examples (subscribing to DimOS topics from C++, TypeScript, Lua), see [/examples/language-interop/](/examples/language-interop/README.md).
+For language interop examples (subscribing to DimOS topics from C++, TypeScript, Lua), see [examples/language-interop/](https://github.com/dimensionalOS/dimos/tree/main/examples/language-interop) upstream.
 
 ### Livox Mid-360 Module
 
