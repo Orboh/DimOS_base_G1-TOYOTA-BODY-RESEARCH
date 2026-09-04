@@ -602,6 +602,8 @@ exclude_also = [
 max_size_kb = 50
 ignore = [
     "uv.lock",
+    # LFS 対象外にした README トップ画像（.gitattributes 参照）
+    "assets/readme/okra_g1_field.jpg",
     "*/package-lock.json",
     "dimos/dashboard/dimos.rbl",
     "dimos/web/dimos_interface/themes.json",
