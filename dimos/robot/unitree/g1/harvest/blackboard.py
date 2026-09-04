@@ -5,6 +5,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """Blackboard (shared world state) and config for the okra-harvest workflow.
 
@@ -39,7 +53,9 @@ from typing import Any, Literal, TypedDict
 # graspability gate is the 3D reach box below).
 ImgRegion = Literal["R", "L"]
 
-OkraStatus = Literal["target", "picked", "skipped_unripe", "skipped_height", "left_pending", "failed"]
+OkraStatus = Literal[
+    "target", "picked", "skipped_unripe", "skipped_height", "left_pending", "failed"
+]
 
 # High-level mode mirrors the handbook's §3 `mode`. Harvest progresses
 # right→left across the row, so the discovery sweep advances LEFT.
@@ -122,18 +138,16 @@ class HarvestConfig:
     max_harvest_iterations: int = 80  # safety cap on total detect→(move|pick) loops
     basket_capacity: int = 30  # number of fruits before the basket is full
 
-    # --- geometry [m] (robot base frame) ---
+    # geometry [m] (robot base frame)
     # Right-side reach volume: the arm can grasp only inside this box. Real values
     # (see class docstring) — NOT a placeholder.
-    reach: Box3D = field(
-        default_factory=lambda: Box3D(-0.20, 0.75, 0.05, 0.65, -0.35, 0.85)
-    )
+    reach: Box3D = field(default_factory=lambda: Box3D(-0.20, 0.75, 0.05, 0.65, -0.35, 0.85))
     # Camera field of view: what detection can SEE (wider than reach). STILL a placeholder
     # (never calibrated against the real camera) — but widened on y/z so it stays a proper
     # superset of the now-real `reach` box above (an okra must be visible before reachable).
     fov: Box3D = field(default_factory=lambda: Box3D(-0.80, 0.80, 0.00, 1.50, -0.35, 1.60))
 
-    # --- movement [m] / counts ---
+    # movement [m] / counts
     # Harvest progresses RIGHT→LEFT: the discovery sweep steps left by this much.
     # (Reach stays on the right — the okra-ACT arm/Dex1 is the right one.)
     advance_step: float = 0.30  # lateral step magnitude when sweeping left to discover fruit
@@ -216,13 +230,13 @@ def find_okra(state: HarvestState, okra_id: str | None) -> Okra | None:
 
 
 __all__ = [
-    "ImgRegion",
-    "OkraStatus",
-    "Mode",
     "Box3D",
-    "Okra",
     "HarvestConfig",
     "HarvestState",
-    "initial_state",
+    "ImgRegion",
+    "Mode",
+    "Okra",
+    "OkraStatus",
     "find_okra",
+    "initial_state",
 ]

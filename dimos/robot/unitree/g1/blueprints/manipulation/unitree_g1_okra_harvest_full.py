@@ -6,6 +6,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """ブループリント: フル構成のオクラ収穫 — 実機アーム（okra-ACT）+ 実機歩行ベース + 音声。
 
@@ -59,8 +73,20 @@ _NIC = os.getenv("ROBOT_INTERFACE", "")
 # ツリーモデルデータセット（sotata/okura-pick-tree-20260615）の初期フレームアーム姿勢 [rad]
 # （左7関節 + 右7関節）— 起動時にアームがここへスルーし、ポリシーが分布内から開始される。
 _INIT_ARM_POSE = [
-    0.269, 0.196, -0.018, 0.986, 0.122, 0.028, 0.003,   # 左アーム
-    -0.114, 0.029, 0.185, 0.538, 0.209, -0.755, 0.370,  # 右アーム
+    0.269,
+    0.196,
+    -0.018,
+    0.986,
+    0.122,
+    0.028,
+    0.003,  # 左アーム
+    -0.114,
+    0.029,
+    0.185,
+    0.538,
+    0.209,
+    -0.755,
+    0.370,  # 右アーム
 ]
 
 
@@ -73,18 +99,18 @@ unitree_g1_okra_harvest_full = (
         G1HighLevelDdsSdk.blueprint(network_interface=_NIC),  # ベース歩行（LocoClient）
         HarvestModule.blueprint(
             use_dummy=False,
-            use_act_grasp=True,      # ⚠️ 実機アーム到達（2カメラツリーモデル）
-            use_base_move=True,      # ⚠️ cmd_vel -> LocoClient による実機ベース歩行
-            use_g1_speaker=True,     # 日本語 G1 スピーカー
-            vlm_model="moondream",   # ローカル Ollama ビジョン確認（約1秒 キャプション+キーワード）
+            use_act_grasp=True,  # ⚠️ 実機アーム到達（2カメラツリーモデル）
+            use_base_move=True,  # ⚠️ cmd_vel -> LocoClient による実機ベース歩行
+            use_g1_speaker=True,  # 日本語 G1 スピーカー
+            vlm_model="moondream",  # ローカル Ollama ビジョン確認（約1秒 キャプション+キーワード）
             # 検出+確認用 Ollama ベース URL。空 -> ollama_vlm DEFAULT_HOST
             # （Jetson）。Jetson がロボット LAN から外れている場合は実行ごとに上書き。
             # 例: OLLAMA_HOST=http://127.0.0.1:11434 でラップトップローカルの Ollama を使用。
             ollama_host=os.getenv("OLLAMA_HOST", ""),
-            use_vlm_detect=True,     # moondream でオクラを検出（存在確認）→ オクラ学習済み
-                                     # YOLO なしで検出後フローを動作確認
-            use_forward_search=True, # オクラなし → 左掃引後に前進歩行し
-                                     # 探索継続（1スポットで終了しない）
+            use_vlm_detect=True,  # moondream でオクラを検出（存在確認）→ オクラ学習済み
+            # YOLO なしで検出後フローを動作確認
+            use_forward_search=True,  # オクラなし → 左掃引後に前進歩行し
+            # 探索継続（1スポットで終了しない）
         ),
     )
     .remappings(
@@ -100,7 +126,9 @@ unitree_g1_okra_harvest_full = (
             ("cam_right_wrist", Image): LCMTransport("/cam_right_wrist", Image),
             ("motor_states", JointState): LCMTransport("/g1/motor_states", JointState),
             ("arm_target", JointState): LCMTransport("/g1/arm_target", JointState),
-            ("right_gripper_state", JointState): LCMTransport("/g1/right_gripper_state", JointState),
+            ("right_gripper_state", JointState): LCMTransport(
+                "/g1/right_gripper_state", JointState
+            ),
             ("gripper_target", JointState): LCMTransport("/g1/gripper_target", JointState),
             ("cmd_vel", Twist): LCMTransport("/cmd_vel", Twist),
         }

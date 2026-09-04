@@ -6,6 +6,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """Verify Japanese audio via the G1 speaker using PlayStream (off-board synthesis).
 
@@ -48,8 +62,23 @@ def _synth_pcm(text: str, wav_path: str | None, voice: str, speed: int | None, r
         subprocess.run(cmd, check=True)
     pcm_path = tempfile.mktemp(suffix=".pcm")
     subprocess.run(
-        ["ffmpeg", "-y", "-loglevel", "error", "-i", tmp_wav,
-         "-f", "s16le", "-acodec", "pcm_s16le", "-ac", "1", "-ar", str(rate), pcm_path],
+        [
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            "error",
+            "-i",
+            tmp_wav,
+            "-f",
+            "s16le",
+            "-acodec",
+            "pcm_s16le",
+            "-ac",
+            "1",
+            "-ar",
+            str(rate),
+            pcm_path,
+        ],
         check=True,
     )
     with open(pcm_path, "rb") as f:
@@ -62,7 +91,9 @@ def main() -> None:
     ap.add_argument("--text", default=_DEFAULT_TEXT)
     ap.add_argument("--wav", default=None, help="play this wav instead of synthesising")
     ap.add_argument("--voice", default="ja", help="espeak-ng voice")
-    ap.add_argument("--speed", type=int, default=None, help="espeak-ng words/min (slower = clearer)")
+    ap.add_argument(
+        "--speed", type=int, default=None, help="espeak-ng words/min (slower = clearer)"
+    )
     ap.add_argument("--rate", type=int, default=16000, help="PCM sample rate [Hz] (G1 assumption)")
     ap.add_argument("--volume", type=int, default=None, help="0-100")
     ap.add_argument("--chunk-ms", type=int, default=200, help="PlayStream chunk size [ms]")
@@ -84,7 +115,7 @@ def main() -> None:
     client = AudioClient()
     try:
         client.SetTimeout(10.0)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         print(f"[verify] SetTimeout n/a ({exc})")
     client.Init()
     if args.volume is not None:

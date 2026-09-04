@@ -5,6 +5,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """Spoken (Japanese) announcements for the harvest workflow.
 
@@ -48,14 +62,13 @@ MoveDir = str  # one of: "forward" | "back" | "left" | "right"
 class Announcer(Protocol):
     """Speaks a line of (Japanese) text to the human."""
 
-    def say(self, text: str) -> None:
-        ...
+    def say(self, text: str) -> None: ...
 
 
 class NullAnnouncer:
     """Says nothing. The default when no speaker is wired."""
 
-    def say(self, text: str) -> None:  # noqa: D102
+    def say(self, text: str) -> None:
         return None
 
 
@@ -83,11 +96,11 @@ class CallableAnnouncer:
     def say(self, text: str) -> None:
         try:
             self._speak(text)
-        except Exception as exc:  # noqa: BLE001 — a TTS failure must not stop harvesting
+        except Exception as exc:
             logger.warning("announce failed", text=text, error=str(exc))
 
 
-# --- Fixed Japanese phrases (one place to review / tweak the wording) ----------
+# Fixed Japanese phrases (one place to review / tweak the wording)
 
 
 def start() -> str:
@@ -172,25 +185,25 @@ def done(count: int) -> str:
 
 __all__ = [
     "Announcer",
+    "CallableAnnouncer",
     "NullAnnouncer",
     "RecordingAnnouncer",
-    "CallableAnnouncer",
-    "start",
-    "grasping",
-    "skip_height",
     "approaching",
-    "regrasp",
-    "picked",
-    "searching",
-    "revisiting",
-    "safety_stop",
-    "safety_resume",
-    "next_station",
     "basket_swap",
-    "give_up",
     "detect_result",
-    "verify_ok",
-    "verify_fail",
-    "ripeness_skip",
     "done",
+    "give_up",
+    "grasping",
+    "next_station",
+    "picked",
+    "regrasp",
+    "revisiting",
+    "ripeness_skip",
+    "safety_resume",
+    "safety_stop",
+    "searching",
+    "skip_height",
+    "start",
+    "verify_fail",
+    "verify_ok",
 ]

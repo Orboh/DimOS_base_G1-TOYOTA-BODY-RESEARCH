@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Drive the G1 base by publishing Twist on /cmd_vel (the WebRTC walking path).
 
 ⚠️⚠️ THIS MOVES THE ROBOT (legs). ⚠️⚠️ This is the FleetSeek-proven locomotion
@@ -35,10 +49,16 @@ def _twist(vx: float, vy: float, vyaw: float) -> Twist:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--forward", type=float, default=0.0, help="relative forward move [m] (+fwd/-back)")
-    ap.add_argument("--lateral", type=float, default=0.0, help="relative lateral move [m] (+left/-right)")
+    ap.add_argument(
+        "--forward", type=float, default=0.0, help="relative forward move [m] (+fwd/-back)"
+    )
+    ap.add_argument(
+        "--lateral", type=float, default=0.0, help="relative lateral move [m] (+left/-right)"
+    )
     ap.add_argument("--yaw", type=float, default=0.0, help="relative turn [rad] (+CCW)")
-    ap.add_argument("--speed", type=float, default=0.12, help="translation speed [m/s] (kept small)")
+    ap.add_argument(
+        "--speed", type=float, default=0.12, help="translation speed [m/s] (kept small)"
+    )
     ap.add_argument("--yaw-speed", type=float, default=0.3, help="turn speed [rad/s]")
     ap.add_argument("--hz", type=float, default=10.0, help="publish rate [Hz]")
     ap.add_argument("--max", type=float, default=0.5, help="safety cap on a single translation [m]")
@@ -47,24 +67,49 @@ def main() -> int:
 
     for axis, val in (("forward", args.forward), ("lateral", args.lateral)):
         if abs(val) > args.max:
-            raise SystemExit(f"{axis}={val} exceeds safety cap {args.max} m (raise --max deliberately)")
+            raise SystemExit(
+                f"{axis}={val} exceeds safety cap {args.max} m (raise --max deliberately)"
+            )
 
     moves: list[tuple[str, float, float, float, float]] = []
     if abs(args.forward) >= 1e-3:
-        moves.append(("forward", args.speed * (1 if args.forward > 0 else -1), 0.0, 0.0,
-                      abs(args.forward) / args.speed))
+        moves.append(
+            (
+                "forward",
+                args.speed * (1 if args.forward > 0 else -1),
+                0.0,
+                0.0,
+                abs(args.forward) / args.speed,
+            )
+        )
     if abs(args.lateral) >= 1e-3:
-        moves.append(("lateral", 0.0, args.speed * (1 if args.lateral > 0 else -1), 0.0,
-                      abs(args.lateral) / args.speed))
+        moves.append(
+            (
+                "lateral",
+                0.0,
+                args.speed * (1 if args.lateral > 0 else -1),
+                0.0,
+                abs(args.lateral) / args.speed,
+            )
+        )
     if abs(args.yaw) >= 1e-3:
-        moves.append(("yaw", 0.0, 0.0, args.yaw_speed * (1 if args.yaw > 0 else -1),
-                      abs(args.yaw) / args.yaw_speed))
+        moves.append(
+            (
+                "yaw",
+                0.0,
+                0.0,
+                args.yaw_speed * (1 if args.yaw > 0 else -1),
+                abs(args.yaw) / args.yaw_speed,
+            )
+        )
     if not moves:
         raise SystemExit("nothing to do; pass --forward / --lateral / --yaw")
 
-    print("[walk] plan (publish on %s):" % CMD_VEL_CHANNEL)
+    print(f"[walk] plan (publish on {CMD_VEL_CHANNEL}):")
     for name, vx, vy, vyaw, dur in moves:
-        print(f"  {name}: vx={vx:+.2f} vy={vy:+.2f} vyaw={vyaw:+.2f} for {dur:.2f}s @ {args.hz:.0f}Hz")
+        print(
+            f"  {name}: vx={vx:+.2f} vy={vy:+.2f} vyaw={vyaw:+.2f} for {dur:.2f}s @ {args.hz:.0f}Hz"
+        )
     if args.dry:
         print("[walk] --dry: nothing published.")
         return 0

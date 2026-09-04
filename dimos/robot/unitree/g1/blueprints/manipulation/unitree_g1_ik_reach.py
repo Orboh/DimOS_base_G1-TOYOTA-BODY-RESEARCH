@@ -130,6 +130,7 @@ def _pointcloud_rgb_overlay(pc):  # type: ignore[no-untyped-def]
     radius = float(os.getenv("IK_PC_POINT_RADIUS", "0.0015"))
     return rr.Points3D(positions=np.asarray(points), colors=rgb, radii=radius)
 
+
 if _LIVE:
     logger.warning(
         f"unitree-g1-ik-reach LAUNCHING **LIVE** — arm WILL move via rt/arm_sdk on NIC "

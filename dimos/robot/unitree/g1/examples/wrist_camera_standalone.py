@@ -78,7 +78,10 @@ def main() -> int:
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
     cap.set(cv2.CAP_PROP_FPS, FPS)
     if not cap.isOpened():
-        print(f"[wrist-cam] FAILED to open {DEV} (check v4l2-ctl --list-devices / re-plug USB)", flush=True)
+        print(
+            f"[wrist-cam] FAILED to open {DEV} (check v4l2-ctl --list-devices / re-plug USB)",
+            flush=True,
+        )
         return 1
     print(
         f"[wrist-cam] {DEV} {WIDTH}x{HEIGHT}@{FPS} -> LCM {LCM_URL} /camera/right_wrist_color "

@@ -51,6 +51,7 @@ from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
 from dimos.manipulation.planning.kinematics.pinocchio_ik import (
+    PinocchioIKConfig,
     check_joint_delta,
     get_worst_joint_delta,
 )
@@ -58,7 +59,6 @@ from dimos.msgs.geometry_msgs.PointStamped import PointStamped
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.msgs.std_msgs.Bool import Bool
 from dimos.robot.unitree.g1.act.two_click_confirm import TwoClickConfirm
-from dimos.manipulation.planning.kinematics.pinocchio_ik import PinocchioIKConfig
 from dimos.robot.unitree.g1.ik_reach.right_arm_model import (
     DEFAULT_URDF,
     load_g1_right_arm_ik,
@@ -152,7 +152,7 @@ class IkReachBridgeConfig(ModuleConfig):
     # pose ACT closes by advancing +X (design: ① IK reach → handoff → ② ACT grasp).
     # NOT along the gripper approach axis; applied in _reach as a torso-frame offset.
     # 0.0 = drive the tip exactly onto the okra. Effective per-reach (not load-time).
-    standoff_m: float = 0.05   # placeholder: tune to ACT's handoff distance once known
+    standoff_m: float = 0.05  # placeholder: tune to ACT's handoff distance once known
     # Approach-from-above two-phase reach (2026-07-21): >0 = first reach a waypoint
     # this many meters DIRECTLY ABOVE the target (same x,y), then descend vertically
     # onto it. Motivation: the one-shot joint-space slew from the low rest pose sweeps
@@ -213,8 +213,8 @@ class IkReachBridgeConfig(ModuleConfig):
     # Safety gates.
     # 90° one-shot cap: a reach from the rest pose to an okra at the edge of the
     # wrist's ~0.45 m reach needs ~66° of shoulder-pitch swing (measured 2026-06-19).
-    max_joint_delta_deg: float = 90.0          # gross one-shot sanity gate
-    require_converged: bool = True             # never publish a solve worse than max_reach_pos_err_m
+    max_joint_delta_deg: float = 90.0  # gross one-shot sanity gate
+    require_converged: bool = True  # never publish a solve worse than max_reach_pos_err_m
     # Best-effort tolerance: an okra at the reach edge converges to ~24 mm, not <eps.
     # Reaching to within this distance is an acceptable "reach toward" for the PoC.
     max_reach_pos_err_m: float = 0.05
@@ -225,11 +225,11 @@ class IkReachBridgeConfig(ModuleConfig):
     # (forward-only — okra are in front, never behind/into the torso) and y upper
     # (don't reach across the body to the left; the right arm lives at -Y).
     ws_x: list[float] = [0.05, 0.65]
-    ws_y: list[float] = [-0.75, 0.20]          # right arm lives at -Y
-    ws_z: list[float] = [-0.35, 0.85]          # raised: 20 cm tip reaches higher/lower
-    reach_min_interval_s: float = 2.0          # debounce: ignore clicks during/just after a reach
-    max_click_age_s: float = 5.0               # reject stale clicks (laptop-local receive time)
-    max_state_age_s: float = 1.0               # reject reach if measured motor_states is stale
+    ws_y: list[float] = [-0.75, 0.20]  # right arm lives at -Y
+    ws_z: list[float] = [-0.35, 0.85]  # raised: 20 cm tip reaches higher/lower
+    reach_min_interval_s: float = 2.0  # debounce: ignore clicks during/just after a reach
+    max_click_age_s: float = 5.0  # reject stale clicks (laptop-local receive time)
+    max_state_age_s: float = 1.0  # reject reach if measured motor_states is stale
     # IK->ACT handoff: after an accepted reach we publish q_sol ONCE to arm_sdk
     # (which slews there via clip-to-measured) and fire reach_done after an
     # OPEN-LOOP timed wait — we do NOT read motor state to judge completion.
@@ -241,17 +241,17 @@ class IkReachBridgeConfig(ModuleConfig):
     # biased SLOW: too fast re-introduces mid-slew firing; too slow only delays
     # the grasp. CAVEAT: open-loop can't detect a stalled/blocked arm — the
     # e-stop operator is the stall detector for this PoC. Tune on hardware.
-    reach_nominal_speed_rad_s: float = 1.0   # effective slew speed for the wait estimate [rad/s]
-    reach_margin_s: float = 0.5              # additive settle margin on top of travel time [s]
-    reach_min_wait_s: float = 0.8            # floor (latency + tiny moves) [s]
-    reach_max_wait_s: float = 3.0            # ceiling before handoff [s]
-    reach_dry_wait_s: float = 0.1            # DRY: short fixed wait (arm not driven) [s]
+    reach_nominal_speed_rad_s: float = 1.0  # effective slew speed for the wait estimate [rad/s]
+    reach_margin_s: float = 0.5  # additive settle margin on top of travel time [s]
+    reach_min_wait_s: float = 0.8  # floor (latency + tiny moves) [s]
+    reach_max_wait_s: float = 3.0  # ceiling before handoff [s]
+    reach_dry_wait_s: float = 0.1  # DRY: short fixed wait (arm not driven) [s]
     # Spoken phase announcements through the G1 speaker (Japanese: pyopenjtalk +
     # PlayStream, the same path the LangGraph harvest app uses). Off by default so no
     # existing blueprint changes behaviour. Degrades to log-only if the speaker cannot be
     # built, and never raises into the reach path.
     voice: bool = False
-    voice_nic: str = ""      # wired NIC to the G1 (shares the process-wide DDS factory)
+    voice_nic: str = ""  # wired NIC to the G1 (shares the process-wide DDS factory)
     voice_volume: int = 100  # 0-100
     log_every_n: int = 1
     # Hand-eye calibration diagnostic: log the MEASURED gripper tip in torso every N
@@ -266,10 +266,10 @@ class IkReachBridge(Module):
 
     config: IkReachBridgeConfig
 
-    clicked_point: In[PointStamped]      # human click in the viewer (frame=entity_path)
-    motor_states: In[JointState]         # full 29-DOF measured state (IK warm-start)
-    arm_target: Out[JointState]          # 14 arm targets -> G1ArmSdkConnection
-    reach_done: Out[Bool]                # fired once after the arm settles -> ActBridge
+    clicked_point: In[PointStamped]  # human click in the viewer (frame=entity_path)
+    motor_states: In[JointState]  # full 29-DOF measured state (IK warm-start)
+    arm_target: Out[JointState]  # 14 arm targets -> G1ArmSdkConnection
+    reach_done: Out[Bool]  # fired once after the arm settles -> ActBridge
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -278,9 +278,7 @@ class IkReachBridge(Module):
         # over-constrained 6-DOF reach can demand.
         self._arm = load_g1_right_arm_ik(
             self.config.urdf_path,
-            ik_config=PinocchioIKConfig(
-                position_only=not self.config.fixed_orientation_xyzw
-            ),
+            ik_config=PinocchioIKConfig(position_only=not self.config.fixed_orientation_xyzw),
             gripper_offset_xyz=self.config.gripper_offset_xyz,
         )
         # FAIL CLOSED: every downstream index (warm-start pos[22:29], q_sol, the
@@ -394,7 +392,9 @@ class IkReachBridge(Module):
             tip_torso = np.asarray(self._arm.root_to_torso_pose(tip_root).translation)
             logger.info(
                 "IkReachBridge[TIP] measured gripper tip (torso) = [%.3f %.3f %.3f]",
-                float(tip_torso[0]), float(tip_torso[1]), float(tip_torso[2]),
+                float(tip_torso[0]),
+                float(tip_torso[1]),
+                float(tip_torso[2]),
             )
         except Exception as e:  # diagnostic only — never disturb the reach path
             logger.debug(f"tip-log failed: {e!r}")
@@ -427,7 +427,7 @@ class IkReachBridge(Module):
 
     def _reach(self, click: PointStamped, state: JointState, recv_t: float) -> None:
         now = time.time()
-        # --- input gates -------------------------------------------------------
+        # input gates
         if not click.frame_id:
             logger.warning("IkReachBridge: click has empty frame_id; rejecting (no silent guess).")
             return
@@ -461,7 +461,7 @@ class IkReachBridge(Module):
             logger.info("IkReachBridge: within debounce interval; ignoring click.")
             return
 
-        # --- two-click confirm guard (phantom-click protection) ----------------
+        # two-click confirm guard (phantom-click protection)
         if self.config.confirm_click:
             if not self._confirm.feed(float(click.x), float(click.y), float(click.z), now):
                 logger.info(
@@ -476,7 +476,9 @@ class IkReachBridge(Module):
         # baseline all depend on a fresh measured pose).
         state_ts = float(getattr(state, "ts", 0.0) or 0.0)
         if state_ts and (now - state_ts) > self.config.max_state_age_s:
-            logger.warning(f"IkReachBridge: stale motor_states ({now - state_ts:.1f}s old); rejecting.")
+            logger.warning(
+                f"IkReachBridge: stale motor_states ({now - state_ts:.1f}s old); rejecting."
+            )
             return
 
         pos = list(state.position)
@@ -489,7 +491,7 @@ class IkReachBridge(Module):
             logger.warning("IkReachBridge: measured arm pose has non-finite values; rejecting.")
             return
 
-        # --- click point -> torso -> IK ROOT frame (static SE3; blocker #1) ----
+        # click point -> torso -> IK ROOT frame (static SE3; blocker #1)
         p_click = np.array([float(click.x), float(click.y), float(click.z)])
         p_torso = np.asarray(self._T_torso_click.act(p_click)) + np.array(
             self.config.approach_offset_xyz, dtype=float
@@ -535,11 +537,15 @@ class IkReachBridge(Module):
 
         target = pinocchio.SE3(rot, np.asarray(p_root, dtype=float))
 
-        # --- solve + safety gates ---------------------------------------------
+        # solve + safety gates
         q_sol, converged, err = self._arm.ik.solve(target, q_right)
         q_sol = np.asarray(q_sol, dtype=float).flatten()
 
-        if self.config.require_converged and not converged and err > self.config.max_reach_pos_err_m:
+        if (
+            self.config.require_converged
+            and not converged
+            and err > self.config.max_reach_pos_err_m
+        ):
             logger.warning(
                 f"IkReachBridge: IK err={err:.4f} m exceeds tol {self.config.max_reach_pos_err_m} m; rejecting."
             )
@@ -567,10 +573,12 @@ class IkReachBridge(Module):
             )
             return
         if not self._arm.clamp_ok(q_sol):
-            logger.warning(f"IkReachBridge: q_sol {np.round(q_sol, 3)} violates joint limits; rejecting.")
+            logger.warning(
+                f"IkReachBridge: q_sol {np.round(q_sol, 3)} violates joint limits; rejecting."
+            )
             return
 
-        # --- accepted: arm the debounce identically in DRY and LIVE -----------
+        # accepted: arm the debounce identically in DRY and LIVE
         self._last_reach_t = now
         self._count += 1
         # Announce only once the target passed every gate, so a rejected click never
@@ -606,7 +614,9 @@ class IkReachBridge(Module):
                         and self.config.ws_y[0] <= p_i[1] <= self.config.ws_y[1]
                         and self.config.ws_z[0] <= p_i[2] <= self.config.ws_z[1]
                     ):
-                        logger.warning(f"IkReachBridge: {label} step {i}/{n} outside workspace; leg stopped.")
+                        logger.warning(
+                            f"IkReachBridge: {label} step {i}/{n} outside workspace; leg stopped."
+                        )
                         return q_cur_, False, False
                     tgt = pinocchio.SE3(rot, np.asarray(self._arm.torso_to_root(p_i), dtype=float))
                     qn, cv, er = self._arm.ik.solve(tgt, q_cur_)
@@ -616,7 +626,9 @@ class IkReachBridge(Module):
                         and check_joint_delta(qn, q_cur_, self.config.max_joint_delta_deg)
                         and self._arm.clamp_ok(qn)
                     ):
-                        logger.warning(f"IkReachBridge: {label} step {i}/{n} infeasible; leg stopped.")
+                        logger.warning(
+                            f"IkReachBridge: {label} step {i}/{n} infeasible; leg stopped."
+                        )
                         return q_cur_, False, False
                     self.arm_target.publish(
                         JointState(
@@ -629,7 +641,9 @@ class IkReachBridge(Module):
                     q_cur_ = qn
                     if self._stop_event.wait(cadence):
                         return q_cur_, False, True  # shutting down: abort the whole reach
-                logger.info(f"IkReachBridge: {label} leg done ({n} steps -> torso{np.round(p_to, 3)})")
+                logger.info(
+                    f"IkReachBridge: {label} leg done ({n} steps -> torso{np.round(p_to, 3)})"
+                )
                 return q_cur_, True, False
 
             tip_now = np.asarray(
@@ -654,19 +668,25 @@ class IkReachBridge(Module):
                         return
                 # (3) DESCEND: vertical drop onto the target.
                 if ok:
-                    q_cur, ok, abort = _stream_leg(p_over, np.asarray(p_torso, dtype=float), q_cur, "descend")
+                    q_cur, ok, abort = _stream_leg(
+                        p_over, np.asarray(p_torso, dtype=float), q_cur, "descend"
+                    )
                     if abort:
                         return
             else:
                 # FRONT approach: (1) straight tip-line to a point front_m before the
                 # target (free space in front of the row), then (2) straight +X push
                 # onto the pod — the jaw slot meets it head-on, no side sweep.
-                p_front = np.array([float(p_torso[0]) - front, float(p_torso[1]), float(p_torso[2])])
+                p_front = np.array(
+                    [float(p_torso[0]) - front, float(p_torso[1]), float(p_torso[2])]
+                )
                 q_cur, ok, abort = _stream_leg(tip_now, p_front, q_cur, "front-approach")
                 if abort:
                     return
                 if ok:
-                    q_cur, ok, abort = _stream_leg(p_front, np.asarray(p_torso, dtype=float), q_cur, "push")
+                    q_cur, ok, abort = _stream_leg(
+                        p_front, np.asarray(p_torso, dtype=float), q_cur, "push"
+                    )
                     if abort:
                         return
             # Adopt the streamed endpoint solution when the path completed; on a
@@ -707,7 +727,7 @@ class IkReachBridge(Module):
                 )
             )
 
-        # --- IK->ACT handoff: OPEN-LOOP timed wait, then fire reach_done ------
+        # IK->ACT handoff: OPEN-LOOP timed wait, then fire reach_done
         # We do NOT read motor state to decide completion (that false-fired ACT
         # mid-slew). Estimate how long the arm needs from the joint travel it must
         # cover (q_right = measured start pose, rad), wait that long, then hand off.
@@ -717,7 +737,10 @@ class IkReachBridge(Module):
             wait_s = self.config.reach_dry_wait_s
         else:
             delta = float(np.max(np.abs(q_sol - q_start)))
-            wait_s = delta / max(self.config.reach_nominal_speed_rad_s, 1e-3) + self.config.reach_margin_s
+            wait_s = (
+                delta / max(self.config.reach_nominal_speed_rad_s, 1e-3)
+                + self.config.reach_margin_s
+            )
             wait_s = min(max(wait_s, self.config.reach_min_wait_s), self.config.reach_max_wait_s)
         if self._stop_event.wait(wait_s):
             return  # stopping: never hand off to ACT on a shutting-down bridge

@@ -3,6 +3,20 @@
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
 """Standalone D435i -> LCM point-cloud publisher for the IK-reach PoC.
 
 Runs ON THE ROBOT'S JETSON. This is a drop-in replacement for
@@ -33,6 +47,7 @@ Run (in the ik_cam conda env):
   python ik_camera_standalone.py
 No PYTEST_VERSION needed (no dimos run = no system configurator).
 """
+
 from __future__ import annotations
 
 import os
@@ -59,7 +74,9 @@ HEIGHT = int(os.getenv("IK_CAMERA_HEIGHT", "480"))
 CAPTURE_FPS = int(os.getenv("IK_CAMERA_CAPTURE_FPS", "15"))
 PC_FPS = float(os.getenv("IK_CAMERA_PC_FPS", "3.0"))
 INFO_FPS = float(os.getenv("IK_CAMERA_INFO_FPS", "1.0"))
-VOXEL = float(os.getenv("IK_CAMERA_VOXEL", "0.002"))  # 2mm voxel: dense enough to read the okra (≈6x the old 5mm). Smaller=denser but heavier.
+VOXEL = float(
+    os.getenv("IK_CAMERA_VOXEL", "0.002")
+)  # 2mm voxel: dense enough to read the okra (≈6x the old 5mm). Smaller=denser but heavier.
 # Drop points beyond this optical distance [m]. The head camera is pitched down and
 # sees the far floor/wall (median ~2m), which swamps the near okra (~0.3-0.6m) and
 # makes it un-clickable. Truncating to the near reach-workspace keeps only the okra +
@@ -105,7 +122,7 @@ def main() -> int:
     signal.signal(signal.SIGINT, _stop)
     signal.signal(signal.SIGTERM, _stop)
 
-    # --- pyrealsense2 pipeline (inline of RealSenseCamera.start, camera.py:119-160) ---
+    # pyrealsense2 pipeline (inline of RealSenseCamera.start, camera.py:119-160)
     pipeline = rs.pipeline()
     cfg = rs.config()
     cfg.enable_device(SERIAL)

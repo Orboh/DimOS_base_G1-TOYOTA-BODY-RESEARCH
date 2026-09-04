@@ -198,31 +198,29 @@ class _PolicyClient:
 # Columns = the UMI axes written in gripper_tip coordinates:
 #   UMI +x (right) -> G1 -y    UMI +y (down) -> G1 -z    UMI +z (fwd) -> G1 +x
 _R_TIP_TO_UMI = np.array(
-    [[0.0, 0.0, 1.0],
-     [-1.0, 0.0, 0.0],
-     [0.0, -1.0, 0.0]],
+    [[0.0, 0.0, 1.0], [-1.0, 0.0, 0.0], [0.0, -1.0, 0.0]],
     dtype=np.float64,
 )
 
 
 class UmiDiffusionBridgeConfig(ModuleConfig):
-    # ---- policy server (co-located, umi conda env) ----
+    # policy server (co-located, umi conda env)
     server_addr: str = "tcp://127.0.0.1:5599"
-    predict_timeout_ms: int = 300      # per-tick request budget; timeout -> hold this tick
+    predict_timeout_ms: int = 300  # per-tick request budget; timeout -> hold this tick
     max_consecutive_timeouts: int = 10  # abort the adjustment (hold + fire nothing) after this many
 
-    # ---- control loop ----
-    control_hz: float = 10.0           # UMI eval default frequency
-    n_exec_per_infer: int = 1          # execute this many returned waypoints per inference
-                                       # (1 = receding-horizon, re-infer every tick; needs
-                                       #  inference < 1/control_hz. Raise to amortize latency.)
-    max_duration_s: float = 30.0       # safety ceiling on one adjustment episode
+    # control loop
+    control_hz: float = 10.0  # UMI eval default frequency
+    n_exec_per_infer: int = 1  # execute this many returned waypoints per inference
+    # (1 = receding-horizon, re-infer every tick; needs
+    #  inference < 1/control_hz. Raise to amortize latency.)
+    max_duration_s: float = 30.0  # safety ceiling on one adjustment episode
 
-    # ---- convergence -> handoff (adjust_done) ----
+    # convergence -> handoff (adjust_done)
     converge_pos_eps_m: float = 0.004  # commanded EE position step below which we count "settled"
-    converge_hold_ticks: int = 8       # consecutive settled ticks -> fire adjust_done
+    converge_hold_ticks: int = 8  # consecutive settled ticks -> fire adjust_done
 
-    # ---- IK / arm model ----
+    # IK / arm model
     urdf_path: str = str(DEFAULT_URDF)
     # Gripper-tip offset from the wrist [m], WRIST frame == the point IK drives / FK reports
     # as the EE. MUST match the TCP point UMI tracked during data collection (Step 6:
@@ -232,7 +230,7 @@ class UmiDiffusionBridgeConfig(ModuleConfig):
     # non-convergence). v2: False = full 6-DOF (follow the policy's commanded orientation).
     position_only: bool = False
 
-    # ---- EE frame handed to / received from the policy (see _R_TIP_TO_UMI) ----
+    # EE frame handed to / received from the policy (see _R_TIP_TO_UMI)
     # "camera": send the UMI TCP frame (GoPro optical axes) and convert the returned
     #           waypoints back to gripper_tip. This is the CORRECT setting.
     # "tip":    send the raw G1 gripper_tip frame (pre-2026-08-26 behaviour). Kept only
@@ -244,7 +242,7 @@ class UmiDiffusionBridgeConfig(ModuleConfig):
     # zero until the 6-DOF mode is used.
     tip_to_tcp_xyz: list[float] = [0.0, 0.0, 0.0]
 
-    # ---- safety gates (mirror IkReachBridge) ----
+    # safety gates (mirror IkReachBridge)
     max_joint_delta_deg: float = 20.0  # per-cycle cap (tighter than IkReach's one-shot 90°)
     max_reach_pos_err_m: float = 0.05
     require_converged: bool = True
@@ -253,7 +251,7 @@ class UmiDiffusionBridgeConfig(ModuleConfig):
     ws_z: list[float] = [-0.35, 0.85]
     max_state_age_s: float = 1.0
 
-    # ---- wrist-camera liveness (this side cannot see the camera; the server reports it) ----
+    # wrist-camera liveness (this side cannot see the camera; the server reports it)
     # The camera dies SILENTLY in two ways, both observed on hardware:
     #  * the capture device vanishes (a USB replug renumbers /dev/videoN) and the server's
     #    ring buffer then serves the SAME frame forever — on 2026-08-25 an entire LIVE run
@@ -263,9 +261,9 @@ class UmiDiffusionBridgeConfig(ModuleConfig):
     # Neither raises anywhere, and from this side both look exactly like "the policy just
     # isn't moving". So ask the server BEFORE the arm is driven, and refuse to start.
     require_camera_ok: bool = True
-    camera_check_timeout_ms: int = 2000   # health round-trip budget (no inference involved)
+    camera_check_timeout_ms: int = 2000  # health round-trip budget (no inference involved)
 
-    # ---- spoken phase announcements (Japanese, via the G1 speaker) ----
+    # spoken phase announcements (Japanese, via the G1 speaker)
     # From outside the robot an IK coarse reach and a diffusion fine-adjustment look the
     # same, and a refused adjustment looks like nothing at all. Off by default; degrades
     # to log-only if the speaker cannot be built, and never raises into the control loop.
@@ -273,15 +271,15 @@ class UmiDiffusionBridgeConfig(ModuleConfig):
     voice_nic: str = ""
     voice_volume: int = 100
 
-    # ---- DRY-RUN (default): compute + log, publish NOTHING ----
+    # DRY-RUN (default): compute + log, publish NOTHING
     log_only: bool = True
 
-    # ---- observability (see the module docstring) ----
-    log_every_n: int = 1        # print the per-tick `adj` line every N ticks (1 = every tick)
-    log_joints: bool = True     # include the q_meas / q_sol / delta-q block in that line
-    log_chunk_max: int = 4      # waypoints of each chunk to print (-1 = all, 0 = none)
-    trace_path: str = "auto"    # JSONL trace: "auto" = <run log dir>/umi_diffusion_trace.jsonl,
-                                # explicit path, or "" to disable
+    # observability (see the module docstring)
+    log_every_n: int = 1  # print the per-tick `adj` line every N ticks (1 = every tick)
+    log_joints: bool = True  # include the q_meas / q_sol / delta-q block in that line
+    log_chunk_max: int = 4  # waypoints of each chunk to print (-1 = all, 0 = none)
+    trace_path: str = "auto"  # JSONL trace: "auto" = <run log dir>/umi_diffusion_trace.jsonl,
+    # explicit path, or "" to disable
 
 
 class UmiDiffusionBridge(Module):
@@ -289,10 +287,10 @@ class UmiDiffusionBridge(Module):
 
     config: UmiDiffusionBridgeConfig
 
-    reach_done: In[Bool]             # IK settled at pre-grasp -> start adjustment
-    motor_states: In[JointState]     # full 29-DOF measured state (FK + IK warm-start)
-    arm_target: Out[JointState]      # 14 arm joint targets (left 7 held, right 7 from IK)
-    adjust_done: Out[Bool]           # fired once adjustment converges -> user's gripper program
+    reach_done: In[Bool]  # IK settled at pre-grasp -> start adjustment
+    motor_states: In[JointState]  # full 29-DOF measured state (FK + IK warm-start)
+    arm_target: Out[JointState]  # 14 arm joint targets (left 7 held, right 7 from IK)
+    adjust_done: Out[Bool]  # fired once adjustment converges -> user's gripper program
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -318,7 +316,7 @@ class UmiDiffusionBridge(Module):
         self._latest_state: JointState | None = None
         self._state_recv_t: float = 0.0
         self._client = _PolicyClient(self.config.server_addr, self.config.predict_timeout_ms)
-        self._busy = threading.Event()   # an adjustment episode is running
+        self._busy = threading.Event()  # an adjustment episode is running
         self._stop_event = threading.Event()
         self._worker: Thread | None = None
         self._count = 0
@@ -343,10 +341,21 @@ class UmiDiffusionBridge(Module):
             "log_only=%s tip_offset=%s converge=%.4fm x %d ticks max_duration=%.1fs "
             "log_every_n=%d log_joints=%s log_chunk_max=%d trace=%s "
             "(gripper is the USER's separate program; we fire adjust_done on convergence).",
-            c.server_addr, c.control_hz, c.n_exec_per_infer, c.position_only,
-            c.ee_frame, c.tip_to_tcp_xyz, c.log_only,
-            c.gripper_offset_xyz, c.converge_pos_eps_m, c.converge_hold_ticks, c.max_duration_s,
-            c.log_every_n, c.log_joints, c.log_chunk_max, self._trace_path or "OFF",
+            c.server_addr,
+            c.control_hz,
+            c.n_exec_per_infer,
+            c.position_only,
+            c.ee_frame,
+            c.tip_to_tcp_xyz,
+            c.log_only,
+            c.gripper_offset_xyz,
+            c.converge_pos_eps_m,
+            c.converge_hold_ticks,
+            c.max_duration_s,
+            c.log_every_n,
+            c.log_joints,
+            c.log_chunk_max,
+            self._trace_path or "OFF",
         )
 
     @rpc
@@ -409,7 +418,9 @@ class UmiDiffusionBridge(Module):
         try:
             p.parent.mkdir(parents=True, exist_ok=True)
         except Exception as e:
-            logger.warning(f"UmiDiffusionBridge: cannot create trace dir {p.parent}: {e!r}; trace OFF.")
+            logger.warning(
+                f"UmiDiffusionBridge: cannot create trace dir {p.parent}: {e!r}; trace OFF."
+            )
             return None
         return p
 
@@ -478,7 +489,7 @@ class UmiDiffusionBridge(Module):
         if n_show < n:
             parts.append("… " + _d(n - 1))
         span = float(np.linalg.norm(self._to_torso(chunk[-1][:3]) - self._to_torso(chunk[0][:3])))
-        return " ".join(parts) + f" span={span*1000:.1f}"
+        return " ".join(parts) + f" span={span * 1000:.1f}"
 
     def _note_skip(self, stats: dict, key: str, msg: str, rec: dict) -> None:
         stats[key] += 1
@@ -516,9 +527,18 @@ class UmiDiffusionBridge(Module):
 
         t0 = time.time()
         stats: dict[str, Any] = {
-            "ended": False, "ticks": 0, "infers": 0, "timeouts": 0,
-            "skip_ws": 0, "skip_ik": 0, "skip_delta": 0, "skip_lim": 0,
-            "infer_ms": [], "path_m": 0.0, "tip_first": None, "tip_last": None,
+            "ended": False,
+            "ticks": 0,
+            "infers": 0,
+            "timeouts": 0,
+            "skip_ws": 0,
+            "skip_ik": 0,
+            "skip_delta": 0,
+            "skip_lim": 0,
+            "infer_ms": [],
+            "path_m": 0.0,
+            "tip_first": None,
+            "tip_last": None,
         }
 
         def _end(reason: str) -> None:
@@ -531,8 +551,10 @@ class UmiDiffusionBridge(Module):
             first_tip, last_tip = stats["tip_first"], stats["tip_last"]
             # net = did the policy actually walk the tip somewhere; path = how far it travelled
             # doing it. net ~ 0 with a large path means it is dithering, not adjusting.
-            net = 0.0 if first_tip is None or last_tip is None else float(
-                np.linalg.norm(last_tip - first_tip)
+            net = (
+                0.0
+                if first_tip is None or last_tip is None
+                else float(np.linalg.norm(last_tip - first_tip))
             )
             avg_ms = float(np.mean(ims)) if ims else 0.0
             max_ms = float(max(ims)) if ims else 0.0
@@ -544,33 +566,48 @@ class UmiDiffusionBridge(Module):
                 f"lim={stats['skip_lim']}}}\n"
                 f"    tip(torso) start{np.round(first_tip, 3) if first_tip is not None else '-'} "
                 f"end{np.round(last_tip, 3) if last_tip is not None else '-'} "
-                f"net={net*1000:.1f}mm path={stats['path_m']*1000:.1f}mm"
+                f"net={net * 1000:.1f}mm path={stats['path_m'] * 1000:.1f}mm"
             )
             # Speak the outcome. The operator otherwise cannot tell "finished adjusting"
             # from "gave up" — both just leave the arm sitting still.
-            self._voice.say_phase("end:" + reason, {
-                "converged": "微調整が完了しました",
-                "max_duration": "時間切れで微調整を終了します",
-                "server_misses": "推論サーバーが応答しません。中止します",
-                "camera_dead": "手首カメラの映像が使えません。中止します",
-                "camera_unreachable": "推論サーバーに接続できません。中止します",
-                "state_stale": "ロボットの状態が取得できません。中止します",
-                "no_state": "ロボットの状態が取得できません。中止します",
-                "stopped": "停止しました",
-                "exception": "エラーが発生しました。中止します",
-            }.get(reason, "微調整を終了します"))
+            self._voice.say_phase(
+                "end:" + reason,
+                {
+                    "converged": "微調整が完了しました",
+                    "max_duration": "時間切れで微調整を終了します",
+                    "server_misses": "推論サーバーが応答しません。中止します",
+                    "camera_dead": "手首カメラの映像が使えません。中止します",
+                    "camera_unreachable": "推論サーバーに接続できません。中止します",
+                    "state_stale": "ロボットの状態が取得できません。中止します",
+                    "no_state": "ロボットの状態が取得できません。中止します",
+                    "stopped": "停止しました",
+                    "exception": "エラーが発生しました。中止します",
+                }.get(reason, "微調整を終了します"),
+            )
             self._voice.reset()  # next reach_done starts a fresh phase sequence
-            self._trace({
-                "kind": "end", "t": time.time(), "ep": ep, "reason": reason,
-                "dur_s": round(dur, 3), "ticks": stats["ticks"], "infers": stats["infers"],
-                "timeouts": stats["timeouts"],
-                "infer_ms_avg": round(avg_ms, 2), "infer_ms_max": round(max_ms, 2),
-                "skips": {k: stats[k] for k in ("skip_ws", "skip_ik", "skip_delta", "skip_lim")},
-                "net_m": round(net, 6), "path_m": round(float(stats["path_m"]), 6),
-                "tip_first_torso": self._j(first_tip), "tip_last_torso": self._j(last_tip),
-            })
+            self._trace(
+                {
+                    "kind": "end",
+                    "t": time.time(),
+                    "ep": ep,
+                    "reason": reason,
+                    "dur_s": round(dur, 3),
+                    "ticks": stats["ticks"],
+                    "infers": stats["infers"],
+                    "timeouts": stats["timeouts"],
+                    "infer_ms_avg": round(avg_ms, 2),
+                    "infer_ms_max": round(max_ms, 2),
+                    "skips": {
+                        k: stats[k] for k in ("skip_ws", "skip_ik", "skip_delta", "skip_lim")
+                    },
+                    "net_m": round(net, 6),
+                    "path_m": round(float(stats["path_m"]), 6),
+                    "tip_first_torso": self._j(first_tip),
+                    "tip_last_torso": self._j(last_tip),
+                }
+            )
 
-        # ---- wrist-camera preflight, BEFORE anything drives the arm ----------------
+        # wrist-camera preflight, BEFORE anything drives the arm
         # A dead camera is indistinguishable from "the policy is idle" once the loop is
         # running, so check up front and refuse rather than move on a stale/black frame.
         if self.config.require_camera_ok:
@@ -615,7 +652,7 @@ class UmiDiffusionBridge(Module):
         pending: list[list[float]] = []  # buffered waypoints from the last inference
         chunk_n = 0  # length of the chunk `pending` was sliced from (for the wp label)
         n_slice = 0  # how many of those chunk_n waypoints we actually execute
-        wp_i = 0     # index of the next waypoint inside that slice
+        wp_i = 0  # index of the next waypoint inside that slice
         n_exec = max(1, self.config.n_exec_per_infer)
         next_tick = time.perf_counter()
 
@@ -658,13 +695,15 @@ class UmiDiffusionBridge(Module):
                     eef_pos = np.asarray(oMumi.translation, dtype=np.float64)
                     eef_aa = np.asarray(pinocchio.log3(oMumi.rotation), dtype=np.float64)
                     was_reset = first_req
-                    rep = self._client.request({
-                        "cmd": "predict",
-                        "t": time.time(),
-                        "eef_pos": eef_pos.tolist(),
-                        "eef_rot_aa": eef_aa.tolist(),
-                        "reset": first_req,
-                    })
+                    rep = self._client.request(
+                        {
+                            "cmd": "predict",
+                            "t": time.time(),
+                            "eef_pos": eef_pos.tolist(),
+                            "eef_rot_aa": eef_aa.tolist(),
+                            "reset": first_req,
+                        }
+                    )
                     first_req = False
                     actions = (rep.get("actions") if rep else None) or []
                     if not actions:
@@ -708,20 +747,31 @@ class UmiDiffusionBridge(Module):
                         f"    chunk Δtip(torso,mm) "
                         f"{self._fmt_chunk(actions, tip_meas_torso, oMtip)}"
                     )
-                    self._trace({
-                        "kind": "infer", "t": time.time(), "ep": ep, "tick": tick,
-                        "reset": bool(was_reset), "infer_ms": round(infer_ms, 2),
-                        "n": chunk_n, "n_exec": len(pending),
-                        # eef_* = the gripper_tip pose; obs_* = what was actually SENT
-                        # to the policy (UMI TCP frame unless ee_frame="tip").
-                        "eef_pos_root": self._j(tip_meas),
-                        "eef_aa_root": self._j(np.asarray(pinocchio.log3(oMtip.rotation))),
-                        "obs_pos_root": self._j(eef_pos), "obs_aa_root": self._j(eef_aa),
-                        "ee_frame": self.config.ee_frame,
-                        "eef_pos_torso": self._j(tip_meas_torso), "q_meas": self._j(q_right),
-                        # every waypoint, untruncated — the reason the trace file exists
-                        "chunk_root": [self._j(np.asarray(a, dtype=np.float64)) for a in actions],
-                    })
+                    self._trace(
+                        {
+                            "kind": "infer",
+                            "t": time.time(),
+                            "ep": ep,
+                            "tick": tick,
+                            "reset": bool(was_reset),
+                            "infer_ms": round(infer_ms, 2),
+                            "n": chunk_n,
+                            "n_exec": len(pending),
+                            # eef_* = the gripper_tip pose; obs_* = what was actually SENT
+                            # to the policy (UMI TCP frame unless ee_frame="tip").
+                            "eef_pos_root": self._j(tip_meas),
+                            "eef_aa_root": self._j(np.asarray(pinocchio.log3(oMtip.rotation))),
+                            "obs_pos_root": self._j(eef_pos),
+                            "obs_aa_root": self._j(eef_aa),
+                            "ee_frame": self.config.ee_frame,
+                            "eef_pos_torso": self._j(tip_meas_torso),
+                            "q_meas": self._j(q_right),
+                            # every waypoint, untruncated — the reason the trace file exists
+                            "chunk_root": [
+                                self._j(np.asarray(a, dtype=np.float64)) for a in actions
+                            ],
+                        }
+                    )
 
                 wp = pending.pop(0)
                 i_wp = wp_i
@@ -735,10 +785,16 @@ class UmiDiffusionBridge(Module):
 
                 # context shared by this tick's skip / exec trace records
                 base = {
-                    "t": time.time(), "ep": ep, "tick": tick, "wp": i_wp, "n_chunk": chunk_n,
-                    "target_root": self._j(p_root), "target_torso": self._j(p_torso),
+                    "t": time.time(),
+                    "ep": ep,
+                    "tick": tick,
+                    "wp": i_wp,
+                    "n_chunk": chunk_n,
+                    "target_root": self._j(p_root),
+                    "target_torso": self._j(p_torso),
                     "target_aa_root": self._j(aa_root),
-                    "q_meas": self._j(q_right), "tip_meas_torso": self._j(tip_meas_torso),
+                    "q_meas": self._j(q_right),
+                    "tip_meas_torso": self._j(tip_meas_torso),
                 }
                 where = (
                     f"[wp{i_wp}/{n_slice}of{chunk_n} tip(torso){np.round(tip_meas_torso, 3)} "
@@ -752,8 +808,9 @@ class UmiDiffusionBridge(Module):
                     and self.config.ws_z[0] <= p_torso[2] <= self.config.ws_z[1]
                 ):
                     self._note_skip(
-                        stats, "skip_ws",
-                        f"UmiDiffusionBridge[{ep}]: waypoint torso{np.round(p_torso,3)} outside "
+                        stats,
+                        "skip_ws",
+                        f"UmiDiffusionBridge[{ep}]: waypoint torso{np.round(p_torso, 3)} outside "
                         f"workspace box x{self.config.ws_x} y{self.config.ws_y} "
                         f"z{self.config.ws_z}; skipping (arm holds). {where}",
                         base,
@@ -775,11 +832,16 @@ class UmiDiffusionBridge(Module):
                 base["converged"] = bool(converged)
 
                 # gates (mirror IkReachBridge)
-                if self.config.require_converged and not converged and err > self.config.max_reach_pos_err_m:
+                if (
+                    self.config.require_converged
+                    and not converged
+                    and err > self.config.max_reach_pos_err_m
+                ):
                     self._note_skip(
-                        stats, "skip_ik",
+                        stats,
+                        "skip_ik",
                         f"UmiDiffusionBridge[{ep}]: IK err={err:.4f}m > tol; skipping waypoint. "
-                        f"tgt(torso){np.round(p_torso,3)} q_sol={np.round(q_sol,3)} {where}",
+                        f"tgt(torso){np.round(p_torso, 3)} q_sol={np.round(q_sol, 3)} {where}",
                         base,
                     )
                     self._sleep_tick(period, next_tick)
@@ -788,10 +850,11 @@ class UmiDiffusionBridge(Module):
                 if not check_joint_delta(q_sol, q_right, self.config.max_joint_delta_deg):
                     wi, wd = get_worst_joint_delta(q_sol, q_right)
                     self._note_skip(
-                        stats, "skip_delta",
+                        stats,
+                        "skip_delta",
                         f"UmiDiffusionBridge[{ep}]: joint {self._arm.joint_names[wi]} delta {wd:.1f}° "
                         f"> {self.config.max_joint_delta_deg}°; skipping waypoint (arm holds). "
-                        f"tgt(torso){np.round(p_torso,3)} q_sol={np.round(q_sol,3)} {where}",
+                        f"tgt(torso){np.round(p_torso, 3)} q_sol={np.round(q_sol, 3)} {where}",
                         {**base, "worst_joint": self._arm.joint_names[wi], "worst_deg": float(wd)},
                     )
                     self._sleep_tick(period, next_tick)
@@ -799,9 +862,10 @@ class UmiDiffusionBridge(Module):
                     continue
                 if not self._arm.clamp_ok(q_sol):
                     self._note_skip(
-                        stats, "skip_lim",
+                        stats,
+                        "skip_lim",
                         f"UmiDiffusionBridge[{ep}]: q_sol violates joint limits; skipping. "
-                        f"q_sol={np.round(q_sol,3)} tgt(torso){np.round(p_torso,3)} {where}",
+                        f"q_sol={np.round(q_sol, 3)} tgt(torso){np.round(p_torso, 3)} {where}",
                         base,
                     )
                     self._sleep_tick(period, next_tick)
@@ -815,8 +879,10 @@ class UmiDiffusionBridge(Module):
                 # never drops below converge_pos_eps_m and the episode could only ever end
                 # on the max_duration timeout.
                 tip_cmd = np.asarray(self._arm.fk_tip(q_sol).translation, dtype=np.float64)
-                step = float("inf") if last_tip_cmd is None else float(
-                    np.linalg.norm(tip_cmd - last_tip_cmd)
+                step = (
+                    float("inf")
+                    if last_tip_cmd is None
+                    else float(np.linalg.norm(tip_cmd - last_tip_cmd))
                 )
                 if np.isfinite(step):
                     stats["path_m"] += step
@@ -838,33 +904,40 @@ class UmiDiffusionBridge(Module):
                 if self.config.log_every_n and tick % self.config.log_every_n == 0:
                     msg = (
                         f"[{tag}] adj[{ep}] tick={tick} wp{i_wp}/{n_slice}of{chunk_n} "
-                        f"t={time.time()-t0:.2f}s tgt(torso){np.round(p_torso,3)} "
-                        f"tip(torso){np.round(tip_cmd_torso,3)}"
+                        f"t={time.time() - t0:.2f}s tgt(torso){np.round(p_torso, 3)} "
+                        f"tip(torso){np.round(tip_cmd_torso, 3)}"
                     )
                     if self.config.log_joints:
                         msg += (
-                            f"\n    q_meas ={np.round(q_right,3)}"
-                            f"\n    q_sol  ={np.round(q_sol,3)}"
-                            f"\n    Δq(deg)={np.round(dq_deg,2)} "
+                            f"\n    q_meas ={np.round(q_right, 3)}"
+                            f"\n    q_sol  ={np.round(q_sol, 3)}"
+                            f"\n    Δq(deg)={np.round(dq_deg, 2)} "
                             f"worst={self._arm.joint_names[wi]} {wd:.1f}°"
                         )
-                    step_s = "-" if not np.isfinite(step) else f"{step*1000:.1f}mm"
+                    step_s = "-" if not np.isfinite(step) else f"{step * 1000:.1f}mm"
                     msg += (
                         f"\n    conv={converged} err={err:.4f} step={step_s} "
-                        f"track={track*1000:.1f}mm "
+                        f"track={track * 1000:.1f}mm "
                         f"settled={settled}/{self.config.converge_hold_ticks}"
                     )
                     logger.info(msg)
 
-                self._trace({
-                    **base, "kind": "exec",
-                    "dq_deg": self._j(dq_deg),
-                    "worst_joint": self._arm.joint_names[wi], "worst_deg": round(float(wd), 4),
-                    "tip_cmd_root": self._j(tip_cmd), "tip_cmd_torso": self._j(tip_cmd_torso),
-                    "tip_meas_root": self._j(tip_meas),
-                    "step_m": self._j(step), "track_m": self._j(track),
-                    "settled": settled, "published": not self.config.log_only,
-                })
+                self._trace(
+                    {
+                        **base,
+                        "kind": "exec",
+                        "dq_deg": self._j(dq_deg),
+                        "worst_joint": self._arm.joint_names[wi],
+                        "worst_deg": round(float(wd), 4),
+                        "tip_cmd_root": self._j(tip_cmd),
+                        "tip_cmd_torso": self._j(tip_cmd_torso),
+                        "tip_meas_root": self._j(tip_meas),
+                        "step_m": self._j(step),
+                        "track_m": self._j(track),
+                        "settled": settled,
+                        "published": not self.config.log_only,
+                    }
+                )
 
                 if not self.config.log_only:
                     self.arm_target.publish(
@@ -877,11 +950,11 @@ class UmiDiffusionBridge(Module):
                     )
                 q_warm = q_sol
 
-                # ---- termination ----
+                # termination
                 if settled >= self.config.converge_hold_ticks:
                     logger.info(
                         f"UmiDiffusionBridge[{ep}]: converged ({settled} settled ticks, "
-                        f"step<{self.config.converge_pos_eps_m*1000:.0f}mm); firing adjust_done."
+                        f"step<{self.config.converge_pos_eps_m * 1000:.0f}mm); firing adjust_done."
                     )
                     self.adjust_done.publish(Bool(data=True))
                     _end("converged")

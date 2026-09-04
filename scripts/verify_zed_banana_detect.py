@@ -6,6 +6,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """ZED + YOLO + depth 検出の単体検証（実機 harvest フローと同じ知覚部品）。
 
@@ -59,14 +73,18 @@ def main() -> None:
     cfg = HarvestConfig()
     reach = cfg.reach  # Box3D（手の届く範囲 [m]）
     print(f"target classes : {targets}")
-    print(f"reach box [m]  : x[{reach.x_min:.2f},{reach.x_max:.2f}] "
-          f"y[{reach.y_min:.2f},{reach.y_max:.2f}] z[{reach.z_min:.2f},{reach.z_max:.2f}]")
+    print(
+        f"reach box [m]  : x[{reach.x_min:.2f},{reach.x_max:.2f}] "
+        f"y[{reach.y_min:.2f},{reach.y_max:.2f}] z[{reach.z_min:.2f},{reach.z_max:.2f}]"
+    )
 
     cam = _open_zed()
     info = cam.get_camera_information()
-    print(f"ZED opened     : {info.camera_model} S/N {info.serial_number} "
-          f"{info.camera_configuration.resolution.width}x"
-          f"{info.camera_configuration.resolution.height}\n")
+    print(
+        f"ZED opened     : {info.camera_model} S/N {info.serial_number} "
+        f"{info.camera_configuration.resolution.width}x"
+        f"{info.camera_configuration.resolution.height}\n"
+    )
 
     runtime = sl.RuntimeParameters()
     img_mat = sl.Mat()
@@ -88,7 +106,10 @@ def main() -> None:
 
     detector = Yolo2DDetector(model_name=args.model)
     detect_fn = make_yolo_detect_okra(
-        frame_getter, target_classes=targets, detector=detector, depth_getter=depth_getter,
+        frame_getter,
+        target_classes=targets,
+        detector=detector,
+        depth_getter=depth_getter,
     )
 
     found = False
@@ -109,9 +130,11 @@ def main() -> None:
         for ok in okras:
             p = ok.pos_3d
             in_reach = reach.contains(p)
-            print(f"  - {ok.id:16s} region={ok.img_region} "
-                  f"pos[m] x={p['x']:+.3f} y={p['y']:+.3f} z={p['z']:+.3f} "
-                  f"ripeness={ok.ripeness:.2f} reach={'YES' if in_reach else 'no'}")
+            print(
+                f"  - {ok.id:16s} region={ok.img_region} "
+                f"pos[m] x={p['x']:+.3f} y={p['y']:+.3f} z={p['z']:+.3f} "
+                f"ripeness={ok.ripeness:.2f} reach={'YES' if in_reach else 'no'}"
+            )
         if okras:
             found = True
             break

@@ -6,6 +6,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """Verify the G1 onboard speaker for the okra-harvest Japanese announcements.
 
@@ -40,10 +54,14 @@ _EN = "Hello. This is the okra harvesting robot. Testing English."
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Verify the G1 onboard speaker (TTS).")
-    ap.add_argument("--nic", default=os.getenv("ROBOT_INTERFACE", ""),
-                    help="wired network interface to the G1 (or set ROBOT_INTERFACE)")
-    ap.add_argument("--speakers", default="0,1,2,3",
-                    help="comma-separated speaker_id values to try")
+    ap.add_argument(
+        "--nic",
+        default=os.getenv("ROBOT_INTERFACE", ""),
+        help="wired network interface to the G1 (or set ROBOT_INTERFACE)",
+    )
+    ap.add_argument(
+        "--speakers", default="0,1,2,3", help="comma-separated speaker_id values to try"
+    )
     ap.add_argument("--volume", type=int, default=None, help="0-100; leave unset to keep current")
     ap.add_argument("--ja", default=_JA, help="Japanese test phrase")
     ap.add_argument("--en", default=_EN, help="English test phrase")
@@ -63,7 +81,7 @@ def main() -> None:
     client = AudioClient()
     try:
         client.SetTimeout(10.0)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         print(f"[verify] SetTimeout not available ({exc}); continuing")
     client.Init()
 
@@ -71,7 +89,7 @@ def main() -> None:
         print(f"[verify] SetVolume({args.volume}) -> code={client.SetVolume(args.volume)}")
     try:
         print(f"[verify] GetVolume -> {client.GetVolume()}")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         print(f"[verify] GetVolume failed: {exc}")
 
     speakers = [int(s) for s in args.speakers.split(",") if s.strip() != ""]

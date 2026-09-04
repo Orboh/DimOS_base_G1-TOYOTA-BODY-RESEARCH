@@ -6,6 +6,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """bbox 点群(B2) vs セグメンテーションマスク点群(C) の 3D 比較 + 可視化（診断用）。
 
@@ -64,8 +78,15 @@ def main() -> None:
     fx, fy, cx, cy = calib.fx, calib.fy, calib.cx, calib.cy
     K = [fx, 0.0, cx, 0.0, fy, cy, 0.0, 0.0, 1.0]
     P = [fx, 0.0, cx, 0.0, 0.0, fy, cy, 0.0, 0.0, 0.0, 1.0, 0.0]
-    camera_info = CameraInfo(height=h, width=w, distortion_model="plumb_bob",
-                             D=list(calib.disto), K=K, P=P, frame_id="zed_optical")
+    camera_info = CameraInfo(
+        height=h,
+        width=w,
+        distortion_model="plumb_bob",
+        D=list(calib.disto),
+        K=K,
+        P=P,
+        frame_id="zed_optical",
+    )
     ident = Transform.identity()
     model = YOLO(get_data("models_yolo") / args.model)  # seg 重み → segment タスク
 
@@ -75,7 +96,7 @@ def main() -> None:
     print(f"ZED {info.camera_model} {w}x{h}  model={args.model}\n")
 
     bgr = None
-    for i in range(args.frames):
+    for _i in range(args.frames):
         if cam.grab(runtime) != sl.ERROR_CODE.SUCCESS:
             time.sleep(0.05)
             continue
@@ -92,8 +113,11 @@ def main() -> None:
         pc = PointCloud2.from_numpy(xyz, frame_id="zed_optical", timestamp=ts)
 
         results = model.track(source=bgr, persist=True, conf=0.5, iou=0.6, verbose=False)
-        dets = [d for d in ImageDetections2D.from_ultralytics_result(image, results)
-                if str(d.name).lower() in targets]
+        dets = [
+            d
+            for d in ImageDetections2D.from_ultralytics_result(image, results)
+            if str(d.name).lower() in targets
+        ]
         if dets:
             break
     cam.close()
@@ -112,14 +136,16 @@ def main() -> None:
         x1, y1, x2, y2 = (int(v) for v in det.bbox)
         cv2.rectangle(bgr, (x1, y1), (x2, y2), (0, 0, 255), 2)  # bbox red
 
-        # --- B2: bbox + 公式フィルタ ---
+        # B2: bbox + 公式フィルタ
         b2 = Detection3DPC.from_2d(det, pc, camera_info, ident, filters=None)
         if b2 is not None:
             c = b2.center
-            print(f"  [B2 bbox+filter ] optical(x={c.x:+.3f}, y={c.y:+.3f}, z={c.z:+.3f}) m  "
-                  f"fwd z={c.z:.3f} m  ({len(b2.pointcloud.pointcloud.points)} pts)")
+            print(
+                f"  [B2 bbox+filter ] optical(x={c.x:+.3f}, y={c.y:+.3f}, z={c.z:+.3f}) m  "
+                f"fwd z={c.z:.3f} m  ({len(b2.pointcloud.pointcloud.points)} pts)"
+            )
 
-        # --- C: マスク内の点群のみ ---
+        # C: マスク内の点群のみ
         mask = getattr(det, "mask", None)
         if mask is None:
             print("  [C mask         ] このモデルはマスク無し（seg 重みを使うこと）")
@@ -133,20 +159,30 @@ def main() -> None:
         c_mean = obj.mean(axis=0)
         c_med = np.median(obj, axis=0)
         mask_px = int((mask > 0).sum())
-        print(f"  [C mask         ] optical(x={c_med[0]:+.3f}, y={c_med[1]:+.3f}, z={c_med[2]:+.3f}) m  "
-              f"fwd z={c_med[2]:.3f} m  (mask {mask_px}px → {obj.shape[0]} pts, median)")
-        print(f"  {' '*18}mean z={c_mean[2]:.3f} m")
+        print(
+            f"  [C mask         ] optical(x={c_med[0]:+.3f}, y={c_med[1]:+.3f}, z={c_med[2]:+.3f}) m  "
+            f"fwd z={c_med[2]:.3f} m  (mask {mask_px}px → {obj.shape[0]} pts, median)"
+        )
+        print(f"  {' ' * 18}mean z={c_mean[2]:.3f} m")
 
         # 可視化: マスク点群を画像に重ねる（シアン）+ centroid（黄）
         u_obj = uu[sel]
         v_obj = vv[sel]
-        for pu, pv in zip(u_obj, v_obj):
+        for pu, pv in zip(u_obj, v_obj, strict=False):
             bgr[pv, pu] = (255, 255, 0)
         cu = int(fx * c_med[0] / max(c_med[2], 1e-6) + cx)
         cvp = int(fy * c_med[1] / max(c_med[2], 1e-6) + cy)
         cv2.circle(bgr, (cu, cvp), 8, (0, 255, 255), -1)
-        cv2.putText(bgr, f"{det.name} mask z={c_med[2]:.2f}m", (x1, max(0, y1 - 8)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2, cv2.LINE_AA)
+        cv2.putText(
+            bgr,
+            f"{det.name} mask z={c_med[2]:.2f}m",
+            (x1, max(0, y1 - 8)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (0, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
         print()
 
     cv2.imwrite(args.out, bgr)

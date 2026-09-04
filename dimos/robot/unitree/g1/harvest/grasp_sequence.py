@@ -5,6 +5,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """把持シーケンス: IK 粗アプローチ → ACT 微調整 → 切断可否 VLM → 切断（Phase 1–3）。
 
@@ -30,9 +44,9 @@ LangGraph の grasp ノードが呼ぶ ``grasp_okra`` の実体。設計方針 (
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import threading
 import time
-from collections.abc import Callable
 from typing import Any
 
 from dimos.robot.unitree.g1.harvest.blackboard import Okra
@@ -43,8 +57,8 @@ logger = setup_logger()
 _RIGHT_GRIPPER_JOINT = "g1/right_gripper"
 
 # Dex1-1 切断グリッパ（[[SS-06-切断と籠収納]]）。
-_Q_CLOSE_CUT = 4.4   # [rad] 閉じ位置＝切断＋把持
-_Q_BLADE_MAX = 5.2   # [rad] 刃保護の上限（機械限界 5.4 の手前。過電流フォルト回避）
+_Q_CLOSE_CUT = 4.4  # [rad] 閉じ位置＝切断＋把持
+_Q_BLADE_MAX = 5.2  # [rad] 刃保護の上限（機械限界 5.4 の手前。過電流フォルト回避）
 
 
 class GraspSequence:
@@ -162,14 +176,18 @@ class GraspSequence:
         # ③ 切断可否 VLM（実を収穫でき・主茎を切らない位置か） ----------------
         if self._cut_ok_fn is not None:
             if not self._cut_ok_fn():
-                logger.info(f"[grasp-seq] {okra_id}: VLM says NOT safe to cut -> episode fail (no cut)")
+                logger.info(
+                    f"[grasp-seq] {okra_id}: VLM says NOT safe to cut -> episode fail (no cut)"
+                )
                 self.episodes.append((okra_id, "cut_gate", False))
                 return False
 
         # ④ 切断（グリッパ閉じ＝切断＋把持） -----------------------------------
         if self._stop.is_set():
             return False
-        logger.info(f"[grasp-seq] {okra_id}: CUT (gripper -> {self._q_close} rad, blade limit {self._q_blade_max})")
+        logger.info(
+            f"[grasp-seq] {okra_id}: CUT (gripper -> {self._q_close} rad, blade limit {self._q_blade_max})"
+        )
         self._cut(self._q_close)
 
         # ⑤ 籠投入（保留: プレースホルダ） ------------------------------------

@@ -5,6 +5,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """``start()`` でオクラ収穫 LangGraph フローを実行する DimOS モジュール。
 
@@ -79,7 +93,7 @@ class HarvestModuleConfig(ModuleConfig):
     # use_base_move が必要。make_search_forward 参照。
     use_forward_search: bool = False
     search_forward_step: float = 0.30  # [m] 前進探索1ステップあたりの移動距離
-    max_search_advances: int = 3       # 前進探索ステップ上限（超えるとランを終了）
+    max_search_advances: int = 3  # 前進探索ステップ上限（超えるとランを終了）
     # LIVE: フロー開始前に最初のカメラフレームが届くまで最大この時間 [s] 待機し、
     # 最初の検出で空画像を掴まないようにする。
     first_frame_timeout_s: float = 10.0
@@ -102,8 +116,8 @@ class HarvestModuleConfig(ModuleConfig):
     # IK 到達後そのまま切断可否チェック→グリッパを閉じる（ACT無し、スクリプト式）。
     # False（既定）なら use_act_grasp のみで従来どおり ACT 単独（後方互換）。
     use_ik_grasp_sequence: bool = False
-    cut_close_q: float = 4.4   # [rad] 切断時のグリッパ閉じ位置
-    blade_max_q: float = 5.2   # [rad] 刃保護の上限（機械限界 5.4 の手前）
+    cut_close_q: float = 4.4  # [rad] 切断時のグリッパ閉じ位置
+    blade_max_q: float = 5.2  # [rad] 刃保護の上限（機械限界 5.4 の手前）
     # ZED→torso のハンドアイ外部パラメータ（重心3D を IK の torso フレームへ変換）。
     # 空 = 未校正（Step 4 で配線）。形式は [x,y,z, qx,qy,qz,qw]（torso<-camera）。
     cam_to_torso_xyzquat: str = ""
@@ -124,7 +138,9 @@ class HarvestModule(Module):
 
     config: HarvestModuleConfig
     color_image: In[Image]  # ヘッドカメラ（LIVE モード）; ダミーモードでは未使用
-    depth_image: In[Image]  # ZED 深度画像（LIVE + use_zed_depth）; 未接続時は仮定深度にフォールバック
+    depth_image: In[
+        Image
+    ]  # ZED 深度画像（LIVE + use_zed_depth）; 未接続時は仮定深度にフォールバック
     camera_info: In[CameraInfo]  # ZED 内部パラメータ（LIVE + use_zed_depth、実逆投影に使用）
     cam_right_wrist: In[Image]  # 右手首カメラ（LIVE + use_act_grasp、2カメラツリーモデル）
     cmd_vel: Out[Twist]  # ベース速度（LIVE + use_base_move）-> G1Connection
@@ -170,11 +186,13 @@ class HarvestModule(Module):
             nic = self.config.network_interface or os.getenv("ROBOT_INTERFACE", "")
             try:  # デプロイ環境によって DDS が既に初期化済みの場合がある
                 return make_g1_playstream_announcer(nic, init_dds=True)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("G1 speaker init_dds=True failed; retry init_dds=False", error=str(exc))
+            except Exception as exc:
+                logger.warning(
+                    "G1 speaker init_dds=True failed; retry init_dds=False", error=str(exc)
+                )
                 try:
                     return make_g1_playstream_announcer(init_dds=False)
-                except Exception as exc2:  # noqa: BLE001
+                except Exception as exc2:
                     logger.warning("G1 speaker unavailable; using console voice", error=str(exc2))
         return CallableAnnouncer(lambda text: logger.info(f"🔊 {text}"))
 
@@ -183,7 +201,9 @@ class HarvestModule(Module):
         # use_ik_grasp_sequence moves the arm (IK reach + cut) even with use_act_grasp=False
         # (ACT-free mode, see run()) -- must count as real motion for §6 checks too.
         real_motion = (
-            self.config.use_act_grasp or self.config.use_ik_grasp_sequence or self.config.use_base_move
+            self.config.use_act_grasp
+            or self.config.use_ik_grasp_sequence
+            or self.config.use_base_move
         )
         if not real_motion:
             return [SafetyCheck("dummy_person_clear", lambda: True)]
@@ -191,7 +211,9 @@ class HarvestModule(Module):
 
         checks = [FileEStop(self.config.safety_estop_file).as_check()]
         if self.config.torque_limit > 0:
-            checks.append(make_torque_check(lambda: self._latest_state, limit=self.config.torque_limit))
+            checks.append(
+                make_torque_check(lambda: self._latest_state, limit=self.config.torque_limit)
+            )
         logger.info(
             f"SafetyMonitor real checks: file e-stop={self.config.safety_estop_file!r} "
             f"(touch to pause), torque_limit={self.config.torque_limit}"
@@ -211,17 +233,21 @@ class HarvestModule(Module):
 
         vals = [float(v) for v in spec.replace(" ", "").split(",")]
         if len(vals) != 7:
-            logger.warning(f"cam_to_torso_xyzquat needs 7 values (x,y,z,qx,qy,qz,qw); got {len(vals)}; ignoring")
+            logger.warning(
+                f"cam_to_torso_xyzquat needs 7 values (x,y,z,qx,qy,qz,qw); got {len(vals)}; ignoring"
+            )
             return None
         tx, ty, tz, qx, qy, qz, qw = vals
         # quaternion(xyzw) -> 回転行列（torso<-camera）
         n = (qx * qx + qy * qy + qz * qz + qw * qw) ** 0.5 or 1.0
         qx, qy, qz, qw = qx / n, qy / n, qz / n, qw / n
-        rot = np.array([
-            [1 - 2 * (qy * qy + qz * qz), 2 * (qx * qy - qz * qw), 2 * (qx * qz + qy * qw)],
-            [2 * (qx * qy + qz * qw), 1 - 2 * (qx * qx + qz * qz), 2 * (qy * qz - qx * qw)],
-            [2 * (qx * qz - qy * qw), 2 * (qy * qz + qx * qw), 1 - 2 * (qx * qx + qy * qy)],
-        ])
+        rot = np.array(
+            [
+                [1 - 2 * (qy * qy + qz * qz), 2 * (qx * qy - qz * qw), 2 * (qx * qz + qy * qw)],
+                [2 * (qx * qy + qz * qw), 1 - 2 * (qx * qx + qz * qz), 2 * (qy * qz - qx * qw)],
+                [2 * (qx * qz - qy * qw), 2 * (qy * qz + qx * qw), 1 - 2 * (qx * qx + qy * qy)],
+            ]
+        )
         trans = np.array([tx, ty, tz])
 
         def _to_torso(p_cam):
@@ -429,7 +455,9 @@ class HarvestModule(Module):
                     q_close=self.config.cut_close_q,
                     q_blade_max=self.config.blade_max_q,
                 )
-                grasp_note = "grasp=IK->ACT->cut(seq)" if act_module is not None else "grasp=IK->cut(no-ACT)"
+                grasp_note = (
+                    "grasp=IK->ACT->cut(seq)" if act_module is not None else "grasp=IK->cut(no-ACT)"
+                )
             elif self.config.use_act_grasp:
                 from dimos.robot.unitree.g1.harvest.act_grasp import ActGraspModule
 
@@ -511,7 +539,7 @@ class HarvestModule(Module):
                 initial_state(), {"recursion_limit": self.config.recursion_limit}
             )
             logger.info(f"HarvestModule: 収穫フロー完了 — picks={final.get('picks')}")
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("HarvestModule: 収穫フローでエラーが発生しました")
 
     @rpc

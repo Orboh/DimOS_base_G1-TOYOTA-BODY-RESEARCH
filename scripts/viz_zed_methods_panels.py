@@ -6,6 +6,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """banana 3D 検出 3 手法を同一フレームで可視化し、横に並べた 1 枚にする（実験記録用）。
 
@@ -37,7 +51,13 @@ from dimos.perception.detection.type.detection3d.pointcloud import Detection3DPC
 from dimos.utils.data import get_data
 
 _FALLBACK = 0.45
-_CYAN, _RED, _YELLOW, _WHITE, _BLACK = (255, 255, 0), (0, 0, 255), (0, 255, 255), (255, 255, 255), (0, 0, 0)
+_CYAN, _RED, _YELLOW, _WHITE, _BLACK = (
+    (255, 255, 0),
+    (0, 0, 255),
+    (0, 255, 255),
+    (255, 255, 255),
+    (0, 0, 0),
+)
 
 
 def _banner(img: np.ndarray, text: str, color: tuple = _WHITE, hpx: int = 46) -> np.ndarray:
@@ -55,8 +75,11 @@ def main() -> None:
     ap.add_argument("--frames", type=int, default=30)
     ap.add_argument("--model", default="yolo11n-seg.pt")
     ap.add_argument("--scale", type=float, default=0.5, help="出力縮小率")
-    ap.add_argument("--depth_mode", default="PERFORMANCE",
-                    help="ZED 深度モード: PERFORMANCE / NEURAL / NEURAL_LIGHT / NEURAL_PLUS")
+    ap.add_argument(
+        "--depth_mode",
+        default="PERFORMANCE",
+        help="ZED 深度モード: PERFORMANCE / NEURAL / NEURAL_LIGHT / NEURAL_PLUS",
+    )
     args = ap.parse_args()
     targets = {c.strip().lower() for c in args.classes.split(",") if c.strip()}
 
@@ -76,8 +99,15 @@ def main() -> None:
     fx, fy, cx, cy = calib.fx, calib.fy, calib.cx, calib.cy
     K = [fx, 0.0, cx, 0.0, fy, cy, 0.0, 0.0, 1.0]
     P = [fx, 0.0, cx, 0.0, 0.0, fy, cy, 0.0, 0.0, 0.0, 1.0, 0.0]
-    camera_info = CameraInfo(height=h, width=w, distortion_model="plumb_bob",
-                             D=list(calib.disto), K=K, P=P, frame_id="zed_optical")
+    camera_info = CameraInfo(
+        height=h,
+        width=w,
+        distortion_model="plumb_bob",
+        D=list(calib.disto),
+        K=K,
+        P=P,
+        frame_id="zed_optical",
+    )
     ident = Transform.identity()
     model = YOLO(get_data("models_yolo") / args.model)
 
@@ -102,8 +132,11 @@ def main() -> None:
         xyz = xyz[np.isfinite(xyz).all(axis=1)]
         pc = PointCloud2.from_numpy(xyz, frame_id="zed_optical", timestamp=ts)
         results = model.track(source=bgr, persist=True, conf=0.5, iou=0.6, verbose=False)
-        dets = [d for d in ImageDetections2D.from_ultralytics_result(image, results)
-                if str(d.name).lower() in targets]
+        dets = [
+            d
+            for d in ImageDetections2D.from_ultralytics_result(image, results)
+            if str(d.name).lower() in targets
+        ]
         if dets:
             break
     cam.close()
@@ -120,7 +153,7 @@ def main() -> None:
     x1, y1, x2, y2 = (int(v) for v in det.bbox)
     u, v = (x1 + x2) // 2, (y1 + y2) // 2
 
-    # --- パネル A: 中心 1px ---
+    # パネル A: 中心 1px
     pA = bgr.copy()
     cv2.rectangle(pA, (x1, y1), (x2, y2), _RED, 2)
     dA = float(depth[int(np.clip(v, 0, h - 1)), int(np.clip(u, 0, w - 1))])
@@ -129,7 +162,7 @@ def main() -> None:
     cv2.circle(pA, (u, v), 7, _YELLOW, -1)
     _banner(pA, f"A center-1px  z={zA:.3f}m" + ("" if a_ok else " (fallback)"), _YELLOW)
 
-    # --- パネル B2: bbox + フィルタ点群 ---
+    # パネル B2: bbox + フィルタ点群
     pB = bgr.copy()
     cv2.rectangle(pB, (x1, y1), (x2, y2), _RED, 2)
     b2 = Detection3DPC.from_2d(det, pc, camera_info, ident, filters=None)
@@ -143,11 +176,16 @@ def main() -> None:
         pB[vb[ok], ub[ok]] = _CYAN
         c = b2.center
         zB, nB = c.z, len(obj)
-        cv2.circle(pB, (int(fx * c.x / max(c.z, 1e-6) + cx), int(fy * c.y / max(c.z, 1e-6) + cy)),
-                   8, _YELLOW, -1)
+        cv2.circle(
+            pB,
+            (int(fx * c.x / max(c.z, 1e-6) + cx), int(fy * c.y / max(c.z, 1e-6) + cy)),
+            8,
+            _YELLOW,
+            -1,
+        )
     _banner(pB, f"B2 bbox+filter  z={zB:.3f}m ({nB}pts)", _YELLOW)
 
-    # --- パネル C: マスク点群 ---
+    # パネル C: マスク点群
     pC = bgr.copy()
     cv2.rectangle(pC, (x1, y1), (x2, y2), _RED, 2)
     zC, nC = float("nan"), 0
@@ -160,8 +198,13 @@ def main() -> None:
             pC[vv[sel], uu[sel]] = _CYAN
             cm = np.median(obj, axis=0)
             zC, nC = cm[2], obj.shape[0]
-            cv2.circle(pC, (int(fx * cm[0] / max(cm[2], 1e-6) + cx), int(fy * cm[1] / max(cm[2], 1e-6) + cy)),
-                       8, _YELLOW, -1)
+            cv2.circle(
+                pC,
+                (int(fx * cm[0] / max(cm[2], 1e-6) + cx), int(fy * cm[1] / max(cm[2], 1e-6) + cy)),
+                8,
+                _YELLOW,
+                -1,
+            )
     _banner(pC, f"C seg-mask  z={zC:.3f}m ({nC}pts)", _YELLOW)
 
     panels = np.hstack([pA, pB, pC])

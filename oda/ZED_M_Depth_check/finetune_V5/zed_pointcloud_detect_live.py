@@ -1,10 +1,25 @@
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import os
+
 import cv2
+from dotenv import load_dotenv
 import numpy as np
 import open3d as o3d
 import pyzed.sl as sl
 from ultralytics import YOLO
-from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -88,8 +103,15 @@ try:
                 coord_label = "coord: N/A"
 
             cv2.circle(annotated, (cx, cy), 4, (0, 0, 255), -1)
-            cv2.putText(annotated, coord_label, (x1, max(y1 - 10, 15)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+            cv2.putText(
+                annotated,
+                coord_label,
+                (x1, max(y1 - 10, 15)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (0, 0, 255),
+                2,
+            )
 
             if r.masks is not None and idx < len(r.masks.data):
                 m = r.masks.data[idx].cpu().numpy()
@@ -100,11 +122,18 @@ try:
                 bx2, by2 = min(x2, W - 1), min(y2, H - 1)
                 highlight[by1:by2, bx1:bx2] = True
 
-        cv2.putText(annotated, f"Okra detected: {len(r.boxes)}", (10, 40),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+        cv2.putText(
+            annotated,
+            f"Okra detected: {len(r.boxes)}",
+            (10, 40),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1.0,
+            (0, 255, 0),
+            2,
+        )
 
         cv2.imshow("Okra Detection + Depth (2D)", annotated)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+        if cv2.waitKey(1) & 0xFF == ord("q"):
             break
 
         xyz = pc_np[:, :, :3].reshape(-1, 3)

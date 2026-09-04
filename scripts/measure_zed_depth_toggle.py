@@ -6,6 +6,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """RuntimeParameters.enable_depth の動的トグルを実測（診断用、物理動作なし）。
 
@@ -69,7 +83,9 @@ def main() -> None:
     fps_off, _ = _fps(cam, runtime, args.n, False, depth_mat)
     print(f"[depth OFF (RGB only)] {fps_off:5.1f} FPS")
     fps_on, valid_on = _fps(cam, runtime, args.n, True, depth_mat)
-    print(f"[depth ON  ({args.mode})] {fps_on:5.1f} FPS   valid-depth pixels={valid_on*100:4.1f}%")
+    print(
+        f"[depth ON  ({args.mode})] {fps_on:5.1f} FPS   valid-depth pixels={valid_on * 100:4.1f}%"
+    )
     print(f"  -> depth ON は OFF の約 {fps_off / fps_on:.1f}x 遅い\n" if fps_on > 0 else "")
 
     # OFF→ON 切り替え後、有効点率が安定するまでのフレーム数
@@ -92,10 +108,13 @@ def main() -> None:
             stable_frame = i
             mark = "  <- 安定"
         prev = v
-        print(f"  frame {i:2d}  t={dt_ms:6.0f}ms  valid={v*100:4.1f}%{mark}")
+        print(f"  frame {i:2d}  t={dt_ms:6.0f}ms  valid={v * 100:4.1f}%{mark}")
     cam.close()
-    print(f"\n安定まで: frame {stable_frame}（OFF->ON 後）" if stable_frame is not None
-          else "\n20フレーム内で安定判定に達せず")
+    print(
+        f"\n安定まで: frame {stable_frame}（OFF->ON 後）"
+        if stable_frame is not None
+        else "\n20フレーム内で安定判定に達せず"
+    )
 
 
 if __name__ == "__main__":

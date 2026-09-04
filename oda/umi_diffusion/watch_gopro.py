@@ -1,3 +1,17 @@
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Headless wrist-camera framing check: is the live view anything like the training set?
 
 `preview_gopro.py` needs a focused GUI window, which is awkward while the operator is at
@@ -23,7 +37,7 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from smoke_gopro import GOPRO_DEV, HERE, preprocess  # noqa: E402
+from smoke_gopro import GOPRO_DEV, HERE, preprocess
 
 _TRAIN = ["train_frame_00000.png", "train_frame_05705.png", "train_frame_11409.png"]
 
@@ -91,14 +105,20 @@ def main(cam_device, every, seconds, out):
                 tiles += [gap, t]
             row = np.concatenate(tiles, axis=1)
             row = cv2.resize(row, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_NEAREST)
-            label = (f"live | training x{len(train)}   black={black:.1f}% (train ~21%)   "
-                     f"best match {best[0].replace('train_frame_', '')} r={best[1]:+.3f}")
+            label = (
+                f"live | training x{len(train)}   black={black:.1f}% (train ~21%)   "
+                f"best match {best[0].replace('train_frame_', '')} r={best[1]:+.3f}"
+            )
             colour = (0, 0, 255) if black > 99.0 else (0, 180, 0)
             cv2.putText(row, label, (10, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.6, colour, 2)
             cv2.imwrite(out, row)
-            print(f"  black={black:5.1f}%  " + "  ".join(
-                f"{n.replace('train_frame_', '').replace('.png', '')}:{s:+.3f}" for n, s in sims),
-                flush=True)
+            print(
+                f"  black={black:5.1f}%  "
+                + "  ".join(
+                    f"{n.replace('train_frame_', '').replace('.png', '')}:{s:+.3f}" for n, s in sims
+                ),
+                flush=True,
+            )
             time.sleep(every)
     except KeyboardInterrupt:
         pass

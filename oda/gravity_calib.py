@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """重力補償の過不足を実測する較正ツール (2026-08-25).
 
 **原理** — 静止して腕を保持しているとき、各関節では次が釣り合っている:
@@ -46,6 +60,7 @@ G1ArmSdkConnection(weight ramp / clip-to-measured / 関節リミット)なので
   GC_TIP_EXTRA_COM_XYZ : 同じく重心 既定 "0.113,-0.003,0.0"
   GC_RETURN          : 測定後にホーム姿勢へ戻す 既定 1 (0でその場保持)
 """
+
 from __future__ import annotations
 
 import os
@@ -59,7 +74,6 @@ from dimos.core.transport import LCMTransport
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.robot.unitree.g1.act.ik_reach_bridge import (
     _ARM_JOINT_NAMES,
-    _ARM_START,
     _LEFT_SLICE,
     _NUM_ARM,
     _RIGHT_SLICE,
@@ -101,7 +115,7 @@ def _grav_model(extra_kg: float, com: list[float]):
 def main() -> int:
     if POSE.shape != (7,):
         raise SystemExit(f"GC_POSE は7個必要: {POSE!r}")
-    model_lo, model_hi = _grav_model(0.0, TIP_COM)[0].lowerPositionLimit, None
+    _model_lo, _model_hi = _grav_model(0.0, TIP_COM)[0].lowerPositionLimit, None
     m0 = load_g1_right_arm_ik(str(DEFAULT_URDF)).ik.model
     if np.any(POSE < m0.lowerPositionLimit) or np.any(POSE > m0.upperPositionLimit):
         raise SystemExit(f"GC_POSE が関節リミット外: {POSE}")
@@ -117,7 +131,10 @@ def main() -> int:
     while "pos" not in state and time.time() - t0 < 3.0:
         time.sleep(0.05)
     if "pos" not in state:
-        print("ERROR: motor_states が来ない。アプリ(dimos run ...)が動いているか確認。", file=sys.stderr)
+        print(
+            "ERROR: motor_states が来ない。アプリ(dimos run ...)が動いているか確認。",
+            file=sys.stderr,
+        )
         return 1
 
     def read_arm() -> tuple[np.ndarray, np.ndarray]:
@@ -129,15 +146,19 @@ def main() -> int:
 
     q_left0, q_right0 = read_arm()
     print(f"開始姿勢(右腕) = {np.round(q_right0, 3)}")
-    print(f"測定姿勢       = {np.round(POSE, 3)}  ({np.round(np.rad2deg(POSE),1)} deg)")
+    print(f"測定姿勢       = {np.round(POSE, 3)}  ({np.round(np.rad2deg(POSE), 1)} deg)")
     print(f"重力モデル: 先端ペイロード +{TIP_KG:.3f} kg @ {TIP_COM}, tau_scale={SCALE:g}")
     if abs(SCALE - 1.0) > 1e-9:
-        print(f"  ⚠ tau_scale={SCALE:g} != 1.0。アプリの OKRA_GRAVITY_TAU_SCALE と"
-              " 一致しているか必ず確認すること(ズレると逆算が狂う)")
-    print(f"{RAMP_S:.1f}秒かけて移動 -> {SETTLE_S:.1f}秒静定 -> {MEASURE_S:.1f}秒平均\n", flush=True)
+        print(
+            f"  ⚠ tau_scale={SCALE:g} != 1.0。アプリの OKRA_GRAVITY_TAU_SCALE と"
+            " 一致しているか必ず確認すること(ズレると逆算が狂う)"
+        )
+    print(
+        f"{RAMP_S:.1f}秒かけて移動 -> {SETTLE_S:.1f}秒静定 -> {MEASURE_S:.1f}秒平均\n", flush=True
+    )
 
     def publish(q_right: np.ndarray) -> None:
-        q_left, _ = read_arm()   # 左腕は常に実測を維持(勝手に動かさない)
+        q_left, _ = read_arm()  # 左腕は常に実測を維持(勝手に動かさない)
         pub.publish(
             JointState(
                 name=list(_ARM_JOINT_NAMES),
@@ -149,17 +170,17 @@ def main() -> int:
 
     dt = 1.0 / RATE_HZ
     try:
-        # --- 1) ゆっくり測定姿勢へ ---
+        # 1) ゆっくり測定姿勢へ
         n = max(1, int(RAMP_S * RATE_HZ))
         for i in range(1, n + 1):
             publish(q_right0 + (POSE - q_right0) * (i / n))
             time.sleep(dt)
-        # --- 2) 静定を待つ(指令は出し続ける = 保持) ---
+        # 2) 静定を待つ(指令は出し続ける = 保持)
         t_end = time.time() + SETTLE_S
         while time.time() < t_end:
             publish(POSE)
             time.sleep(dt)
-        # --- 3) 平均を取る ---
+        # 3) 平均を取る
         samples = []
         t_end = time.time() + MEASURE_S
         while time.time() < t_end:
@@ -173,8 +194,8 @@ def main() -> int:
 
     q_meas = np.mean(np.asarray(samples), axis=0)
     q_std = np.std(np.asarray(samples), axis=0)
-    dq = POSE - q_meas                      # 残留誤差 [rad]
-    tau_missing = KP * dq                   # 未補償トルク [N*m]
+    dq = POSE - q_meas  # 残留誤差 [rad]
+    tau_missing = KP * dq  # 未補償トルク [N*m]
 
     m, d = _grav_model(TIP_KG, TIP_COM)
     g_model = np.asarray(pinocchio.computeGeneralizedGravity(m, d, q_meas))
@@ -196,7 +217,7 @@ def main() -> int:
         print("  ⚠ ばらつきが大きい。まだ揺れている可能性 -> GC_SETTLE_S を伸ばす")
     print()
 
-    # --- 肩ピッチを基準に必要ペイロードを逆算 ---
+    # 肩ピッチを基準に必要ペイロードを逆算
     i = 0
     if abs(dtau_dm[i]) < 1e-6:
         print("この姿勢では肩ピッチが先端質量にほぼ無感 -> GC_POSE を水平寄りに変更のこと")
@@ -204,12 +225,11 @@ def main() -> int:
     # 釣り合い: kp*dq = tau_実負荷 - SCALE*g(q)
     # 質量を need_kg 足して誤差ゼロにしたいので  SCALE*need_kg*dtau_dm = kp*dq
     need_kg = tau_missing[i] / (SCALE * dtau_dm[i])
-    print(f"【肩ピッチ基準の逆算】")
+    print("【肩ピッチ基準の逆算】")
     print(f"  未補償トルク            = {tau_missing[i]:+.2f} N*m")
     print(f"  先端1kgあたりのトルク   = {dtau_dm[i]:+.2f} N*m/kg (x tau_scale {SCALE:g})")
     print(f"  → 追加すべき先端質量   = {need_kg:+.3f} kg")
-    print(f"  → 推奨 OKRA_TIP_EXTRA_MASS_KG = {TIP_KG + need_kg:.3f}"
-          f"  (現在 {TIP_KG:.3f})")
+    print(f"  → 推奨 OKRA_TIP_EXTRA_MASS_KG = {TIP_KG + need_kg:.3f}  (現在 {TIP_KG:.3f})")
     if need_kg < -0.05:
         print("  ⚠ 負 = 補償のかけ過ぎ。腕が自分で持ち上がる方向 -> 値を下げること")
     print()

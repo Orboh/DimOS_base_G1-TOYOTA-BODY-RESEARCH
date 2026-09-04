@@ -5,6 +5,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """Japanese announcements through the G1 speaker via off-board synthesis + PlayStream.
 
@@ -77,7 +91,7 @@ class G1SpeakerAnnouncer:
         if volume is not None:
             try:
                 self._audio.SetVolume(volume)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("G1 SetVolume failed", error=str(exc))
         self._thread = threading.Thread(target=self._run, daemon=True, name="g1-speaker")
         self._thread.start()
@@ -94,7 +108,7 @@ class G1SpeakerAnnouncer:
                 continue
             try:
                 self._play_now(text)
-            except Exception as exc:  # noqa: BLE001 — audio must never break harvesting
+            except Exception as exc:
                 logger.warning("G1 speaker play failed", text=text, error=str(exc))
 
     def _play_now(self, text: str) -> None:
@@ -150,10 +164,10 @@ def make_g1_playstream_announcer(
     client = AudioClient()
     try:
         client.SetTimeout(10.0)
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     client.Init()
     return G1SpeakerAnnouncer(client, rate=rate, volume=volume)
 
 
-__all__ = ["synth_pcm_jp", "G1SpeakerAnnouncer", "make_g1_playstream_announcer"]
+__all__ = ["G1SpeakerAnnouncer", "make_g1_playstream_announcer", "synth_pcm_jp"]

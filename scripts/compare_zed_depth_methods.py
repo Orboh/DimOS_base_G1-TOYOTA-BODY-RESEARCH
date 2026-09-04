@@ -6,6 +6,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """ZED 深度→3D 化の 2 方式を同じフレームで並べて比較する（診断用、物理動作なし）。
 
@@ -43,8 +57,13 @@ def _build_camera_info(cam: sl.Camera, w: int, h: int) -> CameraInfo:
     K = [calib.fx, 0.0, calib.cx, 0.0, calib.fy, calib.cy, 0.0, 0.0, 1.0]
     P = [calib.fx, 0.0, calib.cx, 0.0, 0.0, calib.fy, calib.cy, 0.0, 0.0, 0.0, 1.0, 0.0]
     return CameraInfo(
-        height=h, width=w, distortion_model="plumb_bob",
-        D=list(calib.disto), K=K, P=P, frame_id="zed_optical",
+        height=h,
+        width=w,
+        distortion_model="plumb_bob",
+        D=list(calib.disto),
+        K=K,
+        P=P,
+        frame_id="zed_optical",
     )
 
 
@@ -84,8 +103,10 @@ def main() -> None:
     img_mat, depth_mat, pc_mat = sl.Mat(), sl.Mat(), sl.Mat()
 
     print(f"ZED {info.camera_model} S/N {info.serial_number} {w}x{h}")
-    print(f"intrinsics fx={camera_info.K[0]:.1f} fy={camera_info.K[4]:.1f} "
-          f"cx={camera_info.K[2]:.1f} cy={camera_info.K[5]:.1f}\n")
+    print(
+        f"intrinsics fx={camera_info.K[0]:.1f} fy={camera_info.K[4]:.1f} "
+        f"cx={camera_info.K[2]:.1f} cy={camera_info.K[5]:.1f}\n"
+    )
 
     for i in range(args.frames):
         if cam.grab(runtime) != sl.ERROR_CODE.SUCCESS:
@@ -108,35 +129,45 @@ def main() -> None:
         if not dets:
             continue
 
-        print(f"[frame {i}] {args.classes} detections={len(dets)}  "
-              f"(scene pointcloud: {len(xyz)} pts)\n")
+        print(
+            f"[frame {i}] {args.classes} detections={len(dets)}  "
+            f"(scene pointcloud: {len(xyz)} pts)\n"
+        )
         for det in dets:
             x1, y1, x2, y2 = det.bbox
             u, v = (x1 + x2) / 2.0, (y1 + y2) / 2.0
-            # --- 方式 A: 中心 1 ピクセル深度 ---
+            # 方式 A: 中心 1 ピクセル深度
             dA = _center_depth(depth, u, v)
             raw = float(depth[int(np.clip(v, 0, h - 1)), int(np.clip(u, 0, w - 1))])
             a_valid = np.isfinite(raw) and 0.05 < raw < 10.0
-            print(f"  {det.name} conf={det.confidence:.2f} bbox=({x1:.0f},{y1:.0f},{x2:.0f},{y2:.0f}) "
-                  f"center=({u:.0f},{v:.0f})")
-            print(f"    [A 中心1px      ] fwd z = {dA:.3f} m"
-                  f"{'' if a_valid else '  (中心が無効→0.45m フォールバック)'}")
-            # --- 方式 B1: 点群 centroid（フィルタなし＝箱内の全点） ---
+            print(
+                f"  {det.name} conf={det.confidence:.2f} bbox=({x1:.0f},{y1:.0f},{x2:.0f},{y2:.0f}) "
+                f"center=({u:.0f},{v:.0f})"
+            )
+            print(
+                f"    [A 中心1px      ] fwd z = {dA:.3f} m"
+                f"{'' if a_valid else '  (中心が無効→0.45m フォールバック)'}"
+            )
+            # 方式 B1: 点群 centroid（フィルタなし＝箱内の全点）
             b_raw = Detection3DPC.from_2d(det, pc, camera_info, ident, filters=[])
             if b_raw is not None:
                 c = b_raw.center
                 n = len(b_raw.pointcloud.pointcloud.points)
-                print(f"    [B1 点群raw     ] optical(x={c.x:+.3f}, y={c.y:+.3f}, z={c.z:+.3f}) m"
-                      f"  fwd z={c.z:.3f} m  (box内 {n} pts, 背景混入)")
+                print(
+                    f"    [B1 点群raw     ] optical(x={c.x:+.3f}, y={c.y:+.3f}, z={c.z:+.3f}) m"
+                    f"  fwd z={c.z:.3f} m  (box内 {n} pts, 背景混入)"
+                )
             else:
                 print("    [B1 点群raw     ] None")
-            # --- 方式 B2: 点群 centroid（公式デフォルトフィルタ: raycast/外れ値/statistical） ---
+            # 方式 B2: 点群 centroid（公式デフォルトフィルタ: raycast/外れ値/statistical）
             b_flt = Detection3DPC.from_2d(det, pc, camera_info, ident, filters=None)
             if b_flt is not None:
                 c = b_flt.center
                 n = len(b_flt.pointcloud.pointcloud.points)
-                print(f"    [B2 点群filtered] optical(x={c.x:+.3f}, y={c.y:+.3f}, z={c.z:+.3f}) m"
-                      f"  fwd z={c.z:.3f} m  (残 {n} pts, 背景除去後)")
+                print(
+                    f"    [B2 点群filtered] optical(x={c.x:+.3f}, y={c.y:+.3f}, z={c.z:+.3f}) m"
+                    f"  fwd z={c.z:.3f} m  (残 {n} pts, 背景除去後)"
+                )
             else:
                 print("    [B2 点群filtered] None（フィルタで全点除去）")
             print()

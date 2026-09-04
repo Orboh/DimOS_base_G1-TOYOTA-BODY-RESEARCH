@@ -5,6 +5,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """Offline checks for the segmentation path of detect_okra (Step 4).
 
@@ -15,7 +29,7 @@ sample) drives the 3D depth. No robot, no ultralytics, no graph import.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -74,6 +88,7 @@ def test_no_mask_returns_none() -> None:
 
 def test_seg_uses_mask_median_depth() -> None:
     """Depth comes from the median of mask-internal samples, not a single point."""
+
     # depth_getter returns the column index /1000 -> varies across the mask; the
     # median over the mask columns [300,340) is ~0.320 m, stable to outliers.
     def depth_getter(u: float, v: float) -> float:
@@ -96,6 +111,7 @@ def test_seg_uses_mask_median_depth() -> None:
 
 def test_seg_falls_back_to_point_depth_without_mask() -> None:
     """No mask -> bbox centre + point depth (legacy path) still works."""
+
     def depth_getter(u: float, v: float) -> float:
         return 0.5
 
@@ -176,17 +192,24 @@ def test_zed_pixel_to_base_returns_none_without_usable_depth() -> None:
     det = _SegDet(name="okra", bbox=(0, 0, 10, 10), mask=None)
 
     # depth_getter 自体が無い
-    assert make_zed_pixel_to_base(depth_getter=None, intrinsics_getter=lambda: intr)(
-        320.0, 240.0, det
-    ) is None
+    assert (
+        make_zed_pixel_to_base(depth_getter=None, intrinsics_getter=lambda: intr)(320.0, 240.0, det)
+        is None
+    )
     # 深度が範囲外（ZED が 0 を返す = 無効値）
-    assert make_zed_pixel_to_base(
-        depth_getter=lambda u, v: 0.0, intrinsics_getter=lambda: intr
-    )(320.0, 240.0, det) is None
+    assert (
+        make_zed_pixel_to_base(depth_getter=lambda u, v: 0.0, intrinsics_getter=lambda: intr)(
+            320.0, 240.0, det
+        )
+        is None
+    )
     # 深度が NaN
-    assert make_zed_pixel_to_base(
-        depth_getter=lambda u, v: float("nan"), intrinsics_getter=lambda: intr
-    )(320.0, 240.0, det) is None
+    assert (
+        make_zed_pixel_to_base(
+            depth_getter=lambda u, v: float("nan"), intrinsics_getter=lambda: intr
+        )(320.0, 240.0, det)
+        is None
+    )
 
 
 def test_detect_skips_okra_without_3d_position() -> None:

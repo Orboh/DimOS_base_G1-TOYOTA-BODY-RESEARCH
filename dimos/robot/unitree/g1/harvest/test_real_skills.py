@@ -5,6 +5,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """Offline checks for the real-robot wiring adapter (no robot needed).
 
@@ -73,8 +87,15 @@ def test_graph_runs_with_real_adapter() -> None:
         if seen["done"]:
             return []
         seen["done"] = True
-        return [Okra(id="a", img_region="R", pos_3d={"x": 0.30, "y": 0.45, "z": 0.80},
-                     ripeness=0.9, reachable=True)]
+        return [
+            Okra(
+                id="a",
+                img_region="R",
+                pos_3d={"x": 0.30, "y": 0.45, "z": 0.80},
+                ripeness=0.9,
+                reachable=True,
+            )
+        ]
 
     grasps: list[tuple[str, float]] = []
     skills = _adapter(
@@ -89,11 +110,11 @@ def test_graph_runs_with_real_adapter() -> None:
     assert grasps == [("a", cfg.grasp_force)]
 
 
-# --- LIVE assembly (real detect wiring) -------------------------------------
+# LIVE assembly (real detect wiring)
 
-from dataclasses import dataclass  # noqa: E402
+from dataclasses import dataclass
 
-from dimos.robot.unitree.g1.harvest.graph import build_harvest_graph  # noqa: E402
+from dimos.robot.unitree.g1.harvest.graph import build_harvest_graph
 
 
 @dataclass

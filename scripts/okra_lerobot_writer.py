@@ -61,12 +61,21 @@ ROBOT_TYPE = "Unitree_G1_Dex1"
 def features(fps_use_video: bool = True) -> dict:
     img_dtype = "video" if fps_use_video else "image"
     return {
-        "observation.state": {"dtype": "float32", "shape": (STATE_DIM,),
-                              "names": [f"r_arm_{i}" for i in range(STATE_DIM)]},
-        "action": {"dtype": "float32", "shape": (STATE_DIM,),
-                   "names": [f"r_arm_{i}" for i in range(STATE_DIM)]},
-        WRIST_KEY: {"dtype": img_dtype, "shape": (IMG_H, IMG_W, 3),
-                    "names": ["height", "width", "channel"]},
+        "observation.state": {
+            "dtype": "float32",
+            "shape": (STATE_DIM,),
+            "names": [f"r_arm_{i}" for i in range(STATE_DIM)],
+        },
+        "action": {
+            "dtype": "float32",
+            "shape": (STATE_DIM,),
+            "names": [f"r_arm_{i}" for i in range(STATE_DIM)],
+        },
+        WRIST_KEY: {
+            "dtype": img_dtype,
+            "shape": (IMG_H, IMG_W, 3),
+            "names": ["height", "width", "channel"],
+        },
     }
 
 
@@ -77,8 +86,12 @@ def _build(raw_episodes, repo_id, root, fps, use_videos, task):
     if Path(root).exists():
         shutil.rmtree(root)
     ds = LeRobotDataset.create(
-        repo_id=repo_id, fps=fps, features=features(use_videos), root=root,
-        robot_type=ROBOT_TYPE, use_videos=use_videos,
+        repo_id=repo_id,
+        fps=fps,
+        features=features(use_videos),
+        root=root,
+        robot_type=ROBOT_TYPE,
+        use_videos=use_videos,
     )
     for q, frames in raw_episodes:
         q = np.asarray(q, dtype=np.float32)
@@ -86,18 +99,21 @@ def _build(raw_episodes, repo_id, root, fps, use_videos, task):
         for t in range(T):
             # action = next-frame measured q (last frame repeats); kinesthetic label.
             a = q[t + 1] if t + 1 < T else q[t]
-            ds.add_frame({
-                "observation.state": q[t],
-                "action": a.astype(np.float32),
-                WRIST_KEY: frames[t],
-                "task": task,
-            })
+            ds.add_frame(
+                {
+                    "observation.state": q[t],
+                    "action": a.astype(np.float32),
+                    WRIST_KEY: frames[t],
+                    "task": task,
+                }
+            )
         ds.save_episode()
     return ds
 
 
 def _read_raw(raw_dir: Path):
     import cv2
+
     eps = []
     for ep in sorted(p for p in raw_dir.iterdir() if p.is_dir() and p.name.startswith("episode_")):
         q = np.load(ep / "q.npy").astype(np.float32)
@@ -113,14 +129,22 @@ def _read_raw(raw_dir: Path):
 
 def _selftest() -> int:
     import tempfile
+
     root = Path(tempfile.mkdtemp(prefix="okra_lerobot_selftest_"))
     rng_q = np.cumsum(np.full((20, STATE_DIM), 0.01, dtype=np.float32), axis=0)  # smooth fake traj
     frames = [np.full((IMG_H, IMG_W, 3), (t * 10) % 255, dtype=np.uint8) for t in range(20)]
     print(f"[selftest] writing 1 fake episode (20 frames, 7-dim, wrist-only) to {root}")
-    _build([(rng_q, frames)], repo_id="local/okra_selftest", root=str(root / "ds"),
-           fps=30, use_videos=True, task=DEFAULT_TASK)
+    _build(
+        [(rng_q, frames)],
+        repo_id="local/okra_selftest",
+        root=str(root / "ds"),
+        fps=30,
+        use_videos=True,
+        task=DEFAULT_TASK,
+    )
 
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
     ds = LeRobotDataset(repo_id="local/okra_selftest", root=str(root / "ds"))
     f = ds.meta.features
     ok = (
@@ -133,16 +157,20 @@ def _selftest() -> int:
     )
     frame0 = ds[0]
     print(f"[selftest] reloaded: num_frames={ds.num_frames} num_episodes={ds.num_episodes}")
-    print(f"[selftest] state shape={tuple(frame0['observation.state'].shape)} "
-          f"action shape={tuple(frame0['action'].shape)} "
-          f"wrist shape={tuple(frame0[WRIST_KEY].shape)}")
+    print(
+        f"[selftest] state shape={tuple(frame0['observation.state'].shape)} "
+        f"action shape={tuple(frame0['action'].shape)} "
+        f"wrist shape={tuple(frame0[WRIST_KEY].shape)}"
+    )
     print(f"[selftest] features: {list(f.keys())}")
     # stats present (normalization depends on these)
     has_stats = bool(ds.meta.stats) and "observation.state" in ds.meta.stats
     print(f"[selftest] meta.stats has observation.state: {has_stats}")
     shutil.rmtree(root, ignore_errors=True)
     ok = ok and has_stats
-    print(f"[selftest] {'OK ✅ — wrist-only 7-dim lerobot 0.4.1 dataset writes + reloads' if ok else 'FAIL ❌'}")
+    print(
+        f"[selftest] {'OK ✅ — wrist-only 7-dim lerobot 0.4.1 dataset writes + reloads' if ok else 'FAIL ❌'}"
+    )
     return 0 if ok else 1
 
 
@@ -151,7 +179,9 @@ def main() -> int:
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--raw", type=str, help="raw capture dir (episode_* subdirs)")
     ap.add_argument("--repo-id", type=str, default="sotata/okura-kinesthetic-wrist-7d")
-    ap.add_argument("--root", type=str, default=None, help="output dataset dir (default ~/.cache/...)")
+    ap.add_argument(
+        "--root", type=str, default=None, help="output dataset dir (default ~/.cache/...)"
+    )
     ap.add_argument("--fps", type=int, default=30)
     ap.add_argument("--task", type=str, default=DEFAULT_TASK)
     ap.add_argument("--no-videos", action="store_true", help="store frames as images not video")
@@ -164,9 +194,17 @@ def main() -> int:
     if not eps:
         print("no episodes found")
         return 1
-    root = args.root or str(Path.home() / "okra_collect" / "lerobot" / args.repo_id.replace("/", "_"))
-    _build(eps, repo_id=args.repo_id, root=root, fps=args.fps,
-           use_videos=not args.no_videos, task=args.task)
+    root = args.root or str(
+        Path.home() / "okra_collect" / "lerobot" / args.repo_id.replace("/", "_")
+    )
+    _build(
+        eps,
+        repo_id=args.repo_id,
+        root=root,
+        fps=args.fps,
+        use_videos=not args.no_videos,
+        task=args.task,
+    )
     print(f"[done] wrote {len(eps)} episodes -> {root}")
     print(f"       upload: huggingface-cli upload {args.repo_id} {root} --repo-type dataset")
     return 0
