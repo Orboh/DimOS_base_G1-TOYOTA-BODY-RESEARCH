@@ -84,7 +84,7 @@ teleop/
 
 ```bash
 dimos run teleop-quest-rerun     # Quest teleop + Rerun viz
-dimos run teleop-phone-go2      # Phone → Go2
+dimos run teleop-phone           # Phone → cmd_vel
 ```
 
 Open `https://<host-ip>:<port>/teleop` on device. Accept the self-signed certificate.
