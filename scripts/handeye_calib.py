@@ -76,8 +76,8 @@ def _fit_mount(p_opts: np.ndarray, p_arms: np.ndarray) -> dict:
 
     def residual(pitch: float) -> tuple[float, np.ndarray]:
         ry = pinocchio.rpy.rpyToMatrix(0.0, pitch, 0.0)
-        d = (ry @ p_d435.T).T            # N x 3
-        t = (p_arms - d).mean(axis=0)    # best translation for this pitch
+        d = (ry @ p_d435.T).T  # N x 3
+        t = (p_arms - d).mean(axis=0)  # best translation for this pitch
         err = p_arms - (d + t)
         return float(np.sqrt(np.mean(np.sum(err**2, axis=1)))), t
 
@@ -100,7 +100,7 @@ def _report(p_opts: np.ndarray, p_arms: np.ndarray) -> None:
     np.set_printoptions(precision=4, suppress=True)
     for i, (pa, pc, d, po) in enumerate(zip(p_arms, p_cam, delta, p_opts, strict=False)):
         depth = float(po[2])  # optical Z = depth
-        print(f"#{i+1} depth={depth:.3f}  P_arm={pa}  P_cam={pc}  Δ(cam-arm)={d}")
+        print(f"#{i + 1} depth={depth:.3f}  P_arm={pa}  P_cam={pc}  Δ(cam-arm)={d}")
     print(f"\nmean Δ (cam-arm) = {delta.mean(axis=0)}  | std = {delta.std(axis=0)}")
     # depth dependence of the vertical error => pitch; ~constant => Z translation
     depths = p_opts[:, 2]
@@ -109,32 +109,43 @@ def _report(p_opts: np.ndarray, p_arms: np.ndarray) -> None:
         print(f"corr(depth, Δz) = {cz:+.2f}  ( |corr|→1 = pitch error; ~0 = constant Z )")
     fit = _fit_mount(p_opts, p_arms)
     dp = np.degrees(fit["pitch"] - float(_D435_RPY[1]))
-    print(f"\nfit RMS = {fit['rms']*1000:.1f} mm   (nominal RMS = {fit['nominal_rms']*1000:.1f} mm)")
+    print(
+        f"\nfit RMS = {fit['rms'] * 1000:.1f} mm   (nominal RMS = {fit['nominal_rms'] * 1000:.1f} mm)"
+    )
     print("---- corrected camera mount (torso<-d435) ----")
     print(f"  xyz : {np.array(_D435_XYZ)}  ->  {fit['t']}")
     print(f"  pitch(rad) : {float(_D435_RPY[1]):.6f}  ->  {fit['pitch']:.6f}   (Δ {dp:+.2f} deg)")
     print("\nApply to BOTH (keep them in sync):")
-    print(f"  g1.urdf d435_joint:  <origin xyz=\"{fit['t'][0]:.5f} {fit['t'][1]:.5f} {fit['t'][2]:.5f}\""
-          f" rpy=\"0 {fit['pitch']:.10f} 0\"/>")
-    print(f"  ik_reach_bridge.py:  _D435_XYZ={list(np.round(fit['t'],5))}  _D435_RPY=[0.0, {fit['pitch']:.10f}, 0.0]")
+    print(
+        f'  g1.urdf d435_joint:  <origin xyz="{fit["t"][0]:.5f} {fit["t"][1]:.5f} {fit["t"][2]:.5f}"'
+        f' rpy="0 {fit["pitch"]:.10f} 0"/>'
+    )
+    print(
+        f"  ik_reach_bridge.py:  _D435_XYZ={list(np.round(fit['t'], 5))}  _D435_RPY=[0.0, {fit['pitch']:.10f}, 0.0]"
+    )
     print("========================================\n")
 
 
 def _selftest() -> int:
     """Plant a known mount error, synthesize pairs, confirm the fit recovers it."""
-    rng_pitch = float(_D435_RPY[1]) + np.radians(4.0)   # plant +4 deg pitch error
+    rng_pitch = float(_D435_RPY[1]) + np.radians(4.0)  # plant +4 deg pitch error
     rng_t = np.array(_D435_XYZ) + np.array([0.0, 0.0, -0.03])  # and -3 cm Z
     r_opt = pinocchio.Quaternion(*_OPTICAL_WXYZ).toRotationMatrix()
     ry = pinocchio.rpy.rpyToMatrix(0.0, rng_pitch, 0.0)
-    p_opts = np.array([
-        [0.05, -0.10, 0.45], [-0.04, 0.06, 0.55], [0.12, 0.02, 0.62],
-        [-0.08, -0.05, 0.50], [0.0, 0.10, 0.58],
-    ])
+    p_opts = np.array(
+        [
+            [0.05, -0.10, 0.45],
+            [-0.04, 0.06, 0.55],
+            [0.12, 0.02, 0.62],
+            [-0.08, -0.05, 0.50],
+            [0.0, 0.10, 0.58],
+        ]
+    )
     p_arms = np.array([ry @ (r_opt @ po) + rng_t for po in p_opts])  # "truth"
     fit = _fit_mount(p_opts, p_arms)
     ok = abs(fit["pitch"] - rng_pitch) < np.radians(0.3) and np.allclose(fit["t"], rng_t, atol=2e-3)
     print(f"[selftest] planted pitch={rng_pitch:.5f} t={rng_t}")
-    print(f"[selftest] fitted  pitch={fit['pitch']:.5f} t={fit['t']}  rms={fit['rms']*1e3:.2f}mm")
+    print(f"[selftest] fitted  pitch={fit['pitch']:.5f} t={fit['t']}  rms={fit['rms'] * 1e3:.2f}mm")
     print(f"[selftest] {'OK' if ok else 'FAIL'}")
     return 0 if ok else 1
 
@@ -183,8 +194,10 @@ def main() -> int:
     p_arms: list[np.ndarray] = []
     try:
         for k in range(1, args.pairs + 1):
-            input(f"--- Pair {k}/{args.pairs} (A): position arm, TOUCH the marker to the gripper tip, "
-                  f"then press Enter to capture P_arm > ")
+            input(
+                f"--- Pair {k}/{args.pairs} (A): position arm, TOUCH the marker to the gripper tip, "
+                f"then press Enter to capture P_arm > "
+            )
             with lock:
                 q = None if state["q"] is None else state["q"].copy()
             if q is None:
@@ -193,17 +206,24 @@ def main() -> int:
             p_arm = tip_torso(q)
             with lock:
                 n0 = state["click_n"]
-            print(f"  P_arm (tip in torso) = {np.round(p_arm,4)}")
-            input(f"--- Pair {k}/{args.pairs} (B): now CLICK that same marker in the viewer, "
-                  f"then press Enter > ")
+            print(f"  P_arm (tip in torso) = {np.round(p_arm, 4)}")
+            input(
+                f"--- Pair {k}/{args.pairs} (B): now CLICK that same marker in the viewer, "
+                f"then press Enter > "
+            )
             with lock:
-                n1, click = state["click_n"], None if state["click"] is None else state["click"].copy()
+                n1, click = (
+                    state["click_n"],
+                    None if state["click"] is None else state["click"].copy(),
+                )
             if click is None or n1 == n0:
                 print("  no NEW click detected since (A) — discarding this pair.")
                 continue
             p_cam = np.asarray(_default_torso_from_optical().act(click))
-            print(f"  click(optical)={np.round(click,4)}  P_cam={np.round(p_cam,4)}  "
-                  f"Δ(cam-arm)={np.round(p_cam-p_arm,4)}")
+            print(
+                f"  click(optical)={np.round(click, 4)}  P_cam={np.round(p_cam, 4)}  "
+                f"Δ(cam-arm)={np.round(p_cam - p_arm, 4)}"
+            )
             p_opts.append(click)
             p_arms.append(p_arm)
     except (KeyboardInterrupt, EOFError):

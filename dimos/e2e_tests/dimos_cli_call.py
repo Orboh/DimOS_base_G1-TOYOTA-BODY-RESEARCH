@@ -44,7 +44,7 @@ class DimosCliCall:
         # blueprint override: `load_config_args` silently skips env-var
         # overrides whose module is absent from the blueprint, but rejects
         # unknown `-o` keys outright. Blueprints without an mcpclient (e.g.
-        # `coordinator-mock`) would otherwise fail config validation.
+        # `unitree-g1-coordinator`) would otherwise fail config validation.
         global_overrides: list[str] = []
         env = os.environ.copy()
         if self.mcp_port is not None:

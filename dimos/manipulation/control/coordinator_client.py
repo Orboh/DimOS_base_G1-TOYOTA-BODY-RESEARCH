@@ -23,8 +23,8 @@ Interfaces with a running ControlCoordinator via RPC to:
 
 Usage:
     # Terminal 1: Start the coordinator
-    dimos run coordinator-mock          # Single arm
-    dimos run coordinator-dual-mock     # Dual arm
+    dimos run unitree-g1-coordinator    # G1 whole-body coordinator
+    dimos run unitree-g1-coordinator     # Dual arm
 
     # Terminal 2: Run this client
     python -m dimos.manipulation.control.coordinator_client
@@ -605,7 +605,7 @@ def _run_client(client: CoordinatorClient, task: str, vel: float, accel: float) 
 
         if not hardware:
             print("\nWarning: No hardware found. Is the coordinator running?")
-            print("Start with: dimos run coordinator-mock")
+            print("Start with: dimos run unitree-g1-coordinator")
             response = input("Continue anyway? [y/N]: ").strip().lower()
             if response != "y":
                 return 0
@@ -615,7 +615,7 @@ def _run_client(client: CoordinatorClient, task: str, vel: float, accel: float) 
 
     except Exception as e:
         print(f"\nConnection error: {e}")
-        print("Make sure coordinator is running: dimos run coordinator-mock")
+        print("Make sure coordinator is running: dimos run unitree-g1-coordinator")
         return 1
 
     if task not in tasks and tasks:
@@ -641,7 +641,7 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Single arm (with coordinator-mock running)
+  # Single arm (with a coordinator running)
   python -m dimos.manipulation.control.coordinator_client
 
   # Dual arm - control left arm

@@ -69,8 +69,20 @@ _NIC = os.getenv("ROBOT_INTERFACE", "")
 # right 7. The arms slew here on startup so the policy begins in-distribution,
 # mirroring eval_g1.py. ActBridge then waits _START_DELAY_S before inferring.
 _INIT_ARM_POSE = [
-    -0.110, -0.047, 0.112, 0.131, 0.012, -0.411, 0.157,   # left arm
-    -0.294, 0.077, 0.174, 0.768, -0.340, -0.809, -0.476,  # right arm
+    -0.110,
+    -0.047,
+    0.112,
+    0.131,
+    0.012,
+    -0.411,
+    0.157,  # left arm
+    -0.294,
+    0.077,
+    0.174,
+    0.768,
+    -0.340,
+    -0.809,
+    -0.476,  # right arm
 ]
 _START_DELAY_S = 2.5
 

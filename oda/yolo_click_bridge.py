@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """YOLO検出 → /clicked_point ブリッジ(人間のクリックの完全な代替、2026-07-22夜実装).
 
 パイプライン:
@@ -35,6 +49,7 @@ IkReachBridge 側は一切変更なし(confirm/固定向き/上からアプロ�
                         ボディ座標を期待する。点群データ自体は両カメラとも光学
                         フレームなので投影計算は共通(2026-07-23 camera.py確認)
 """
+
 from __future__ import annotations
 
 import argparse
@@ -83,8 +98,7 @@ def detect_centroid(model, rgb: np.ndarray, conf: float):
     return float(u), float(v), c
 
 
-def centroid_to_3d(points: np.ndarray, K: list[float], u: float, v: float,
-                   px_radius: float):
+def centroid_to_3d(points: np.ndarray, K: list[float], u: float, v: float, px_radius: float):
     """点群(光学フレームxyz)を画素面へ投影し、(u,v)近傍の中央値3D点を返す."""
     fx, cx, fy, cy = K[0], K[2], K[4], K[5]
     p = np.asarray(points, dtype=float)
@@ -132,8 +146,10 @@ def main() -> int:
     )
     pub = LCMTransport("/clicked_point", PointStamped)
 
-    print(f"[bridge] model={os.path.basename(_MODEL)} conf={_CONF} "
-          f"{'LIVE' if _LIVE else 'DRY-RUN(YOLO_BRIDGE_LIVE=1で発行)'}")
+    print(
+        f"[bridge] model={os.path.basename(_MODEL)} conf={_CONF} "
+        f"{'LIVE' if _LIVE else 'DRY-RUN(YOLO_BRIDGE_LIVE=1で発行)'}"
+    )
     t0 = time.time()
     while not all(k in latest for k in ("img", "pc", "K")):
         if time.time() - t0 > 10:
@@ -157,21 +173,24 @@ def main() -> int:
             print(f"[bridge] 重心(u={u:.0f},v={v:.0f})近傍に点群なし — 発火中止")
             return False
         if float(np.linalg.norm(p3)) > _MAX_M:
-            print(f"[bridge] 3D点が遠すぎ({np.linalg.norm(p3):.2f}m>{_MAX_M}m) — 背景誤検出の疑い、中止")
+            print(
+                f"[bridge] 3D点が遠すぎ({np.linalg.norm(p3):.2f}m>{_MAX_M}m) — 背景誤検出の疑い、中止"
+            )
             return False
-        print(f"[bridge] okra conf={conf:.2f} centroid=({u:.0f},{v:.0f}) "
-              f"-> optical xyz=[{p3[0]:.3f} {p3[1]:.3f} {p3[2]:.3f}]")
+        print(
+            f"[bridge] okra conf={conf:.2f} centroid=({u:.0f},{v:.0f}) "
+            f"-> optical xyz=[{p3[0]:.3f} {p3[1]:.3f} {p3[2]:.3f}]"
+        )
         if _BODY_FRAME:  # ZED: クリック契約はボディ座標(REP-103: x前, y左, z上)
             p3 = np.array([p3[2], -p3[0], -p3[1]])
             print(f"[bridge] -> body xyz=[{p3[0]:.3f} {p3[1]:.3f} {p3[2]:.3f}] (ZEDモード)")
         if not _LIVE:
             print("[bridge] DRY-RUN: 発行せず")
             return True
-        msg = PointStamped(x=float(p3[0]), y=float(p3[1]), z=float(p3[2]),
-                           frame_id=_CLICK_FRAME)
-        pub.publish(msg)          # 1回目 = ARM (confirmモード時)
+        msg = PointStamped(x=float(p3[0]), y=float(p3[1]), z=float(p3[2]), frame_id=_CLICK_FRAME)
+        pub.publish(msg)  # 1回目 = ARM (confirmモード時)
         time.sleep(_DOUBLE_S)
-        pub.publish(msg)          # 2回目 = 確定発火
+        pub.publish(msg)  # 2回目 = 確定発火
         print("[bridge] /clicked_point x2 発行 — リーチ開始するはず")
         return True
 

@@ -35,9 +35,9 @@ from dimos.perception.detection.type.detection2d.imageDetections2D import ImageD
 from dimos.perception.detection.type.detection3d.imageDetections3DPC import ImageDetections3DPC
 from dimos.perception.detection.type.detection3d.pointcloud import Detection3DPC
 from dimos.protocol.tf.tf import TF
-from dimos.robot.unitree.go2 import connection
 from dimos.robot.unitree.type.odometry import Odometry
 from dimos.utils.data import get_data
+from dimos.utils.testing import quadruped_replay
 
 
 class Moment(TypedDict, total=False):
@@ -97,7 +97,7 @@ def get_moment(tf):
         if odom_frame is None:
             raise ValueError("No odom frame found")
 
-        transforms = connection.GO2Connection._odom_to_tf(odom_frame)
+        transforms = quadruped_replay.odom_to_tf(odom_frame)
 
         tf.receive_transform(*transforms)
 

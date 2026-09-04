@@ -1,4 +1,18 @@
 #!/usr/bin/env python
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """G1 の URDF を rerun で 3D 表示し、胸カメラ用フレーム（d435_link 等）を可視化する。
 
 目的: 実機で ZED をボルト止めした「胸の穴」が URDF のどのフレームに当たるかを目視確認する。
@@ -7,13 +21,14 @@
 - d435_link には視線方向（+X＝前やや下）の矢印を追加
 出力: .rrd ファイル（rerun ビューワーで開く）
 """
+
 import os
 import sys
 import xml.etree.ElementTree as ET
 
 import numpy as np
-import trimesh
 import rerun as rr
+import trimesh
 
 # URDF / メッシュ / 出力先は環境変数で上書き可（既定はこのマシンの実在パス）
 URDF = os.getenv(
@@ -29,10 +44,10 @@ OUT_RRD = os.getenv(
 
 # 強調したいフレーム（torso_link 相対のカメラ/センサ取り付け点）
 HIGHLIGHT = {
-    "torso_link": (0.20, (200, 200, 200)),   # 基準フレーム（大きめの軸）
-    "d435_link": (0.18, (255, 60, 60)),      # ★純正 D435 前面カメラ穴（ZED を挿す想定）
-    "mid360_link": (0.10, (60, 160, 255)),   # LiDAR（参考）
-    "head_link": (0.10, (120, 255, 120)),    # 頭（参考）
+    "torso_link": (0.20, (200, 200, 200)),  # 基準フレーム（大きめの軸）
+    "d435_link": (0.18, (255, 60, 60)),  # ★純正 D435 前面カメラ穴（ZED を挿す想定）
+    "mid360_link": (0.10, (60, 160, 255)),  # LiDAR（参考）
+    "head_link": (0.10, (120, 255, 120)),  # 頭（参考）
 }
 
 
@@ -63,7 +78,7 @@ def main() -> None:
     tree = ET.parse(URDF)
     root = tree.getroot()
 
-    # --- link -> visual (mesh filename, visual origin T) ---
+    # link -> visual (mesh filename, visual origin T)
     link_visual = {}
     for link in root.findall("link"):
         name = link.get("name")
@@ -78,7 +93,7 @@ def main() -> None:
         fname = os.path.basename(mesh.get("filename"))
         link_visual[name] = (fname, origin_to_T(vis.find("origin")))
 
-    # --- joints: child -> (parent, T) ---
+    # joints: child -> (parent, T)
     child_joint = {}
     children = set()
     for j in root.findall("joint"):
@@ -90,7 +105,7 @@ def main() -> None:
     all_links = [l.get("name") for l in root.findall("link")]
     roots = [l for l in all_links if l not in children]
 
-    # --- 中立姿勢の world 変換を再帰計算（メモ化）---
+    # 中立姿勢の world 変換を再帰計算（メモ化）
     world_T = {}
 
     def fk(link: str) -> np.ndarray:
@@ -106,7 +121,7 @@ def main() -> None:
     for l in all_links:
         fk(l)
 
-    # --- rerun 出力 ---
+    # rerun 出力
     rr.init("g1_cam_mount")
     rr.save(OUT_RRD)
     rr.log("/", rr.ViewCoordinates.RIGHT_HAND_Z_UP, static=True)
@@ -188,8 +203,12 @@ def main() -> None:
         rp = T_rel[:3, 3]
         pitch_deg = np.degrees(np.arctan2(-view_dir[2], view_dir[0]))
         print(f"d435_link  world     pos = ({origin[0]:.4f}, {origin[1]:.4f}, {origin[2]:.4f}) m")
-        print(f"d435_link  torso相対 pos = ({rp[0]:.4f}, {rp[1]:.4f}, {rp[2]:.4f}) m  ← OKRA_CAM_TO_TORSO の x,y,z")
-        print(f"d435_link  視線(+X) = ({view_dir[0]:.3f}, {view_dir[1]:.3f}, {view_dir[2]:.3f})  → 下向き約 {pitch_deg:.1f}°")
+        print(
+            f"d435_link  torso相対 pos = ({rp[0]:.4f}, {rp[1]:.4f}, {rp[2]:.4f}) m  ← OKRA_CAM_TO_TORSO の x,y,z"
+        )
+        print(
+            f"d435_link  視線(+X) = ({view_dir[0]:.3f}, {view_dir[1]:.3f}, {view_dir[2]:.3f})  → 下向き約 {pitch_deg:.1f}°"
+        )
 
     # ★ 実機の ZED 取り付け位置 = 胸の UNITREE ロゴ（logo_link メッシュの前面中心）
     #   URDF の logo_link 原点は腰位置なので使えない。メッシュ実体から算出する。
@@ -198,8 +217,8 @@ def main() -> None:
         lm = trimesh.load(os.path.join(MESH_DIR, fn), force="mesh")
         Tw = world_T["logo_link"] @ vT
         lv = (Tw[:3, :3] @ lm.vertices.T).T + Tw[:3, 3]  # world
-        front = lv[lv[:, 0] > lv[:, 0].max() - 0.01]     # 前面(最大X)付近
-        mount_w = front.mean(0)                          # 取り付け面中心 (world)
+        front = lv[lv[:, 0] > lv[:, 0].max() - 0.01]  # 前面(最大X)付近
+        mount_w = front.mean(0)  # 取り付け面中心 (world)
         Tt = world_T["torso_link"]
         mount_rel = Tt[:3, :3].T @ (mount_w - Tt[:3, 3])  # torso 相対
         rr.log(
@@ -221,8 +240,12 @@ def main() -> None:
                 labels=["ZED view (level, 仮)"],
             ),
         )
-        print(f"ZED mount (UNITREEロゴ前面)  world=({mount_w[0]:.3f},{mount_w[1]:.3f},{mount_w[2]:.3f})")
-        print(f"ZED mount  torso相対=({mount_rel[0]:.4f},{mount_rel[1]:.4f},{mount_rel[2]:.4f})  ← OKRA_CAM_TO_TORSO の x,y,z 土台")
+        print(
+            f"ZED mount (UNITREEロゴ前面)  world=({mount_w[0]:.3f},{mount_w[1]:.3f},{mount_w[2]:.3f})"
+        )
+        print(
+            f"ZED mount  torso相対=({mount_rel[0]:.4f},{mount_rel[1]:.4f},{mount_rel[2]:.4f})  ← OKRA_CAM_TO_TORSO の x,y,z 土台"
+        )
 
     print(f"\nwrote: {OUT_RRD}")
     print(f"roots: {roots}")

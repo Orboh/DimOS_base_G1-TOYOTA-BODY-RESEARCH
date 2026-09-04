@@ -17,7 +17,7 @@ RPC client for interacting with a running ManipulationModule.
 
 Usage:
     # Start a manipulation blueprint in another terminal first:
-    #   dimos run xarm7-planner-coordinator
+    #   dimos run unitree-g1-coordinator
     #
     # Then run this client:
     python -i -m dimos.manipulation.planning.examples.manipulation_client

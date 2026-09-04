@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Dex1 グリッパのモーター生死判定(2026-07-20, 動作テスト版).
 
 サービス(main.cpp)は指令受信時に mode を FOC へ強制上書きし、
@@ -17,16 +31,21 @@
   q が目標へ向かって動く/tau が出る → モーターは生きている(復帰可能)。
   q が全く動かず tau≈0 のまま      → モーターが指令を実行しない(故障濃厚)。
 """
+
 import time
+
 from unitree_sdk2py.core.channel import (
-    ChannelFactoryInitialize, ChannelPublisher, ChannelSubscriber)
-from unitree_sdk2py.idl.unitree_go.msg.dds_ import MotorCmds_, MotorStates_
+    ChannelFactoryInitialize,
+    ChannelPublisher,
+    ChannelSubscriber,
+)
 from unitree_sdk2py.idl.default import unitree_go_msg_dds__MotorCmd_
+from unitree_sdk2py.idl.unitree_go.msg.dds_ import MotorCmds_, MotorStates_
 
 NIC = "enp2s0"
 PREFIX = "rt/dex1/left"
-KP = 20.0          # 意味のある剛性(農場実績値と同じ)
-OPEN_DELTA = 0.8   # 現在位置から開き方向へ+0.8rad(アタッチメント限界から離れる)
+KP = 20.0  # 意味のある剛性(農場実績値と同じ)
+OPEN_DELTA = 0.8  # 現在位置から開き方向へ+0.8rad(アタッチメント限界から離れる)
 
 ChannelFactoryInitialize(0, NIC)
 st = {}
@@ -57,7 +76,9 @@ taumax = 0.0
 end = time.time() + 3.0
 while time.time() < end:
     pub.Write(cmd)
-    q = st["q"]; qmin = min(qmin, q); qmax = max(qmax, q)
+    q = st["q"]
+    qmin = min(qmin, q)
+    qmax = max(qmax, q)
     taumax = max(taumax, abs(st["tau"]))
     time.sleep(0.005)
 time.sleep(0.2)
@@ -68,7 +89,8 @@ print(f"observed: q移動量={moved:.4f} rad, |tau|最大={taumax:.4f}")
 # 送信を止める前に、そっと元の位置へ戻す指令(急に離すと脱力するだけなので安全)
 cmd.cmds[0].q = float(q0)
 for _ in range(100):
-    pub.Write(cmd); time.sleep(0.005)
+    pub.Write(cmd)
+    time.sleep(0.005)
 pub.Close()
 
 if moved > 0.05 or taumax > 0.1:

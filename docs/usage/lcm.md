@@ -12,11 +12,12 @@ our LCM implementation significantly [outperforms ROS for local communication](/
 ## Supported languages
 
 Apart from python, we have examples of LCM integrations for:
-- [**C++**](/examples/language-interop/cpp/README.md)
-- [**TypeScript**](/examples/language-interop/ts/README.md)
-- [**Lua**](/examples/language-interop/lua/README.md)
+- [**C++**](https://github.com/dimensionalOS/dimos/tree/main/examples/language-interop/cpp)
+- [**TypeScript**](https://github.com/dimensionalOS/dimos/tree/main/examples/language-interop/ts)
+- [**Lua**](https://github.com/dimensionalOS/dimos/tree/main/examples/language-interop/lua)
 
-In our [/examples/language-interop/](/examples/language-interop/) dir
+The examples live upstream in [examples/language-interop/](https://github.com/dimensionalOS/dimos/tree/main/examples/language-interop) —
+they are not vendored into this fork.
 
 Types generated (but no examples yet) for:
 [**C#**](https://github.com/dimensionalOS/dimos-lcm/tree/main/generated/csharp) and [**Java**](https://github.com/dimensionalOS/dimos-lcm/tree/main/generated/java)

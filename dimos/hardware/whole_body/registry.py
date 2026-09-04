@@ -20,8 +20,8 @@ Mirrors the TwistBaseAdapterRegistry pattern: each subpackage provides a
 Usage:
     from dimos.hardware.whole_body.registry import whole_body_adapter_registry
 
-    adapter = whole_body_adapter_registry.create("unitree_go2")
-    print(whole_body_adapter_registry.available())  # ["unitree_go2"]
+    adapter = whole_body_adapter_registry.create("transport")
+    print(whole_body_adapter_registry.available())  # ["transport"]
 """
 
 from __future__ import annotations

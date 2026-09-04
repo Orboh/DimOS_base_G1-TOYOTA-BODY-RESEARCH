@@ -147,7 +147,8 @@ def _pointcloud_rgb_overlay(pc):  # type: ignore[no-untyped-def]
 
 
 _HANDOFF_MSG = (
-    f"ACT handoff ON (grasp {_GRASP_DURATION_S}s)" if _ACT_HANDOFF
+    f"ACT handoff ON (grasp {_GRASP_DURATION_S}s)"
+    if _ACT_HANDOFF
     else "ACT handoff OFF (OKRA_ACT_HANDOFF=0): IK reaches pre-grasp and HOLDS, ACT does not start"
 )
 _HANDOFF_MSG += f" | target Z offset = {_TARGET_Z_OFFSET:+.3f} m (OKRA_TARGET_Z_OFFSET)"
@@ -184,13 +185,17 @@ unitree_g1_okra_harvest = autoconnect(
         log_only=not _LIVE,
         expected_click_frame="/world/camera/pointcloud",  # R1-confirmed; required for LIVE
         fire_reach_done=_ACT_HANDOFF,  # OKRA_ACT_HANDOFF=0 -> hold pre-grasp, no ACT
-        approach_offset_xyz=[0.0, 0.0, _TARGET_Z_OFFSET],  # raise torso target Z (OKRA_TARGET_Z_OFFSET)
+        approach_offset_xyz=[
+            0.0,
+            0.0,
+            _TARGET_Z_OFFSET,
+        ],  # raise torso target Z (OKRA_TARGET_Z_OFFSET)
         tip_log_every_n=_TIP_LOG_EVERY_N,  # OKRA_TIP_LOG>0 -> log measured tip(torso) for hand-eye
     ),
     ActBridge.blueprint(
         dry_run=not _LIVE,
-        trigger_mode=True,        # idle until reach_done; IK owns the pre-grasp
-        startup_delay_s=0.0,      # arm is already at the IK pre-grasp (no slew)
+        trigger_mode=True,  # idle until reach_done; IK owns the pre-grasp
+        startup_delay_s=0.0,  # arm is already at the IK pre-grasp (no slew)
         grasp_duration_s=_GRASP_DURATION_S,
         # 7-DoF arm-only (OKRA_ARM_ONLY=1) takes precedence; else 8-DoF tree-right.
         arm_only=_ARM_ONLY,

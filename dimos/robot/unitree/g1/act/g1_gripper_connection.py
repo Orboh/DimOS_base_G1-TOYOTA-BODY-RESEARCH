@@ -62,7 +62,7 @@ _STATE_WAIT_S = 10.0
 class G1GripperConnectionConfig(ModuleConfig):
     network_interface: str = Field(default="")
     publish_rate_hz: float = 200.0  # matches Dex1_1_Gripper_Controller fps
-    state_rate_hz: float = 50.0     # how often to republish measured state
+    state_rate_hz: float = 50.0  # how often to republish measured state
     # Proven soft gains for the Dex1 gripper (unitree_lerobot).
     kp: float = 5.0
     kd: float = 0.05
@@ -92,7 +92,7 @@ class G1GripperConnectionConfig(ModuleConfig):
     # observed rest ~3-5); the 3cm value is NOT a known mapping — tune on hardware
     # (watch right_gripper_state) until the opening looks right.
     hold_target_q: float | None = None
-    hold_ramp_s: float = 1.5     # ramp measured->hold_target_q [s] (avoid a sudden jaw move)
+    hold_ramp_s: float = 1.5  # ramp measured->hold_target_q [s] (avoid a sudden jaw move)
 
 
 class G1GripperConnection(Module):
@@ -100,7 +100,7 @@ class G1GripperConnection(Module):
 
     config: G1GripperConnectionConfig
 
-    gripper_target: In[JointState]        # position[0] = right gripper target q [rad]
+    gripper_target: In[JointState]  # position[0] = right gripper target q [rad]
     right_gripper_state: Out[JointState]  # position[0] = measured right gripper q [rad]
 
     def __init__(self, **kwargs: Any) -> None:
@@ -113,7 +113,7 @@ class G1GripperConnection(Module):
         self._thread: Thread | None = None
         self._measured_q: float | None = None
         self._target_q: float | None = None
-        self._hold_q0: float | None = None   # measured q at start (fixed-hold ramp origin)
+        self._hold_q0: float | None = None  # measured q at start (fixed-hold ramp origin)
         self._hold_t0: float = 0.0
 
     @rpc
