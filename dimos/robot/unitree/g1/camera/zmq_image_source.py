@@ -72,8 +72,8 @@ class ZmqImageSource:
 
     def __init__(self, config: ZmqCameraConfig | None = None) -> None:
         self.config = config or ZmqCameraConfig()
-        self._ctx: zmq.Context | None = None
-        self._socket: zmq.Socket | None = None
+        self._ctx: zmq.Context[zmq.Socket[bytes]] | None = None
+        self._socket: zmq.Socket[bytes] | None = None
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._subject: Subject[Image] = Subject()

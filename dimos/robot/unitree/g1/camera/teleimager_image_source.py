@@ -44,11 +44,13 @@ importable ``module.path:ClassName``.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import importlib
 import os
 import threading
 import time
+from typing import Any
 
 import cv2
 import numpy as np
@@ -142,7 +144,7 @@ class TeleimagerImageSource:
             else:
                 next_t = time.perf_counter()
 
-    def _poll_frame(self, getter, frame_id) -> Image | None:
+    def _poll_frame(self, getter: Callable[[], Any], frame_id: str) -> Image | None:
         try:
             frame = getter()
             if frame is None:

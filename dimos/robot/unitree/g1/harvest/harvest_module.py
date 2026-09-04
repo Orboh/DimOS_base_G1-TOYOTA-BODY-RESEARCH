@@ -34,6 +34,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 import os
 import threading
 from threading import Thread
@@ -220,7 +221,7 @@ class HarvestModule(Module):
         )
         return checks
 
-    def _parse_cam_to_torso(self, spec: str):
+    def _parse_cam_to_torso(self, spec: str) -> Callable[[Sequence[float]], list[float]] | None:
         """``"x,y,z,qx,qy,qz,qw"`` → 関数 ``[x,y,z](camera)->[x,y,z](torso)``。
 
         空文字なら None（未校正; その場合 IK には camera 系座標がそのまま渡る＝Step 4 で
@@ -250,7 +251,7 @@ class HarvestModule(Module):
         )
         trans = np.array([tx, ty, tz])
 
-        def _to_torso(p_cam):
+        def _to_torso(p_cam: Sequence[float]) -> list[float]:
             return list(rot @ np.asarray(p_cam, dtype=float) + trans)
 
         return _to_torso

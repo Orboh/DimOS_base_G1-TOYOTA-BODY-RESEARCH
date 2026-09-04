@@ -602,7 +602,9 @@ class IkReachBridge(Module):
             step_m = max(float(self.config.path_step_m), 0.005)
             cadence = max(float(self.config.path_cadence_s), 0.05)
 
-            def _stream_leg(p_from: np.ndarray, p_to: np.ndarray, q_seed: np.ndarray, label: str):
+            def _stream_leg(
+                p_from: np.ndarray, p_to: np.ndarray, q_seed: np.ndarray, label: str
+            ) -> tuple[np.ndarray, bool, bool]:
                 """Stream a straight Cartesian leg as dense IK targets. -> (q_next, ok, abort)."""
                 q_cur_ = q_seed
                 seg = np.asarray(p_to, dtype=float) - np.asarray(p_from, dtype=float)
