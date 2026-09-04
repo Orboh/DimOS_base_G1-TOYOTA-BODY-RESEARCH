@@ -71,6 +71,10 @@ fi
 X="${IK_X_OFFSET:-0.0}"; Y="${IK_Y_OFFSET:-0.0}"; Z="${IK_Z_OFFSET:-0.010}"
 WSXMIN="${IK_WS_X_MIN:--0.02}"
 PSTEP="${IK_PATH_STEP:-0.015}"; PCAD="${IK_PATH_CADENCE:-0.05}"
+GRAV="${IK_GRAV_RIGHT:-0}"
+GJOINTS="${IK_GRAV_JOINTS:-0,1,2,3,4,5,6}"; GLIMIT="${IK_GRAV_LIMIT:-12.0}"
+GSCALE="${IK_GRAV_SCALE:-1.0}"; GRAMP="${IK_GRAV_RAMP_S:-5.0}"
+GURDF="${IK_GRAV_URDF:-dimos/robot/unitree/g1/g1_dex1_1_calibrated_550g.urdf}"
 CFG="$(pwd)/oda/ik_reach_cfg.json"
 if [ "$GRAV" = "1" ]; then
   printf '{"ikreachbridge": {"approach_offset_xyz": [%s, %s, %s], "ws_x": [%s, 0.65]}, "g1armsdkconnection": {"stiff_gravity_right_joint_indices": [%s]}}\n' \
@@ -88,10 +92,6 @@ else
   GRAV_OPTS=""
 fi
 FRONT="${IK_FRONT_M:-0.0}"; ABOVE="${IK_ABOVE_M:-0.0}"
-GRAV="${IK_GRAV_RIGHT:-0}"
-GJOINTS="${IK_GRAV_JOINTS:-0,1,2,3,4,5,6}"; GLIMIT="${IK_GRAV_LIMIT:-12.0}"
-GSCALE="${IK_GRAV_SCALE:-1.0}"; GRAMP="${IK_GRAV_RAMP_S:-5.0}"
-GURDF="${IK_GRAV_URDF:-dimos/robot/unitree/g1/g1_dex1_1_calibrated_550g.urdf}"
 TIPN="${IK_TIP_LOG_N:-100}"; TRACKN="${IK_TRACK_LOG_N:-1250}"
 KPA="${IK_KP_ARM:-80}"; KDA="${IK_KD_ARM:-3}"; KPW="${IK_KP_WRIST:-40}"; KDW="${IK_KD_WRIST:-1.5}"
 echo "クリック点オフセット: X=${X} (前+) / Y=${Y} (左+) / Z=${Z} (上+)  [m]"
