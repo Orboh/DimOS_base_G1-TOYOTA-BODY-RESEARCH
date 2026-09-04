@@ -2,7 +2,8 @@
 
 自然言語で G1 を動かすための起動グル(shell + docker)です。
 
-- `.venv/` → リポジトリ直下の `../.venv` への symlink
+- `.venv/` → リポジトリ直下の `.venv` への symlink（追跡していないので初回に作成:
+  `ln -s ../.venv dimensional-applications-g1/.venv`）
 - Docker image: `go2-agentic-gpu:latest` — タグ名は既存のビルド済みイメージ /
   配布 tar をそのまま使えるように残しています(中身は機体非依存)。
   ビルド定義は `docker-gpu/` に同梱。
