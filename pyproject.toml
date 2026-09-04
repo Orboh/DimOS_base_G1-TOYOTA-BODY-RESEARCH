@@ -184,7 +184,6 @@ misc = [
     "einops==0.8.1",
 
     # Hardware SDKs
-    "xarm-python-sdk>=1.17.0",
     "portal",
 ]
 
@@ -247,9 +246,7 @@ manipulation = [
     "drake>=1.40.0; sys_platform != 'darwin' and platform_machine != 'aarch64'",
 
     # Hardware SDKs
-    "piper-sdk",
     "pyrealsense2; sys_platform != 'darwin'",
-    "xarm-python-sdk>=1.17.0",
 
     # Mesh conversion (STL/DAE → OBJ for Drake collision geometry)
     "trimesh",
@@ -307,10 +304,6 @@ mapping = [
 #     "xformers @ https://pypi.jetson-ai-lab.io/jp6/cu126/+f/.../xformers-0.0.33-cp39-abi3-linux_aarch64.whl ; platform_machine == 'aarch64' and sys_platform == 'linux'",
 # ]
 
-drone = [
-    "pymavlink"
-]
-
 dds = [
     "cyclonedds>=0.10.5",
 ]
@@ -347,7 +340,7 @@ apriltag = [
 ]
 
 all = [
-    "dimos[agents,apriltag,base,cpu,cuda,docker,drone,manipulation,misc,perception,psql,sim,unitree,visualization,web]",
+    "dimos[agents,apriltag,base,cpu,cuda,docker,manipulation,misc,perception,psql,sim,unitree,visualization,web]",
 ]
 
 [dependency-groups]
@@ -401,7 +394,7 @@ tests = [
 
     # Deps the lint job swaps for stubs (`stubs/<pkg>/` or `types-*`):
     # the real packages are needed at test time, stubs cover mypy.
-    "dimos[apriltag,psql,drone,cpu]",
+    "dimos[apriltag,psql,cpu]",
     "mujoco>=3.3.4",
     "pygame>=2.6.1",
     "python-can>=4",
@@ -537,7 +530,6 @@ module = [
     "nav_msgs.*",
     "open_clip",
     "pinocchio",
-    "piper_sdk.*",
     "plotext",
     "plum.*",
     "portal",
@@ -566,7 +558,6 @@ module = [
     "unitree_sdk2py.*",
     "unitree_webrtc_connect.*",
     "websocket",
-    "xarm.*",
     "ament_index_python.*",
 ]
 ignore_missing_imports = true

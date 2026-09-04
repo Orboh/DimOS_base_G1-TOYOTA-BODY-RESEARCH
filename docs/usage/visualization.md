@@ -8,30 +8,30 @@ Choose your viewer via the CLI:
 
 ```bash
 # Rerun native viewer (default) - dimos-viewer with built-in teleop + click-to-navigate
-dimos run unitree-go2
+dimos run unitree-g1
 
 # Explicitly select the viewer backend:
-dimos --viewer rerun run unitree-go2
-dimos --viewer none run unitree-go2
+dimos --viewer rerun run unitree-g1
+dimos --viewer none run unitree-g1
 ```
 
 Control how the Rerun viewer opens with `--rerun-open` and `--rerun-web`:
 
 ```bash
 # Open native desktop viewer (default)
-dimos --rerun-open native run unitree-go2
+dimos --rerun-open native run unitree-g1
 
 # Open web viewer in browser
-dimos --rerun-open web run unitree-go2
+dimos --rerun-open web run unitree-g1
 
 # Open both native and web
-dimos --rerun-open both run unitree-go2
+dimos --rerun-open both run unitree-g1
 
 # No viewer (headless) — data still accessible via gRPC
-dimos --rerun-open none run unitree-go2
+dimos --rerun-open none run unitree-g1
 
 # Serve the web viewer without auto-opening a browser
-dimos --rerun-web --rerun-open native run unitree-go2
+dimos --rerun-web --rerun-open native run unitree-g1
 ```
 
 ## Viewer Modes Explained

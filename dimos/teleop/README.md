@@ -83,7 +83,6 @@ teleop/
 ## Quick Start
 
 ```bash
-dimos run teleop-quest-rerun     # Quest teleop + Rerun viz
 dimos run teleop-phone           # Phone → cmd_vel
 ```
 

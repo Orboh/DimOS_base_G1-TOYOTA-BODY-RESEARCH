@@ -32,12 +32,15 @@ Keyboard controls:
 ### Motion Planning (two terminals)
 
 ```bash
-# Terminal 1: Mock coordinator
-dimos run coordinator-mock
-
-# Terminal 2: Planner with Drake visualization
-dimos run xarm7-planner-coordinator
+# Terminal 1: a control coordinator (this fork ships the G1 one)
+dimos run unitree-g1-coordinator
 ```
+
+<Note>
+The xArm / Piper / OpenArm blueprints listed below shipped with the vendor arm
+stacks, which this fork no longer carries. The planning and control libraries
+themselves are unchanged.
+</Note>
 
 Then use the IPython client:
 
