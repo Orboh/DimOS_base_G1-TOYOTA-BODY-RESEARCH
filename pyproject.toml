@@ -503,6 +503,10 @@ ignore = [
 "dimos/models/Detic/*" = ["ALL"]
 # Naming needs to match the actual libraries.
 "stubs/*.pyi" = ["N801", "N802", "N803", "N815", "N816", "N818"]
+# Isaac Sim 検証スイート（docs/sim-setup/）。Isaac の API 名（SingleRigidPrim 等）に
+# 合わせた別名や、USD メッシュ処理の慣習的な変数名（allV/allF/allC）を使っている。
+# ここで動作確認できない委託成果物なので、命名規則のために書き換えない。
+"docs/sim-setup/*" = ["N814", "N816", "B007"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["dimos"]
@@ -622,6 +626,10 @@ ignore = [
     # 大きいのはバイナリではなく設計コメント（重力FF・HANDBACK の根拠と実測値）。
     # largefiles は巨大バイナリの検出が目的なので、ソースは除外する。
     "dimos/robot/unitree/g1/act/g1_arm_sdk_connection.py",
+    # Isaac Sim 検証スイート。巨大バイナリではなく、DDS ブリッジ実装(84KB)と
+    # NVIDIA スキルの調査カタログ(66KB)。
+    "docs/sim-setup/sim_dds_bridge.py",
+    "docs/nvidia_skills_catalog.md",
     "dimos/navigation/nav_stack/modules/*/main.cpp",
     "dimos/navigation/nav_stack/common/*.hpp",
 ]
