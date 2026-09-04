@@ -48,13 +48,18 @@
 #
 # 右腕の重力補償 (2026-09-04 追加、既定OFF):
 #   IK_GRAV_RIGHT   : 1 で有効化。位置ゲインは保ったまま g(q) をtauに上乗せする
-#   IK_GRAV_JOINTS  : 対象関節を 0..6 のカンマ区切り (既定 "0" = shoulder_pitch のみ)
+#   IK_GRAV_JOINTS  : 対象関節を 0..6 のカンマ区切り (既定 "0,1,2,3,4,5,6" = 全関節)
 #                     0=肩pitch 1=肩roll 2=肩yaw 3=肘 4=手首roll 5=手首pitch 6=手首yaw
-#   IK_GRAV_LIMIT   : トルク上限[N*m] (既定 2.0)。安全のため必ず有限値
-#   IK_GRAV_SCALE   : 倍率 (既定 0.5)。まず控えめに入れて効きを見る
+#   IK_GRAV_SCALE   : 倍率 (既定 1.0 = 完全補償)
+#                     collection_mode(kp=0)での実機ホールドテストで g(q) 全関節100%が
+#                     検証済みのため。今回はkpを残したまま上乗せするので条件はより緩い。
+#   IK_GRAV_LIMIT   : トルク上限[N*m] (既定 12.0)。異常値の防波堤であって通常は張り付かない。
+#                     実測: 到達可能姿勢での最大は肩pitchの8.50、全可動域の理論最大でも8.67。
+#                     12.0 なら通常動作で切られないが、モデル破綻時の暴走は止まる。
+#                     NaN/infは別途ガードしてFFを落とす(位置ゲインは効いたまま)。
 #   IK_GRAV_RAMP_S  : 立ち上がり時間[s] (既定 5.0)
 #   IK_GRAV_URDF    : 重力モデルURDF (既定 = Dex1-1校正550g版)
-#   例: IK_GRAV_RIGHT=1 IK_GRAV_SCALE=0.5 IK_GRAV_LIMIT=2.0 oda/ik_up.sh
+#   例: IK_GRAV_RIGHT=1 oda/ik_up.sh   (既定のまま全関節100%補償)
 #   重力たわみで指令より下に落ちる分を、狙いを上げて相殺するための経験的トリム。
 #   リストを渡す必要があるため -o では指定できず(pydanticが文字列を弾く)、
 #   JSON設定ファイル経由で渡している。
@@ -84,8 +89,8 @@ else
 fi
 FRONT="${IK_FRONT_M:-0.0}"; ABOVE="${IK_ABOVE_M:-0.0}"
 GRAV="${IK_GRAV_RIGHT:-0}"
-GJOINTS="${IK_GRAV_JOINTS:-0}"; GLIMIT="${IK_GRAV_LIMIT:-2.0}"
-GSCALE="${IK_GRAV_SCALE:-0.5}"; GRAMP="${IK_GRAV_RAMP_S:-5.0}"
+GJOINTS="${IK_GRAV_JOINTS:-0,1,2,3,4,5,6}"; GLIMIT="${IK_GRAV_LIMIT:-12.0}"
+GSCALE="${IK_GRAV_SCALE:-1.0}"; GRAMP="${IK_GRAV_RAMP_S:-5.0}"
 GURDF="${IK_GRAV_URDF:-dimos/robot/unitree/g1/g1_dex1_1_calibrated_550g.urdf}"
 TIPN="${IK_TIP_LOG_N:-100}"; TRACKN="${IK_TRACK_LOG_N:-1250}"
 KPA="${IK_KP_ARM:-80}"; KDA="${IK_KD_ARM:-3}"; KPW="${IK_KP_WRIST:-40}"; KDW="${IK_KD_WRIST:-1.5}"

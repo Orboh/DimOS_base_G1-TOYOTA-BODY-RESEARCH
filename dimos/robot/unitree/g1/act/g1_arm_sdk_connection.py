@@ -150,10 +150,17 @@ class G1ArmSdkConnectionConfig(ModuleConfig):
     # 0.5 deg needs ~587. Raising kp to 2x was the practical ceiling on hardware
     # (louder gearbox noise on the return move) and still left 19-29 mm. Cancelling
     # g(q) in the feedforward term removes the cause instead of fighting it.
-    # SAFETY: opt-in, explicit joint list, finite tau clip, and a slow ramp — the
-    # reduced URDF model is an estimate, not a torque calibration. Start with
-    # indices=[0] (shoulder_pitch): it is the only joint whose torque varies
-    # strongly with reach; the others stay near-constant.
+    # SCALE: full compensation (scale=1.0) on all 7 joints is the intended
+    # operating point, not a stretch goal. The same g(q), from the same calibrated
+    # URDF, was validated on hardware via the collection_mode hold test
+    # (feat/dex1-official-urdf-gravity-test): with kp ramped to ZERO the right arm
+    # held its pose on gravity feedforward alone. Adding it here while KEEPING the
+    # position gains is a strictly easier condition than that test.
+    # SAFETY: opt-in, explicit joint list, finite tau clip, a slow ramp, and a
+    # non-finite guard in the loop (np.clip passes NaN straight through). The clip
+    # is a runaway backstop, not an operating limit: measured |g(q)| peaks at
+    # 8.50 N*m (shoulder_pitch) over reachable poses and 8.67 N*m over the full
+    # joint range, so the 12.0 N*m default never binds in normal use.
     stiff_gravity_compensation_right: bool = False
     stiff_gravity_right_joint_indices: list[int] = Field(default_factory=list)
     # Gravity-model URDF for the RIGHT stiff path. Empty = fall back to urdf_path,
@@ -184,6 +191,7 @@ class G1ArmSdkConnection(Module):
         self._grav_data = None
         self._stiff_left_grav_model = None
         self._stiff_right_grav_model = None
+        self._stiff_right_nonfinite_logged = False
         self._stiff_left_grav_data = None
         self._stiff_left_grav_indices: frozenset[int] = frozenset()
         if self.config.collection_mode:
@@ -538,6 +546,18 @@ class G1ArmSdkConnection(Module):
                             1.0,
                             (now - self._t_start) / max(1e-3, self.config.stiff_gravity_ramp_s),
                         )
+                        # np.clip passes NaN/inf straight through, so a broken model
+                        # evaluation would reach the motors as a non-finite tau. Drop
+                        # the feedforward for this cycle instead (kp still holds).
+                        if not np.all(np.isfinite(stiff_right_g)):
+                            if not self._stiff_right_nonfinite_logged:
+                                self._stiff_right_nonfinite_logged = True
+                                logger.error(
+                                    "right stiff gravity ff: non-finite g(q)=%s at q=%s — "
+                                    "feedforward disabled for these cycles (position gains still active)",
+                                    stiff_right_g, measured[7:14],
+                                )
+                            stiff_right_g = None
                     for k, i in enumerate(_ARM_IDX):
                         is_wrist = i in _WRIST_IDX
                         base_kp = self.config.kp_wrist if is_wrist else self.config.kp_arm
