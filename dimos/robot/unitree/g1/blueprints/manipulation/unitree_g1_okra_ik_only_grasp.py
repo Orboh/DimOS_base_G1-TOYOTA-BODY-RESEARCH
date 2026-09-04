@@ -144,10 +144,7 @@ _FIXED_ORI = [float(v) for v in _FIXED_ORI_RAW.split(",")] if _FIXED_ORI_RAW els
 # 2026-07-23: this knob existed ONLY in the ZED blueprint — every D435i run
 # silently used the bare-Dex1 default and the cutter corrections never applied
 # ("補正を入れてもズレが変わらない"事件の正体). Same env name as the ZED app.
-_TIP_OFFSET = [
-    float(v)
-    for v in os.getenv("OKRA_TIP_OFFSET_XYZ", "0.1845,-0.003,0.0").split(",")
-]
+_TIP_OFFSET = [float(v) for v in os.getenv("OKRA_TIP_OFFSET_XYZ", "0.1845,-0.003,0.0").split(",")]
 
 # Scripted (no-ACT) gripper close target -- a raw Dex1 q, NOT meters. See
 # GripperGraspOnReachConfig.close_q docstring: NO known-good value, must be

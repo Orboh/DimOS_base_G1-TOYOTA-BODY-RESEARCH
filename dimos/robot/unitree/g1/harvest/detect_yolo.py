@@ -5,6 +5,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """Interim ``detect_okra`` backed by the DimOS YOLO 2D detector (head camera).
 
@@ -29,8 +43,8 @@ box to an :class:`Okra` with a RELATIVE 3D position.
 
 from __future__ import annotations
 
-import math
 from collections.abc import Callable
+import math
 from typing import Any
 
 from dimos.robot.unitree.g1.harvest.blackboard import Okra
@@ -88,7 +102,7 @@ def _mask_median_depth(
             step = len(xs) // _MASK_DEPTH_SAMPLES
             xs, ys = xs[::step], ys[::step]
         depths = []
-        for u, v in zip(xs, ys):
+        for u, v in zip(xs, ys, strict=False):
             d = depth_getter(float(u), float(v))
             if d is not None and np.isfinite(d) and 0.05 < d < 10.0:
                 depths.append(float(d))
@@ -231,7 +245,7 @@ class YoloOkraDetector:
             # 無ければ bbox 中心にフォールバック。
             uv = _mask_centroid(det)
             if uv is None:
-                x1, y1, x2, y2 = getattr(det, "bbox")
+                x1, y1, x2, y2 = det.bbox
                 uv = ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
             u, v = uv
             pos = self._pos_3d(u, v, det, frame)

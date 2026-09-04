@@ -5,6 +5,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """Background safety monitor + pause gate for the harvest workflow (handbook §6).
 
@@ -26,9 +40,9 @@ and assert the gate trips/clears and the hooks fire (see ``test_safety.py``).
 
 from __future__ import annotations
 
-import threading
 from collections.abc import Callable
 from dataclasses import dataclass
+import threading
 from typing import Protocol, runtime_checkable
 
 from dimos.robot.unitree.g1.harvest import announce
@@ -46,8 +60,7 @@ class SafetyGate(Protocol):
         """Block while paused; return True once clear (or if not paused)."""
         ...
 
-    def is_paused(self) -> bool:
-        ...
+    def is_paused(self) -> bool: ...
 
 
 class NullSafetyGate:
@@ -151,8 +164,10 @@ class SafetyMonitor:
             if include_expensive or not c.expensive:
                 try:
                     self._safe[c.name] = bool(c.is_safe())
-                except Exception as exc:  # noqa: BLE001 — a flaky check = treat as unsafe
-                    logger.warning("safety check raised; treating as unsafe", check=c.name, error=str(exc))
+                except Exception as exc:
+                    logger.warning(
+                        "safety check raised; treating as unsafe", check=c.name, error=str(exc)
+                    )
                     self._safe[c.name] = False
         unsafe = [name for name, ok in self._safe.items() if not ok]
 
@@ -192,4 +207,4 @@ class SafetyMonitor:
             self._thread = None
 
 
-__all__ = ["SafetyGate", "NullSafetyGate", "PauseGate", "SafetyCheck", "SafetyMonitor"]
+__all__ = ["NullSafetyGate", "PauseGate", "SafetyCheck", "SafetyGate", "SafetyMonitor"]

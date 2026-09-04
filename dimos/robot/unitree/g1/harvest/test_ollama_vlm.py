@@ -5,6 +5,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """Offline tests for the Ollama vision-backed verify_harvest (no Ollama server).
 
@@ -21,14 +35,17 @@ from dimos.robot.unitree.g1.harvest.ollama_vlm import (
     make_ollama_verify,
 )
 
+# moondream caption path (default model)
 
-# --- moondream caption path (default model) ---------------------------------
 
 def _moondream_verify(caption: str, frame=object(), **kw):
     """make_ollama_verify on moondream with an injected generate() returning caption."""
     return make_ollama_verify(
-        lambda: frame, model="moondream", generate=lambda b64, prompt: caption,
-        encode=lambda f: "B64", **kw
+        lambda: frame,
+        model="moondream",
+        generate=lambda b64, prompt: caption,
+        encode=lambda f: "B64",
+        **kw,
     )
 
 
@@ -58,7 +75,9 @@ def test_moondream_generate_error_is_false() -> None:
     def boom(b64, prompt):
         raise RuntimeError("connection refused")
 
-    v = make_ollama_verify(lambda: object(), model="moondream", generate=boom, encode=lambda f: "B64")
+    v = make_ollama_verify(
+        lambda: object(), model="moondream", generate=boom, encode=lambda f: "B64"
+    )
     assert v() is False  # fail-safe
 
 
@@ -70,13 +89,19 @@ def test_moondream_sends_caption_prompt_and_image() -> None:
         seen["prompt"] = prompt
         return "holding an okra"
 
-    make_ollama_verify(lambda: object(), model="moondream", generate=gen,
-                       encode=lambda f: "ABC123", prompt="DESCRIBE")()
+    make_ollama_verify(
+        lambda: object(),
+        model="moondream",
+        generate=gen,
+        encode=lambda f: "ABC123",
+        prompt="DESCRIBE",
+    )()
     assert seen["b64"] == "ABC123"
     assert seen["prompt"] == "DESCRIBE"
 
 
-# --- qwen3-vl chat yes/no path ----------------------------------------------
+# qwen3-vl chat yes/no path
+
 
 class _Resp:
     def __init__(self, content: str) -> None:
@@ -88,15 +113,14 @@ class _StubLLM:
         self._content = content
         self.calls: list = []
 
-    def invoke(self, messages):  # noqa: ANN001
+    def invoke(self, messages):
         self.calls.append(messages)
         return _Resp(self._content)
 
 
 def _chat_verify(content, frame=object(), **kw):
     return make_ollama_verify(
-        lambda: frame, model="qwen3-vl:2b", llm=_StubLLM(content),
-        encode=lambda f: "B64", **kw
+        lambda: frame, model="qwen3-vl:2b", llm=_StubLLM(content), encode=lambda f: "B64", **kw
     )
 
 
@@ -110,28 +134,35 @@ def test_chat_negative_is_false() -> None:
 
 def test_chat_error_is_false() -> None:
     class _BadLLM:
-        def invoke(self, messages):  # noqa: ANN001
+        def invoke(self, messages):
             raise RuntimeError("connection refused")
 
-    v = make_ollama_verify(lambda: object(), model="qwen3-vl:2b", llm=_BadLLM(), encode=lambda f: "B64")
+    v = make_ollama_verify(
+        lambda: object(), model="qwen3-vl:2b", llm=_BadLLM(), encode=lambda f: "B64"
+    )
     assert v() is False
 
 
 def test_chat_sends_prompt_and_image() -> None:
     stub = _StubLLM("yes")
-    make_ollama_verify(lambda: object(), model="qwen3-vl:2b", llm=stub,
-                       encode=lambda f: "ABC123", prompt="PICKED?")()
+    make_ollama_verify(
+        lambda: object(), model="qwen3-vl:2b", llm=stub, encode=lambda f: "ABC123", prompt="PICKED?"
+    )()
     content = stub.calls[0][0].content  # HumanMessage.content blocks
     assert any(b.get("type") == "text" and b.get("text") == "PICKED?" for b in content)
     assert any(b.get("type") == "image_url" and "ABC123" in b.get("image_url", "") for b in content)
 
 
-# --- VLM detect_okra (moondream presence -> one in-reach okra) ----------------
+# VLM detect_okra (moondream presence -> one in-reach okra)
+
 
 def _moondream_detect(caption: str, frame=object(), **kw):
     return make_ollama_detect_okra(
-        lambda: frame, model="moondream", generate=lambda b64, prompt: caption,
-        encode=lambda f: "B64", **kw
+        lambda: frame,
+        model="moondream",
+        generate=lambda b64, prompt: caption,
+        encode=lambda f: "B64",
+        **kw,
     )
 
 
@@ -165,13 +196,18 @@ def test_detect_error_is_empty() -> None:
     def boom(b64, prompt):
         raise RuntimeError("connection refused")
 
-    det = make_ollama_detect_okra(lambda: object(), model="moondream", generate=boom, encode=lambda f: "B64")
+    det = make_ollama_detect_okra(
+        lambda: object(), model="moondream", generate=boom, encode=lambda f: "B64"
+    )
     assert det() == []  # fail-safe: never fabricate a detection on error
 
 
 def test_detect_custom_position() -> None:
     det = make_ollama_detect_okra(
-        lambda: object(), model="moondream", generate=lambda b64, p: "okra",
-        encode=lambda f: "B64", position={"x": 0.1, "y": 0.5, "z": 0.6},
+        lambda: object(),
+        model="moondream",
+        generate=lambda b64, p: "okra",
+        encode=lambda f: "B64",
+        position={"x": 0.1, "y": 0.5, "z": 0.6},
     )
     assert det()[0].pos_3d == {"x": 0.1, "y": 0.5, "z": 0.6}

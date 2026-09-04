@@ -6,6 +6,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """ZED 1 フレームに YOLO 検出ボックス + クラス名 + ZED 深度[m] を描いて保存（診断用）。
 
@@ -83,14 +97,17 @@ def main() -> None:
         cv2.rectangle(bgr, (x1, y1), (x2, y2), color, 2)
         cv2.circle(bgr, (u, v), 4, color, -1)
         label = f"{name} {conf:.2f} {d_txt}"
-        cv2.putText(bgr, label, (x1, max(0, y1 - 6)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2, cv2.LINE_AA)
+        cv2.putText(
+            bgr, label, (x1, max(0, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2, cv2.LINE_AA
+        )
 
     cv2.imwrite(args.out, bgr)
     print(f"detections={len(dets)} saved={args.out}")
     for det in dets:
-        print(f"  {getattr(det, 'name', '?')} conf={float(getattr(det, 'confidence', 0)):.2f} "
-              f"bbox={[int(v) for v in det.bbox]}")
+        print(
+            f"  {getattr(det, 'name', '?')} conf={float(getattr(det, 'confidence', 0)):.2f} "
+            f"bbox={[int(v) for v in det.bbox]}"
+        )
 
 
 if __name__ == "__main__":

@@ -5,6 +5,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """同期版 IK 粗アプローチスキル（F-04 Phase 1）。
 
@@ -51,12 +65,12 @@ _RIGHT_SLICE = slice(22, 29)
 class IkApproachResult:
     """IK 粗アプローチの解。``arm14`` を arm_target に流し、``wait_s`` だけ待つ。"""
 
-    arm14: list[float]          # 14関節目標 [rad]（左7=現値hold + 右7=IK解, 正準順）
-    joint_names: list[str]      # arm14 に対応する関節名（arm_target の name に使う）
-    wait_s: float               # スルー完了見込みの open-loop 待機時間 [s]
-    err: float                  # IK 残差 [m]
-    converged: bool             # ソルバ収束フラグ
-    q_right: list[float]        # 右腕7関節の解（デバッグ/連続性確認用）
+    arm14: list[float]  # 14関節目標 [rad]（左7=現値hold + 右7=IK解, 正準順）
+    joint_names: list[str]  # arm14 に対応する関節名（arm_target の name に使う）
+    wait_s: float  # スルー完了見込みの open-loop 待機時間 [s]
+    err: float  # IK 残差 [m]
+    converged: bool  # ソルバ収束フラグ
+    q_right: list[float]  # 右腕7関節の解（デバッグ/連続性確認用）
 
 
 class IkApproachSkill:
@@ -71,17 +85,17 @@ class IkApproachSkill:
         urdf_path: str | None = None,
         *,
         gripper_offset_xyz: tuple[float, float, float] = (0.1845, -0.003, 0.0),
-        standoff_m: float = 0.05,                      # 切断点手前で止める量（torso -X）[m]
+        standoff_m: float = 0.05,  # 切断点手前で止める量（torso -X）[m]
         approach_offset_xyz: tuple[float, float, float] = (0.0, 0.0, 0.0),  # torso 補正 [m]
-        ws_x: tuple[float, float] = (0.05, 0.65),      # ワークスペース箱（torso, 前方）[m]
-        ws_y: tuple[float, float] = (-0.75, 0.20),     # 右腕は -Y 側 [m]
-        ws_z: tuple[float, float] = (-0.35, 0.85),     # [m]
-        max_joint_delta_deg: float = 90.0,             # 一発リーチの関節デルタ上限 [deg]
+        ws_x: tuple[float, float] = (0.05, 0.65),  # ワークスペース箱（torso, 前方）[m]
+        ws_y: tuple[float, float] = (-0.75, 0.20),  # 右腕は -Y 側 [m]
+        ws_z: tuple[float, float] = (-0.35, 0.85),  # [m]
+        max_joint_delta_deg: float = 90.0,  # 一発リーチの関節デルタ上限 [deg]
         require_converged: bool = True,
-        max_reach_pos_err_m: float = 0.05,             # 許容残差 [m]
+        max_reach_pos_err_m: float = 0.05,  # 許容残差 [m]
         fixed_orientation_xyzw: list[float] | None = None,  # 空=現在のEE姿勢を保持
-        nominal_speed_rad_s: float = 1.0,              # 待機推定の有効スルー速度 [rad/s]
-        margin_s: float = 0.5,                         # 追加の整定マージン [s]
+        nominal_speed_rad_s: float = 1.0,  # 待機推定の有効スルー速度 [rad/s]
+        margin_s: float = 0.5,  # 追加の整定マージン [s]
         min_wait_s: float = 0.8,
         max_wait_s: float = 3.0,
     ) -> None:
@@ -120,9 +134,7 @@ class IkApproachSkill:
 
         return list(make_humanoid_joints("g1"))[_ARM_START : _ARM_START + _NUM_ARM]
 
-    def solve(
-        self, target_torso: Any, measured_position: Any
-    ) -> IkApproachResult | None:
+    def solve(self, target_torso: Any, measured_position: Any) -> IkApproachResult | None:
         """torso フレームの目標点 → 14関節目標。届かない/解けない場合は None。
 
         Args:
@@ -161,7 +173,9 @@ class IkApproachSkill:
             and self._ws_y[0] <= p_torso[1] <= self._ws_y[1]
             and self._ws_z[0] <= p_torso[2] <= self._ws_z[1]
         ):
-            logger.info(f"[ik-approach] torso target {np.round(p_torso, 3)} outside workspace box; reject.")
+            logger.info(
+                f"[ik-approach] torso target {np.round(p_torso, 3)} outside workspace box; reject."
+            )
             return None
 
         p_root = self._arm.torso_to_root(p_torso)
@@ -174,12 +188,14 @@ class IkApproachSkill:
             rot = self._arm.fk_root(q_right).rotation
         target = pinocchio.SE3(rot, np.asarray(p_root, dtype=float))
 
-        # --- 解 + 安全ゲート ---------------------------------------------------
+        # 解 + 安全ゲート
         q_sol, converged, err = self._arm.ik.solve(target, q_right)
         q_sol = np.asarray(q_sol, dtype=float).flatten()
 
         if self._require_converged and not converged and err > self._max_reach_pos_err_m:
-            logger.info(f"[ik-approach] IK err={err:.4f} m > tol {self._max_reach_pos_err_m} m; reject.")
+            logger.info(
+                f"[ik-approach] IK err={err:.4f} m > tol {self._max_reach_pos_err_m} m; reject."
+            )
             return None
         if not converged:
             logger.info(f"[ik-approach] best-effort reach (err={err:.4f} m ≤ tol).")
@@ -212,4 +228,4 @@ class IkApproachSkill:
         )
 
 
-__all__ = ["IkApproachSkill", "IkApproachResult"]
+__all__ = ["IkApproachResult", "IkApproachSkill"]

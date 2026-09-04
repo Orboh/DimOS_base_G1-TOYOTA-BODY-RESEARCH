@@ -5,6 +5,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """LangGraph orchestrator for the okra-harvest workflow.
 
@@ -123,7 +137,7 @@ def build_harvest_graph(
             pending.pop(okra_id, None)
         return pending
 
-    # ---- Nodes ---------------------------------------------------------------
+    # Nodes
 
     def detect(state: HarvestState) -> HarvestState:
         """Phase 2: observe the current view; list every okra in it."""
@@ -150,7 +164,7 @@ def build_harvest_graph(
             okra_visible=okra,
             iterations=iterations,
             pending=pending,
-            log=state.get("log", []) + [f"detect: saw {len(okra)} okra (iter {iterations})"],
+            log=[*state.get("log", []), f"detect: saw {len(okra)} okra (iter {iterations})"],
         )
 
     def select(state: HarvestState) -> HarvestState:
@@ -175,7 +189,7 @@ def build_harvest_graph(
                 reposition_attempts=0,
                 empty_advances=0,
                 mode="harvest",
-                log=log + [f"select: grasp target={target.id}"],
+                log=[*log, f"select: grasp target={target.id}"],
             )
 
         # Height-unreachable ripe okra can't be fixed by base motion → skip them.
@@ -188,12 +202,14 @@ def build_harvest_graph(
                 excluded.append(o.id)
                 pending.pop(o.id, None)  # can't reach by base motion -> forget it
                 records.append({"okra_id": o.id, "result": "skipped_height"})
-                log = log + [f"select: {o.id} out of height reach -> skip"]
+                log = [*log, f"select: {o.id} out of height reach -> skip"]
                 skipped_height_ids.append(o.id)
         if skipped_height_ids:
             voice.say(announce.skip_height())
 
-        skipped_unripe = [o for o in state.get("okra_visible", []) if o.ripeness < cfg.ripeness_threshold]
+        skipped_unripe = [
+            o for o in state.get("okra_visible", []) if o.ripeness < cfg.ripeness_threshold
+        ]
         if skipped_unripe:
             voice.say(announce.ripeness_skip(len(skipped_unripe)))
 
@@ -205,6 +221,7 @@ def build_harvest_graph(
             and not cfg.reach.contains(o.pos_3d)
         ]
         if approachable:
+
             def move_magnitude(o: Okra) -> float:
                 lat, fwd = cfg.reach.move_to_center(o.pos_3d)
                 return abs(lat) + abs(fwd)
@@ -219,7 +236,7 @@ def build_harvest_graph(
                 pending=pending,
                 empty_advances=0,
                 mode="reposition",
-                log=log + [f"select: no in-reach okra; approach {approach.id}"],
+                log=[*log, f"select: no in-reach okra; approach {approach.id}"],
             )
             # Reset the reposition counter only when switching to a new target.
             if approach.id != state.get("approach_id"):
@@ -232,7 +249,7 @@ def build_harvest_graph(
             excluded_ids=excluded,
             records=records,
             pending=pending,
-            log=log + ["select: nothing reachable/approachable here"],
+            log=[*log, "select: nothing reachable/approachable here"],
         )
 
     def grasp(state: HarvestState) -> HarvestState:
@@ -246,8 +263,10 @@ def build_harvest_graph(
             skills.grasp_okra(target, cfg.grasp_force)
         return HarvestState(
             grasp_attempts=attempts,
-            log=state.get("log", [])
-            + [f"grasp: {state.get('target_id')} (attempt {attempts}, force {cfg.grasp_force})"],
+            log=[
+                *state.get("log", []),
+                f"grasp: {state.get('target_id')} (attempt {attempts}, force {cfg.grasp_force})",
+            ],
         )
 
     def verify(state: HarvestState) -> HarvestState:
@@ -256,7 +275,7 @@ def build_harvest_graph(
         voice.say(announce.verify_ok() if ok else announce.verify_fail())
         return HarvestState(
             last_verify_ok=ok,
-            log=state.get("log", []) + [f"verify: {'OK' if ok else 'FAILED'}"],
+            log=[*state.get("log", []), f"verify: {'OK' if ok else 'FAILED'}"],
         )
 
     def record(state: HarvestState) -> HarvestState:
@@ -279,8 +298,8 @@ def build_harvest_graph(
             excluded_ids=state.get("excluded_ids", []) + ([target_id] if target_id else []),
             pending=_drop_pending(state, target_id) if target_id else state.get("pending", {}),
             revisit_attempts=0,  # a successful pick is progress
-            records=state.get("records", []) + [rec],
-            log=state.get("log", []) + [f"record: picked, basket={basket_count}"],
+            records=[*state.get("records", []), rec],
+            log=[*state.get("log", []), f"record: picked, basket={basket_count}"],
         )
 
     def give_up(state: HarvestState) -> HarvestState:
@@ -291,7 +310,7 @@ def build_harvest_graph(
             target_id=None,
             excluded_ids=state.get("excluded_ids", []) + ([target_id] if target_id else []),
             pending=_drop_pending(state, target_id) if target_id else state.get("pending", {}),
-            log=state.get("log", []) + [f"give_up: {target_id} marked failed"],
+            log=[*state.get("log", []), f"give_up: {target_id} marked failed"],
         )
 
     def reposition(state: HarvestState) -> HarvestState:
@@ -305,15 +324,17 @@ def build_harvest_graph(
         approach = find_okra(state, state.get("approach_id"))
         attempts = state.get("reposition_attempts", 0) + 1
         if approach is None:
-            return HarvestState(log=state.get("log", []) + ["reposition: target lost"])
+            return HarvestState(log=[*state.get("log", []), "reposition: target lost"])
         if attempts > cfg.max_reposition_attempts:
             return HarvestState(
                 approach_id=None,
                 reposition_attempts=0,
-                excluded_ids=state.get("excluded_ids", []) + [approach.id],
+                excluded_ids=[*state.get("excluded_ids", []), approach.id],
                 pending=_drop_pending(state, approach.id),
-                log=state.get("log", [])
-                + [f"reposition: gave up on {approach.id} (attempt cap) -> skip"],
+                log=[
+                    *state.get("log", []),
+                    f"reposition: gave up on {approach.id} (attempt cap) -> skip",
+                ],
             )
         lateral, forward = cfg.reach.move_to_center(approach.pos_3d)
         # Ridge safety: never command a forward move that would bring the target
@@ -333,8 +354,10 @@ def build_harvest_graph(
             reposition_attempts=attempts,
             robot_offset=new_offset,
             mode="reposition",
-            log=state.get("log", [])
-            + [f"reposition: move (lat {lateral:+.2f}, fwd {forward:+.2f}) toward {approach.id}"],
+            log=[
+                *state.get("log", []),
+                f"reposition: move (lat {lateral:+.2f}, fwd {forward:+.2f}) toward {approach.id}",
+            ],
         )
 
     def advance_left(state: HarvestState) -> HarvestState:
@@ -353,7 +376,7 @@ def build_harvest_graph(
             reposition_attempts=0,
             robot_offset=_moved(state, -cfg.advance_step, 0.0),
             mode="advance_left",
-            log=state.get("log", []) + [f"advance_left: -{cfg.advance_step}m (empty {empty})"],
+            log=[*state.get("log", []), f"advance_left: -{cfg.advance_step}m (empty {empty})"],
         )
 
     def revisit(state: HarvestState) -> HarvestState:
@@ -373,7 +396,7 @@ def build_harvest_graph(
                 pending={},
                 revisit_attempts=0,
                 excluded_ids=state.get("excluded_ids", []) + list(pending),
-                log=state.get("log", []) + ["revisit: giving up on remaining pending"],
+                log=[*state.get("log", []), "revisit: giving up on remaining pending"],
             )
 
         def rel_dist(item: tuple[str, dict[str, float]]) -> float:
@@ -393,8 +416,10 @@ def build_harvest_graph(
             robot_offset=_moved(state, lateral, forward),
             empty_advances=0,
             mode="reposition",
-            log=state.get("log", [])
-            + [f"revisit: return to {pid} (lat {lateral:+.2f}, fwd {forward:+.2f})"],
+            log=[
+                *state.get("log", []),
+                f"revisit: return to {pid} (lat {lateral:+.2f}, fwd {forward:+.2f})",
+            ],
         )
 
     def next_station(state: HarvestState) -> HarvestState:
@@ -409,7 +434,7 @@ def build_harvest_graph(
         if not moved:
             return HarvestState(
                 more_stations=False,
-                log=state.get("log", []) + ["next_station: no more stations"],
+                log=[*state.get("log", []), "next_station: no more stations"],
             )
         sid = state.get("station_id", 0) + 1
         voice.say(announce.next_station())
@@ -425,7 +450,7 @@ def build_harvest_graph(
             reposition_attempts=0,
             revisit_attempts=0,
             mode="harvest",
-            log=state.get("log", []) + [f"next_station: arrived at station {sid}"],
+            log=[*state.get("log", []), f"next_station: arrived at station {sid}"],
         )
 
     def swap_basket(state: HarvestState) -> HarvestState:
@@ -436,7 +461,7 @@ def build_harvest_graph(
         return HarvestState(
             basket_count=0,
             basket_full=False,
-            log=state.get("log", []) + ["swap_basket: emptied, resuming"],
+            log=[*state.get("log", []), "swap_basket: emptied, resuming"],
         )
 
     def finish(state: HarvestState) -> HarvestState:
@@ -444,10 +469,10 @@ def build_harvest_graph(
         voice.say(announce.done(state.get("picks", 0)))
         return HarvestState(
             mode="done",
-            log=state.get("log", []) + [f"done: {state.get('picks', 0)} picked"],
+            log=[*state.get("log", []), f"done: {state.get('picks', 0)} picked"],
         )
 
-    # ---- Routers: the conditional edges --------------------------------------
+    # Routers: the conditional edges
 
     def route_after_select(state: HarvestState) -> str:
         if state.get("iterations", 0) >= cfg.max_harvest_iterations:
@@ -479,7 +504,7 @@ def build_harvest_graph(
     def route_after_next_station(state: HarvestState) -> str:
         return DETECT if state.get("more_stations") else FINISH
 
-    # ---- Wire the graph -------------------------------------------------------
+    # Wire the graph
 
     g = StateGraph(HarvestState)
     for name, fn in (
@@ -533,17 +558,17 @@ def build_harvest_graph(
 
 
 __all__ = [
-    "build_harvest_graph",
-    "DETECT",
-    "SELECT",
-    "GRASP",
-    "VERIFY",
-    "RECORD",
-    "GIVE_UP",
-    "REPOSITION",
     "ADVANCE_LEFT",
-    "REVISIT",
-    "NEXT_STATION",
-    "SWAP_BASKET",
+    "DETECT",
     "FINISH",
+    "GIVE_UP",
+    "GRASP",
+    "NEXT_STATION",
+    "RECORD",
+    "REPOSITION",
+    "REVISIT",
+    "SELECT",
+    "SWAP_BASKET",
+    "VERIFY",
+    "build_harvest_graph",
 ]

@@ -6,6 +6,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """ZEDCamera.set_depth_streaming() の動的トグルを実機で検証（物理動作なし）。
 
@@ -47,7 +61,9 @@ def main() -> None:
     # ZEDCamera の config 経路を通して _depth_on の初期値ロジックも確認
     # （Module は kwargs を直接受け取り、内部で ZEDCameraConfig を構築する）
     cam = ZEDCamera(depth_mode="NEURAL", depth_streaming=False)
-    print(f"config.enable_depth={cam.config.enable_depth}  config.depth_streaming={cam.config.depth_streaming}")
+    print(
+        f"config.enable_depth={cam.config.enable_depth}  config.depth_streaming={cam.config.depth_streaming}"
+    )
     print(f"初期 _depth_on (=enable_depth and depth_streaming): {cam._depth_on}  ← False 期待\n")
 
     # ZED を直接開いて capture-loop と同じ grab 経路を再現
@@ -66,18 +82,25 @@ def main() -> None:
     cam.set_depth_streaming(False)
     runtime.enable_depth = cam._depth_on
     fps_off, _ = _grab_n(zed, runtime, depth_mat, 60)
-    print(f"set_depth_streaming(False): _depth_on={cam._depth_on}  ->  {fps_off:5.1f} FPS (RGBのみ)")
+    print(
+        f"set_depth_streaming(False): _depth_on={cam._depth_on}  ->  {fps_off:5.1f} FPS (RGBのみ)"
+    )
 
     # set_depth_streaming(True) → _depth_on=True → grab に depth
     cam.set_depth_streaming(True)
     runtime.enable_depth = cam._depth_on
     fps_on, valid = _grab_n(zed, runtime, depth_mat, 60)
-    print(f"set_depth_streaming(True) : _depth_on={cam._depth_on}  ->  {fps_on:5.1f} FPS, depth有効={valid*100:4.1f}%")
+    print(
+        f"set_depth_streaming(True) : _depth_on={cam._depth_on}  ->  {fps_on:5.1f} FPS, depth有効={valid * 100:4.1f}%"
+    )
 
     zed.close()
-    print("\n判定:",
-          "OK — トグルで depth ON/OFF が効き、OFF が明確に高速"
-          if (fps_off > fps_on and valid > 0.5) else "要確認")
+    print(
+        "\n判定:",
+        "OK — トグルで depth ON/OFF が効き、OFF が明確に高速"
+        if (fps_off > fps_on and valid > 0.5)
+        else "要確認",
+    )
 
 
 if __name__ == "__main__":

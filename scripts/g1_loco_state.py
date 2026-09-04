@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Read the G1 locomotion FSM state (READ-ONLY — no motion).
 
 Per the G1 spec (動作サービス / sport_services_interface), Move/SetVelocity only
@@ -19,10 +33,17 @@ import argparse
 import os
 
 _FSM = {
-    0: "Zero Torque (no balance)", 1: "Damping (no balance)", 2: "Squat",
-    3: "Sit", 4: "Lock Standing (no walking)", 500: "Walk Motion",
-    501: "Walk Motion 3Dof-waist", 702: "Lie/Stand", 706: "Balance Squat",
-    801: "Run", 802: "Run (ai_sport)",
+    0: "Zero Torque (no balance)",
+    1: "Damping (no balance)",
+    2: "Squat",
+    3: "Sit",
+    4: "Lock Standing (no walking)",
+    500: "Walk Motion",
+    501: "Walk Motion 3Dof-waist",
+    702: "Lie/Stand",
+    706: "Balance Squat",
+    801: "Run",
+    802: "Run (ai_sport)",
 }
 _WALK_OK = {500, 501, 801, 802}
 
@@ -47,7 +68,7 @@ def main() -> int:
     c = LocoClient()
     try:
         c.SetTimeout(10.0)
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     c.Init()
 
@@ -58,7 +79,7 @@ def main() -> int:
         try:
             d = json.loads(data) if isinstance(data, str) and data else data
             val = d.get("data", d) if isinstance(d, dict) else d
-        except Exception:  # noqa: BLE001
+        except Exception:
             val = data
         print(f"[loco] {label} -> code={code} data={data!r} value={val}")
         return val
@@ -72,12 +93,16 @@ def main() -> int:
     print(f"[loco] FSM id={fsm_id} ({_FSM.get(fsm_id, '?')}), mode={fsm_mode}")
 
     if fsm_id in _WALK_OK:
-        print("[loco] -> FSM is WALK-CAPABLE. If it still won't move, the issue is the "
-              "command path (cmd_vel not reaching the robot), not the mode.")
+        print(
+            "[loco] -> FSM is WALK-CAPABLE. If it still won't move, the issue is the "
+            "command path (cmd_vel not reaching the robot), not the mode."
+        )
     else:
-        print(f"[loco] -> FSM {fsm_id} is NOT walk-capable. The robot must be put into "
-              "Walk/Run (e.g. operator: stand up + balance-stand via controller; or "
-              "Start()/BalanceStand()). That's why Move was ignored despite code=0.")
+        print(
+            f"[loco] -> FSM {fsm_id} is NOT walk-capable. The robot must be put into "
+            "Walk/Run (e.g. operator: stand up + balance-stand via controller; or "
+            "Start()/BalanceStand()). That's why Move was ignored despite code=0."
+        )
     return 0
 
 

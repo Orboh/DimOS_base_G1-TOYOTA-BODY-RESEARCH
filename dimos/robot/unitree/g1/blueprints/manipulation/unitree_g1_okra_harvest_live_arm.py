@@ -6,6 +6,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """Blueprint: okra harvest with the REAL arm (okra-ACT reach).
 
@@ -31,7 +45,6 @@ Prereqs (same as unitree-g1-act-arm, plus this pipeline's deps):
 from __future__ import annotations
 
 import os
-from typing import Any
 
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.transport import LCMTransport
@@ -50,8 +63,20 @@ _NIC = os.getenv("ROBOT_INTERFACE", "")
 # Tree-model dataset (sotata/okura-pick-tree-20260615) first-frame arm pose [rad]
 # (left 7 + right 7) — arms slew here on start so the policy begins in-distribution.
 _INIT_ARM_POSE = [
-    0.269, 0.196, -0.018, 0.986, 0.122, 0.028, 0.003,   # left arm
-    -0.114, 0.029, 0.185, 0.538, 0.209, -0.755, 0.370,  # right arm
+    0.269,
+    0.196,
+    -0.018,
+    0.986,
+    0.122,
+    0.028,
+    0.003,  # left arm
+    -0.114,
+    0.029,
+    0.185,
+    0.538,
+    0.209,
+    -0.755,
+    0.370,  # right arm
 ]
 
 
@@ -63,10 +88,10 @@ unitree_g1_okra_harvest_live_arm = (
         G1GripperConnection.blueprint(network_interface=_NIC),
         HarvestModule.blueprint(
             use_dummy=False,
-            use_act_grasp=True,      # ⚠️ real arm reach (2-camera tree model)
-            use_g1_speaker=True,     # Japanese G1 speaker
-            vlm_model="moondream",   # local Ollama vision verify (~1s caption+keyword)
-            use_base_move=False,     # base walking off (safety)
+            use_act_grasp=True,  # ⚠️ real arm reach (2-camera tree model)
+            use_g1_speaker=True,  # Japanese G1 speaker
+            vlm_model="moondream",  # local Ollama vision verify (~1s caption+keyword)
+            use_base_move=False,  # base walking off (safety)
         ),
     )
     .remappings(
@@ -82,7 +107,9 @@ unitree_g1_okra_harvest_live_arm = (
             ("cam_right_wrist", Image): LCMTransport("/cam_right_wrist", Image),
             ("motor_states", JointState): LCMTransport("/g1/motor_states", JointState),
             ("arm_target", JointState): LCMTransport("/g1/arm_target", JointState),
-            ("right_gripper_state", JointState): LCMTransport("/g1/right_gripper_state", JointState),
+            ("right_gripper_state", JointState): LCMTransport(
+                "/g1/right_gripper_state", JointState
+            ),
             ("gripper_target", JointState): LCMTransport("/g1/gripper_target", JointState),
         }
     )

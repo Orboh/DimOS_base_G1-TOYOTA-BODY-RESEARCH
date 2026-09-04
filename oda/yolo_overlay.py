@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """YOLOオクラ検出のライブ重畳ビュー(デモ用・表示のみ、ロボット制御には一切関与しない).
 
 カメラのLCMカラー画像(/camera/color_image)を購読し、okra11n-seg(ファインチューン済み
@@ -19,6 +33,7 @@
   OKRA_YOLO_CONF  : 信頼度しきい値(既定 0.4)
   OKRA_YOLO_HZ    : 推論レート上限(既定 3.0)
 """
+
 from __future__ import annotations
 
 import argparse
@@ -42,8 +57,15 @@ def _annotate(model, bgr, conf):
     n = len(r.boxes)
     import cv2
 
-    cv2.putText(out, f"okra x{n}", (12, 34), cv2.FONT_HERSHEY_SIMPLEX, 1.1,
-                (0, 255, 0) if n else (0, 0, 255), 2)
+    cv2.putText(
+        out,
+        f"okra x{n}",
+        (12, 34),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1.1,
+        (0, 255, 0) if n else (0, 0, 255),
+        2,
+    )
     return out, n
 
 
@@ -69,7 +91,7 @@ def main() -> int:
         print(f"detections={n} -> {args.out}")
         return 0
 
-    # ---- ライブモード: LCM購読 → 推論 → 表示 --------------------------------
+    # ライブモード: LCM購読 → 推論 → 表示
     import cv2
     import numpy as np
 

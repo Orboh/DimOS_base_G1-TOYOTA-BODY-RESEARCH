@@ -26,7 +26,6 @@ from dimos.robot.unitree.g1.blueprints.perceptive.unitree_g1 import unitree_g1
 from dimos.robot.unitree.g1.config import G1
 from dimos.robot.unitree.g1.odometry_bridge import G1FastLioOdometryBridge
 
-
 _g1_fastlio_navigation = autoconnect(
     FastLio2.blueprint(
         host_ip=os.getenv("LIDAR_HOST_IP", "192.168.123.164"),

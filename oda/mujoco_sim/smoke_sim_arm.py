@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Smoke-test the generated MuJoCo scene against the Pinocchio IK it exists to serve.
 
 This is the gate that makes every later sim result meaningful. If sim FK and IK FK
@@ -40,7 +54,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from dimos.control.components import make_humanoid_joints
 from dimos.robot.unitree.g1.ik_reach.right_arm_model import load_g1_right_arm_ik
-from oda.mujoco_sim.build_g1_scene import OKRA_IN_TORSO, _OUT, HOME_Q
+from oda.mujoco_sim.build_g1_scene import _OUT, HOME_Q, OKRA_IN_TORSO
 
 # Same tip offset the okra blueprints use (Dex1-1 jaw): wrist -> fingertip, WRIST frame.
 TIP_OFFSET = [float(v) for v in os.getenv("OKRA_TIP_OFFSET_XYZ", "0.1845,-0.003,0.0").split(",")]
@@ -65,7 +79,9 @@ class SimRig:
             for i in range(self.model.njnt)
         ]
         self._torso = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "torso_link")
-        self._wrist = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "right_wrist_yaw_link")
+        self._wrist = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_BODY, "right_wrist_yaw_link"
+        )
         self._okra = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "okra")
 
     def torso_pose(self) -> tuple[np.ndarray, np.ndarray]:
@@ -108,7 +124,7 @@ def _check_joint_order(rig: SimRig) -> list[str]:
     if len(sim) != 29:
         fails.append(f"sim has {len(sim)} joints, expected 29")
     elif sim != canonical:
-        bad = [(i, s, c) for i, (s, c) in enumerate(zip(sim, canonical)) if s != c]
+        bad = [(i, s, c) for i, (s, c) in enumerate(zip(sim, canonical, strict=False)) if s != c]
         fails.append(f"joint order mismatch at {bad[:4]}")
     print(f"[1] joint order      : {'OK' if not fails else 'FAIL'} ({len(sim)} joints)")
     if fails:
@@ -181,7 +197,9 @@ def _check_tracking(rig: SimRig, arm) -> list[str]:  # type: ignore[no-untyped-d
     tip_t = rig.tip_torso(np.array(TIP_OFFSET))
     track_err = float(np.linalg.norm(tip_t - target_t))
     q_err_deg = np.degrees(rig.q_right() - q_sol)
-    print(f"    tip after 3 s  : {np.round(tip_t, 4).tolist()}  |tip-target|={track_err * 1000:.2f} mm")
+    print(
+        f"    tip after 3 s  : {np.round(tip_t, 4).tolist()}  |tip-target|={track_err * 1000:.2f} mm"
+    )
     print(f"    worst joint err: {np.abs(q_err_deg).max():.3f} deg")
     if track_err > TRACK_TOL_M:
         fails.append(f"arm did not track: {track_err * 1000:.1f} mm > {TRACK_TOL_M * 1000:.0f} mm")
@@ -192,7 +210,12 @@ def _check_cameras(rig: SimRig, out_dir: Path) -> list[str]:
     fails = []
     print("[4] cameras")
     import cv2
-    for cam, (w, h) in (("chest_cam", (640, 360)), ("wrist_cam", (320, 240)), ("spectator", (640, 480))):
+
+    for cam, (w, h) in (
+        ("chest_cam", (640, 360)),
+        ("wrist_cam", (320, 240)),
+        ("spectator", (640, 480)),
+    ):
         renderer = None
         try:
             renderer = mujoco.Renderer(rig.model, height=h, width=w)
@@ -211,7 +234,7 @@ def _check_cameras(rig: SimRig, out_dir: Path) -> list[str]:
         # a real render of this flat-shaded scene has ~1-4k. Without this check the camera
         # test passes on pure noise -- it did exactly that under MUJOCO_GL=glfw, where the
         # 2nd and 3rd live Renderer return junk.
-        uniq = int(len(np.unique(arr.reshape(-1, 3), axis=0)))
+        uniq = len(np.unique(arr.reshape(-1, 3), axis=0))
         # "Green enough to be the okra": G clearly dominant over both R and B. The scene's
         # greys and the gradient sky have no channel dominance, so this isolates pod+stem.
         r, g, b = (arr[:, :, i].astype(int) for i in range(3))

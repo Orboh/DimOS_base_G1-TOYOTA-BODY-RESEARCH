@@ -6,6 +6,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """dimos 側から YOLO-GPU サービス(ZMQ)を叩く end-to-end 検証（dimos venv で実行）。
 
@@ -55,8 +69,11 @@ def main() -> None:
     sock.connect(args.endpoint)
 
     def call(jpeg: bytes, reset: bool) -> dict:
-        sock.send(msgpack.packb(
-            {"image_jpeg": jpeg, "classes": classes, "reset": reset}, use_bin_type=True))
+        sock.send(
+            msgpack.packb(
+                {"image_jpeg": jpeg, "classes": classes, "reset": reset}, use_bin_type=True
+            )
+        )
         return msgpack.unpackb(sock.recv(), raw=False)
 
     # warmup
@@ -91,24 +108,34 @@ def main() -> None:
             d["depth_m"] = dz if np.isfinite(dz) and 0.05 < dz < 10.0 else None
         s4 = time.time()
         last_dets = dets
-        t_grab.append(s1 - s0); t_jpeg.append(s2 - s1); t_zmq.append(s3 - s2)
-        t_3d.append(s4 - s3); t_total.append(s4 - s0); ndet.append(len(dets))
+        t_grab.append(s1 - s0)
+        t_jpeg.append(s2 - s1)
+        t_zmq.append(s3 - s2)
+        t_3d.append(s4 - s3)
+        t_total.append(s4 - s0)
+        ndet.append(len(dets))
 
     cam.close()
 
-    def ms(x): return f"{np.mean(x)*1000:5.1f} ms"
-    print(f"depth_mode={args.depth_mode} classes={classes} frames={len(t_total)} avg_det={np.mean(ndet):.1f}\n")
+    def ms(x):
+        return f"{np.mean(x) * 1000:5.1f} ms"
+
+    print(
+        f"depth_mode={args.depth_mode} classes={classes} frames={len(t_total)} avg_det={np.mean(ndet):.1f}\n"
+    )
     print(f"  grab+depth retrieve : {ms(t_grab)}")
     print(f"  JPEG encode         : {ms(t_jpeg)}")
     print(f"  ZMQ + YOLO(GPU)     : {ms(t_zmq)}")
     print(f"  depth lookup(3D)    : {ms(t_3d)}")
     print(f"  ---- 1サイクル合計  : {ms(t_total)}")
-    print(f"  ===> 実効 {1.0/np.mean(t_total):.1f} FPS（周期 {np.mean(t_total)*1000:.0f} ms）")
+    print(f"  ===> 実効 {1.0 / np.mean(t_total):.1f} FPS（周期 {np.mean(t_total) * 1000:.0f} ms）")
     if last_dets:
         print("\n  最終フレームの検出:")
         for d in last_dets:
-            print(f"    {d['name']} id={d['track_id']} conf={d['confidence']:.2f} "
-                  f"depth={d.get('depth_m')} mask={'有' if d.get('mask_polygon') else '無'}")
+            print(
+                f"    {d['name']} id={d['track_id']} conf={d['confidence']:.2f} "
+                f"depth={d.get('depth_m')} mask={'有' if d.get('mask_polygon') else '無'}"
+            )
 
 
 if __name__ == "__main__":

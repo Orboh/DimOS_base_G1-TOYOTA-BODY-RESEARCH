@@ -5,6 +5,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """Real-robot wiring of :class:`HarvestSkills` + the G1-speaker announcer.
 
@@ -79,7 +93,7 @@ class DimosHarvestSkills:
         self._base_speed = base_speed
         self._lat_sign = lateral_to_y_sign
 
-    # --- perception / manipulation / nav: delegate to injected subsystems -----
+    # perception / manipulation / nav: delegate to injected subsystems
 
     def detect_okra(self) -> list[Okra]:
         return self._detect_fn()
@@ -100,7 +114,7 @@ class DimosHarvestSkills:
         if self._record_fn is not None:
             self._record_fn(record)
 
-    # --- base motion: implemented via the velocity `move` command -------------
+    # base motion: implemented via the velocity `move` command
 
     def relative_move(self, lateral: float, forward: float = 0.0, yaw: float = 0.0) -> None:
         """Issue a relative base displacement [m] as timed velocity commands.
@@ -225,7 +239,8 @@ def build_live_harvest_skills(
         if ask_vlm is not None:
             verify_fn = make_vlm_verify_harvest(ask_vlm)
         else:
-            def verify_fn() -> bool:  # noqa: E306
+
+            def verify_fn() -> bool:
                 logger.info("[LIVE-TODO] verify_harvest placeholder (wire a VLM) -> True")
                 return True
 

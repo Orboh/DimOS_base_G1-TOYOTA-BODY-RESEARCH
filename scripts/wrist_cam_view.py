@@ -93,8 +93,15 @@ def main() -> int:
                 last_n, last_fps_t = n, now
             if bgr is None:
                 canvas = np.zeros((240, 640, 3), dtype=np.uint8)
-                cv2.putText(canvas, f"waiting for {args.topic} ...", (10, 120),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 220, 255), 2)
+                cv2.putText(
+                    canvas,
+                    f"waiting for {args.topic} ...",
+                    (10, 120),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (0, 220, 255),
+                    2,
+                )
                 cv2.imshow(win, canvas)
             else:
                 h, w = bgr.shape[:2]

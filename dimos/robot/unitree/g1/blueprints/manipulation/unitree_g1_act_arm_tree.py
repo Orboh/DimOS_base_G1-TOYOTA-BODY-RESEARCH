@@ -6,6 +6,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """LIVE okra-ACT (tree model) standalone grasp — TWO cameras, the arm MOVES.
 
@@ -27,7 +41,6 @@ Run (in order):
 from __future__ import annotations
 
 import os
-from typing import Any
 
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.transport import LCMTransport
@@ -47,8 +60,20 @@ _NIC = os.getenv("ROBOT_INTERFACE", "")
 # left 7 + right 7. The arms slew here on startup so the policy begins
 # in-distribution (mirrors eval_g1.py); ActBridge then waits _START_DELAY_S.
 _INIT_ARM_POSE = [
-    0.269, 0.196, -0.018, 0.986, 0.122, 0.028, 0.003,   # left arm
-    -0.114, 0.029, 0.185, 0.538, 0.209, -0.755, 0.370,  # right arm
+    0.269,
+    0.196,
+    -0.018,
+    0.986,
+    0.122,
+    0.028,
+    0.003,  # left arm
+    -0.114,
+    0.029,
+    0.185,
+    0.538,
+    0.209,
+    -0.755,
+    0.370,  # right arm
 ]
 _START_DELAY_S = 2.5
 
@@ -73,7 +98,9 @@ unitree_g1_act_arm_tree = (
             ("cam_right_wrist", Image): LCMTransport("/cam_right_wrist", Image),
             ("motor_states", JointState): LCMTransport("/g1/motor_states", JointState),
             ("arm_target", JointState): LCMTransport("/g1/arm_target", JointState),
-            ("right_gripper_state", JointState): LCMTransport("/g1/right_gripper_state", JointState),
+            ("right_gripper_state", JointState): LCMTransport(
+                "/g1/right_gripper_state", JointState
+            ),
             ("gripper_target", JointState): LCMTransport("/g1/gripper_target", JointState),
         }
     )

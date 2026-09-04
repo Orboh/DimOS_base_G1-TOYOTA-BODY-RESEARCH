@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Standalone live-camera check for the okra-ACT service (NO robot motion).
 
 Grabs ONE frame from the head (cam_high) and right-wrist (cam_right_wrist)
@@ -54,8 +68,10 @@ def main() -> int:
     print(f"[live] connecting ImageClient host={args.host}")
     client = ImageClient(host=args.host, request_bgr=True)
     cfg = client.get_cam_config()
-    print(f"[live] head enabled={cfg['head_camera']['enable_zmq']} "
-          f"right_wrist enabled={cfg['right_wrist_camera']['enable_zmq']}")
+    print(
+        f"[live] head enabled={cfg['head_camera']['enable_zmq']} "
+        f"right_wrist enabled={cfg['right_wrist_camera']['enable_zmq']}"
+    )
     if not cfg["right_wrist_camera"]["enable_zmq"]:
         print("[live] ⚠️ right_wrist camera NOT enabled on the NX — the tree model needs it.")
 

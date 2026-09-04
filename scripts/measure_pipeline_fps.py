@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """検出パイプライン（grab → YOLO-seg track → 3D化）の連続実効FPSを実測（診断用）。
 
 本番 harvest の detect 相当を連続 N フレーム回し、各段のレイテンシと実効FPSを測る。
@@ -6,11 +20,16 @@
 
     .venv/bin/python measure_pipeline_fps.py --depth_mode NEURAL --n 60
 """
+
 from __future__ import annotations
-import argparse, time
+
+import argparse
+import time
+
 import numpy as np
 import pyzed.sl as sl
 from ultralytics import YOLO  # type: ignore
+
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.perception.detection.type.detection2d.imageDetections2D import ImageDetections2D
 from dimos.robot.unitree.g1.harvest.detect_yolo import default_pixel_to_base
@@ -59,8 +78,11 @@ def main() -> None:
         rgb = bgr[:, :, ::-1]
         image = Image(data=np.ascontiguousarray(rgb), format=ImageFormat.RGB, frame_id="z", ts=s1)
         results = model.track(source=bgr, persist=True, conf=0.5, iou=0.6, verbose=False)
-        dets = [d for d in ImageDetections2D.from_ultralytics_result(image, results)
-                if str(d.name).lower() in targets]
+        dets = [
+            d
+            for d in ImageDetections2D.from_ultralytics_result(image, results)
+            if str(d.name).lower() in targets
+        ]
         s2 = time.time()
         h, w = depth.shape[:2]
         for det in dets:
@@ -70,16 +92,23 @@ def main() -> None:
             d = d if np.isfinite(d) and 0.05 < d < 10.0 else _FB
             default_pixel_to_base(u, v, image_w=w, image_h=h, depth_m=d)
         s3 = time.time()
-        t_grab.append(s1 - s0); t_yolo.append(s2 - s1); t_3d.append(s3 - s2); t_total.append(s3 - s0)
+        t_grab.append(s1 - s0)
+        t_yolo.append(s2 - s1)
+        t_3d.append(s3 - s2)
+        t_total.append(s3 - s0)
         ndet.append(len(dets))
 
-    def ms(x): return f"{np.mean(x)*1000:5.1f} ms"
-    print(f"depth_mode={args.depth_mode}  model={args.model}  frames={len(t_total)}  avg_det={np.mean(ndet):.1f}\n")
+    def ms(x):
+        return f"{np.mean(x) * 1000:5.1f} ms"
+
+    print(
+        f"depth_mode={args.depth_mode}  model={args.model}  frames={len(t_total)}  avg_det={np.mean(ndet):.1f}\n"
+    )
     print(f"  grab+depth retrieve : {ms(t_grab)}")
     print(f"  YOLO-seg track      : {ms(t_yolo)}")
     print(f"  3D化(検出数ぶん)    : {ms(t_3d)}")
     print(f"  ---- 1サイクル合計  : {ms(t_total)}")
-    print(f"  ===> 実効 {1.0/np.mean(t_total):.1f} FPS（周期 {np.mean(t_total)*1000:.0f} ms）")
+    print(f"  ===> 実効 {1.0 / np.mean(t_total):.1f} FPS（周期 {np.mean(t_total) * 1000:.0f} ms）")
 
 
 if __name__ == "__main__":

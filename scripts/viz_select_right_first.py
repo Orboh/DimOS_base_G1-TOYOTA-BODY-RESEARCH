@@ -6,6 +6,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """右優先 select を実機で可視化（物理動作なし）。
 
@@ -44,8 +58,11 @@ def main() -> None:
     ap.add_argument("--frames", type=int, default=40)
     ap.add_argument("--model", default="yolo11n-seg.pt")
     ap.add_argument("--depth_mode", default="NEURAL")
-    ap.add_argument("--ignore-reach", action="store_true",
-                    help="reach box 判定を無視し、検出全 banana 中で最も右を TARGET に（机上検証用）")
+    ap.add_argument(
+        "--ignore-reach",
+        action="store_true",
+        help="reach box 判定を無視し、検出全 banana 中で最も右を TARGET に（机上検証用）",
+    )
     args = ap.parse_args()
     targets = {c.strip().lower() for c in args.classes.split(",") if c.strip()}
 
@@ -59,8 +76,10 @@ def main() -> None:
         raise RuntimeError("ZED open failed")
 
     reach = HarvestConfig().reach  # base系 Box3D: x=lateral(+右), y=depth(+前), z=height
-    print(f"reach box [m]: x[{reach.x_min:.2f},{reach.x_max:.2f}] "
-          f"y[{reach.y_min:.2f},{reach.y_max:.2f}] z[{reach.z_min:.2f},{reach.z_max:.2f}]")
+    print(
+        f"reach box [m]: x[{reach.x_min:.2f},{reach.x_max:.2f}] "
+        f"y[{reach.y_min:.2f},{reach.y_max:.2f}] z[{reach.z_min:.2f},{reach.z_max:.2f}]"
+    )
     model = YOLO(get_data("models_yolo") / args.model)
     runtime = sl.RuntimeParameters()
     img_mat, depth_mat = sl.Mat(), sl.Mat()
@@ -79,8 +98,11 @@ def main() -> None:
         cam.retrieve_measure(depth_mat, sl.MEASURE.DEPTH)
         depth = depth_mat.get_data()
         results = model.track(source=bgr, persist=True, conf=0.5, iou=0.6, verbose=False)
-        dets = [d for d in ImageDetections2D.from_ultralytics_result(image, results)
-                if str(d.name).lower() in targets]
+        dets = [
+            d
+            for d in ImageDetections2D.from_ultralytics_result(image, results)
+            if str(d.name).lower() in targets
+        ]
         if dets:
             break
     cam.close()
@@ -98,8 +120,9 @@ def main() -> None:
         pos = default_pixel_to_base(u, v, image_w=w, image_h=h, depth_m=d)
         in_reach = reach.contains(pos)
         tid = getattr(det, "track_id", None)
-        okras.append({"bbox": (x1, y1, x2, y2), "uv": (u, v), "pos": pos,
-                      "in_reach": in_reach, "tid": tid})
+        okras.append(
+            {"bbox": (x1, y1, x2, y2), "uv": (u, v), "pos": pos, "in_reach": in_reach, "tid": tid}
+        )
 
     # 右優先 select（本番 graph.select と同じ: reach box 内で x 最大）
     # --ignore-reach: 机上検証用に reach 判定を外し、検出全 banana 中で最も右を選ぶ
@@ -111,8 +134,10 @@ def main() -> None:
     for o in okras:
         p = o["pos"]
         star = " ★TARGET(右優先)" if o is target else ""
-        print(f"  id={o['tid']} pos[m] x={p['x']:+.3f} y={p['y']:+.3f} z={p['z']:+.3f} "
-              f"reach={'YES' if o['in_reach'] else 'no '}{star}")
+        print(
+            f"  id={o['tid']} pos[m] x={p['x']:+.3f} y={p['y']:+.3f} z={p['z']:+.3f} "
+            f"reach={'YES' if o['in_reach'] else 'no '}{star}"
+        )
 
     # 描画
     for o in okras:
@@ -123,19 +148,34 @@ def main() -> None:
         cv2.circle(bgr, o["uv"], 5, color, -1)
         p = o["pos"]
         label = f"id{o['tid']} x{p['x']:+.2f} y{p['y']:+.2f} z{p['z']:+.2f} {'REACH' if o['in_reach'] else 'far'}"
-        cv2.putText(bgr, label, (x1, max(14, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.55, color, 2, cv2.LINE_AA)
+        cv2.putText(
+            bgr, label, (x1, max(14, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2, cv2.LINE_AA
+        )
         if is_t:
-            cv2.putText(bgr, "TARGET (right-most in reach)", (x1, min(h - 8, y2 + 22)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2, cv2.LINE_AA)
+            cv2.putText(
+                bgr,
+                "TARGET (right-most in reach)",
+                (x1, min(h - 8, y2 + 22)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (0, 0, 255),
+                2,
+                cv2.LINE_AA,
+            )
 
-    banner = f"depth={args.depth_mode}  detections={len(okras)}  in_reach={len(in_box)}  " \
-             f"(green=in reach, gray=out, red=TARGET)"
+    banner = (
+        f"depth={args.depth_mode}  detections={len(okras)}  in_reach={len(in_box)}  "
+        f"(green=in reach, gray=out, red=TARGET)"
+    )
     cv2.rectangle(bgr, (0, 0), (w, 30), (0, 0, 0), -1)
-    cv2.putText(bgr, banner, (8, 21), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+    cv2.putText(
+        bgr, banner, (8, 21), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA
+    )
     cv2.imwrite(args.out, bgr)
-    print(f"saved={args.out}"
-          + ("  TARGET=id%s" % target["tid"] if target else "  TARGET=なし(reach box内に無し)"))
+    print(
+        f"saved={args.out}"
+        + ("  TARGET=id{}".format(target["tid"]) if target else "  TARGET=なし(reach box内に無し)")
+    )
 
 
 if __name__ == "__main__":

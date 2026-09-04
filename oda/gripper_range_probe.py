@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """カッター装着グリッパの開閉範囲キャリブレーション補助ツール。
 
 目的: q(モーター指令値)と実際の刃の開き幅[mm]の対応表を作り、
@@ -27,10 +41,11 @@ from __future__ import annotations
 import sys
 import time
 
-from dimos.core.transport import LCMTransport
-from dimos.msgs.sensor_msgs.JointState import JointState
 from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelSubscriber
 from unitree_sdk2py.idl.unitree_go.msg.dds_ import MotorStates_
+
+from dimos.core.transport import LCMTransport
+from dimos.msgs.sensor_msgs.JointState import JointState
 
 NIC = "enp46s0"
 DEX1_STATE_TOPIC = "rt/dex1/left/state"  # この機体の配線都合(右手だが左サービス)
@@ -84,8 +99,10 @@ def main() -> None:
             time.sleep(0.2)
         time.sleep(1.5)  # 整定待ち
         q, tau = latest["q"], latest["tau"]
-        print(f"  実測 q={q:.3f} tau={tau:.2f}"
-              + ("  ← 突き当たり/噛み合い(目標に届いていない)" if abs(q - target) > 0.15 else ""))
+        print(
+            f"  実測 q={q:.3f} tau={tau:.2f}"
+            + ("  ← 突き当たり/噛み合い(目標に届いていない)" if abs(q - target) > 0.15 else "")
+        )
         gap = input("  刃の開き実測[mm](空Enterでスキップ) > ").strip()
         rows.append((target, q, tau, gap or "-"))
 

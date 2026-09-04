@@ -6,6 +6,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """定規実測値 → OKRA_CAM_TO_TORSO 用の "x,y,z,qx,qy,qz,qw" 文字列に変換する。
 
@@ -40,12 +54,27 @@ from dimos.utils.transform_utils import euler_to_quaternion
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--x_mm", type=float, required=True, help="torso原点→カメラの左右方向オフセット [mm]（+右）")
-    parser.add_argument("--y_mm", type=float, required=True, help="torso原点→カメラの奥行き方向オフセット [mm]（+前方）")
-    parser.add_argument("--z_mm", type=float, required=True, help="torso原点→カメラの高さ方向オフセット [mm]（+上）")
-    parser.add_argument("--roll_deg", type=float, default=0.0, help="カメラのroll [度]（x軸まわり）")
-    parser.add_argument("--pitch_deg", type=float, default=0.0, help="カメラのpitch [度]（y軸まわり、下向きが正）")
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--x_mm", type=float, required=True, help="torso原点→カメラの左右方向オフセット [mm]（+右）"
+    )
+    parser.add_argument(
+        "--y_mm",
+        type=float,
+        required=True,
+        help="torso原点→カメラの奥行き方向オフセット [mm]（+前方）",
+    )
+    parser.add_argument(
+        "--z_mm", type=float, required=True, help="torso原点→カメラの高さ方向オフセット [mm]（+上）"
+    )
+    parser.add_argument(
+        "--roll_deg", type=float, default=0.0, help="カメラのroll [度]（x軸まわり）"
+    )
+    parser.add_argument(
+        "--pitch_deg", type=float, default=0.0, help="カメラのpitch [度]（y軸まわり、下向きが正）"
+    )
     parser.add_argument("--yaw_deg", type=float, default=0.0, help="カメラのyaw [度]（z軸まわり）")
     args = parser.parse_args()
 
@@ -53,9 +82,7 @@ def main() -> int:
     y_m = args.y_mm / 1000.0
     z_m = args.z_mm / 1000.0
 
-    quat = euler_to_quaternion(
-        Vector3(args.roll_deg, args.pitch_deg, args.yaw_deg), degrees=True
-    )
+    quat = euler_to_quaternion(Vector3(args.roll_deg, args.pitch_deg, args.yaw_deg), degrees=True)
 
     result = f"{x_m},{y_m},{z_m},{quat.x},{quat.y},{quat.z},{quat.w}"
 

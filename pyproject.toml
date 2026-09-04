@@ -491,7 +491,10 @@ line-ending = "lf"
 extend-select = ["E", "W", "F", "B", "UP", "N", "I", "C90", "A", "RUF", "TCH"]
 ignore = [
     # TODO: All of these should be fixed, but it's easier commit autofixes first
-    "A001", "A002", "B008", "B017", "B019", "B024", "B026", "B904", "C901", "E402", "E501", "E721", "E722", "E741", "F811", "F821", "F821", "F821", "N801", "N802", "N803", "N806", "N817", "N999", "RUF003", "RUF009", "RUF012", "RUF034", "RUF043", "RUF059", "UP007",
+    "A001", "A002", "B008", "B017", "B019", "B024", "B026", "B904", "C901", "E402", "E501", "E721", "E722", "E741", "F811", "F821", "F821", "F821", "N801", "N802", "N803", "N806", "N817", "N999",
+    # 日本語のコメント・docstring・文字列に全角括弧などが入るのは意図的
+    # (RUF003 は元から除外済み。同じ理由で 001/002 も除外する)
+    "RUF001", "RUF002", "RUF003", "RUF009", "RUF012", "RUF034", "RUF043", "RUF059", "UP007",
     # This breaks runtime type checking (both for us, and users introspecting our APIs)
     "TC001", "TC002", "TC003"
 ]

@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Standalone bounded-walk check for the harvest base motion (the robot WALKS).
 
 ⚠️⚠️ THIS MOVES THE ROBOT (legs / locomotion). ⚠️⚠️ It issues ONE small, bounded
@@ -32,21 +46,34 @@ _MIN = 1e-3
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--nic", default=os.getenv("ROBOT_INTERFACE", ""))
-    ap.add_argument("--forward", type=float, default=0.0, help="relative forward move [m] (+fwd/-back)")
-    ap.add_argument("--lateral", type=float, default=0.0, help="relative lateral move [m] (+left/-right)")
+    ap.add_argument(
+        "--forward", type=float, default=0.0, help="relative forward move [m] (+fwd/-back)"
+    )
+    ap.add_argument(
+        "--lateral", type=float, default=0.0, help="relative lateral move [m] (+left/-right)"
+    )
     ap.add_argument("--yaw", type=float, default=0.0, help="relative turn [rad] (+CCW)")
-    ap.add_argument("--speed", type=float, default=0.12, help="translation speed [m/s] (kept small)")
+    ap.add_argument(
+        "--speed", type=float, default=0.12, help="translation speed [m/s] (kept small)"
+    )
     ap.add_argument("--yaw-speed", type=float, default=0.3, help="turn speed [rad/s]")
     ap.add_argument("--max", type=float, default=0.5, help="safety cap on any single move [m]")
-    ap.add_argument("--hz", type=float, default=10.0, help="cmd resend rate [Hz] (G1 needs a continuous stream)")
+    ap.add_argument(
+        "--hz", type=float, default=10.0, help="cmd resend rate [Hz] (G1 needs a continuous stream)"
+    )
     ap.add_argument("--dry", action="store_true", help="print the plan, send nothing")
     args = ap.parse_args()
 
     if not args.nic:
         raise SystemExit("Set --nic or ROBOT_INTERFACE to the wired NIC to the G1.")
-    for axis, val, cap in (("forward", args.forward, args.max), ("lateral", args.lateral, args.max)):
+    for axis, val, cap in (
+        ("forward", args.forward, args.max),
+        ("lateral", args.lateral, args.max),
+    ):
         if abs(val) > cap:
-            raise SystemExit(f"{axis}={val} exceeds safety cap {cap} m; lower it or raise --max deliberately")
+            raise SystemExit(
+                f"{axis}={val} exceeds safety cap {cap} m; lower it or raise --max deliberately"
+            )
 
     # (vx, vy, vyaw, duration) legs: vx=forward, vy=left(+), vyaw=turn.
     moves: list[tuple[str, float, float, float, float]] = []
@@ -77,7 +104,7 @@ def main() -> int:
     client = LocoClient()
     try:
         client.SetTimeout(10.0)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         print(f"[walk] SetTimeout n/a ({exc})")
     client.Init()
 
@@ -88,8 +115,10 @@ def main() -> int:
     try:
         for name, vx, vy, vyaw, dur in moves:
             n = max(1, int(dur / period))
-            print(f"[walk] {name}: streaming SetVelocity({vx:+.2f},{vy:+.2f},{vyaw:+.2f}) "
-                  f"@ {args.hz:.0f}Hz for {dur:.2f}s ({n} sends)")
+            print(
+                f"[walk] {name}: streaming SetVelocity({vx:+.2f},{vy:+.2f},{vyaw:+.2f}) "
+                f"@ {args.hz:.0f}Hz for {dur:.2f}s ({n} sends)"
+            )
             first_code = None
             for _ in range(n):
                 code = client.SetVelocity(vx, vy, vyaw, max(period * 2, 0.5))
@@ -97,7 +126,9 @@ def main() -> int:
                     first_code = code
                 time.sleep(period)
             client.StopMove()
-            print(f"[walk] {name}: first SetVelocity code={first_code} (0 usually = accepted); stopped")
+            print(
+                f"[walk] {name}: first SetVelocity code={first_code} (0 usually = accepted); stopped"
+            )
             time.sleep(0.4)  # settle before the next axis
         print("[walk] DONE — robot performed the bounded move and stopped.")
     except KeyboardInterrupt:

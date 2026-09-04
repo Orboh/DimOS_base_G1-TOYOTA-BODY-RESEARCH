@@ -6,6 +6,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """banana 検出 3D 化を 3 手法で同時テスト（診断用、物理動作なし）。
 
@@ -65,8 +79,15 @@ def main() -> None:
     fx, fy, cx, cy = calib.fx, calib.fy, calib.cx, calib.cy
     K = [fx, 0.0, cx, 0.0, fy, cy, 0.0, 0.0, 1.0]
     P = [fx, 0.0, cx, 0.0, 0.0, fy, cy, 0.0, 0.0, 0.0, 1.0, 0.0]
-    camera_info = CameraInfo(height=h, width=w, distortion_model="plumb_bob",
-                             D=list(calib.disto), K=K, P=P, frame_id="zed_optical")
+    camera_info = CameraInfo(
+        height=h,
+        width=w,
+        distortion_model="plumb_bob",
+        D=list(calib.disto),
+        K=K,
+        P=P,
+        frame_id="zed_optical",
+    )
     ident = Transform.identity()
     model = YOLO(get_data("models_yolo") / args.model)
 
@@ -96,8 +117,11 @@ def main() -> None:
         pc = PointCloud2.from_numpy(xyz, frame_id="zed_optical", timestamp=ts)
 
         results = model.track(source=bgr, persist=True, conf=0.5, iou=0.6, verbose=False)
-        dets = [d for d in ImageDetections2D.from_ultralytics_result(image, results)
-                if str(d.name).lower() in targets]
+        dets = [
+            d
+            for d in ImageDetections2D.from_ultralytics_result(image, results)
+            if str(d.name).lower() in targets
+        ]
         if dets:
             break
     cam.close()
@@ -122,14 +146,18 @@ def main() -> None:
         dA = float(depth[int(np.clip(v, 0, h - 1)), int(np.clip(u, 0, w - 1))])
         a_ok = np.isfinite(dA) and 0.05 < dA < 10.0
         zA = dA if a_ok else _FALLBACK_DEPTH_M
-        print(f"    [A 中心1px      ] z={zA:.3f} m" + ("" if a_ok else "  (無効→0.45mフォールバック)"))
+        print(
+            f"    [A 中心1px      ] z={zA:.3f} m" + ("" if a_ok else "  (無効→0.45mフォールバック)")
+        )
 
         # B2: bbox 点群 + フィルタ
         b2 = Detection3DPC.from_2d(det, pc, camera_info, ident, filters=None)
         if b2 is not None:
             c = b2.center
-            print(f"    [B2 bbox+filter ] z={c.z:.3f} m  optical(x={c.x:+.3f}, y={c.y:+.3f})  "
-                  f"({len(b2.pointcloud.pointcloud.points)} pts)")
+            print(
+                f"    [B2 bbox+filter ] z={c.z:.3f} m  optical(x={c.x:+.3f}, y={c.y:+.3f})  "
+                f"({len(b2.pointcloud.pointcloud.points)} pts)"
+            )
         else:
             print("    [B2 bbox+filter ] None")
 
@@ -144,15 +172,25 @@ def main() -> None:
         obj = xyz[sel]
         if obj.shape[0]:
             cm = np.median(obj, axis=0)
-            print(f"    [C mask         ] z={cm[2]:.3f} m  optical(x={cm[0]:+.3f}, y={cm[1]:+.3f})  "
-                  f"(mask{int((mask > 0).sum())}px → {obj.shape[0]} pts)")
-            for pu, pv in zip(uu[sel], vv[sel]):
+            print(
+                f"    [C mask         ] z={cm[2]:.3f} m  optical(x={cm[0]:+.3f}, y={cm[1]:+.3f})  "
+                f"(mask{int((mask > 0).sum())}px → {obj.shape[0]} pts)"
+            )
+            for pu, pv in zip(uu[sel], vv[sel], strict=False):
                 bgr[pv, pu] = (255, 255, 0)
             ccu = int(fx * cm[0] / max(cm[2], 1e-6) + cx)
             ccv = int(fy * cm[1] / max(cm[2], 1e-6) + cy)
             cv2.circle(bgr, (ccu, ccv), 8, (0, 255, 255), -1)
-            cv2.putText(bgr, f"banana z={cm[2]:.2f}m", (x1, max(0, y1 - 8)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2, cv2.LINE_AA)
+            cv2.putText(
+                bgr,
+                f"banana z={cm[2]:.2f}m",
+                (x1, max(0, y1 - 8)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (0, 255, 255),
+                2,
+                cv2.LINE_AA,
+            )
         else:
             print("    [C mask         ] マスク内に有効点なし")
         print()

@@ -5,6 +5,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """Offline tests for GraspSequence (IK->ACT->cut-gate->cut), fully injected.
 
@@ -14,14 +28,15 @@ the sequence ordering, the cut-gate, the blade-safety clamp, and stop-cancellati
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import sys
 import types
-from dataclasses import dataclass
 
 # JointState pulls dimos_lcm (LCM-generated msgs, only present in the live/Orin
 # env). GraspSequence only constructs JointState(name=, position=, ...) and reads
 # .position back in tests, so stub a lightweight stand-in before importing it.
 if "dimos_lcm" not in sys.modules:
+
     class _FakeJointState:
         def __init__(self, name=None, position=None, velocity=None, effort=None):
             self.name = name
@@ -83,10 +98,10 @@ def test_full_sequence_success_order() -> None:
     )
     ok = seq.run_episode(Okra(id="okra_1"), force=0.3)
     assert ok is True
-    assert events == ["ik", "gate"]       # IK before gate
-    assert act.ran == 1                    # ACT ran once
-    assert len(arm_pub) == 1               # IK published the 14-joint target
-    assert len(grip_pub) == 1              # cut published one gripper target
+    assert events == ["ik", "gate"]  # IK before gate
+    assert act.ran == 1  # ACT ran once
+    assert len(arm_pub) == 1  # IK published the 14-joint target
+    assert len(grip_pub) == 1  # cut published one gripper target
     assert grip_pub[0].position[0] == 4.4  # closed to the cut position
     assert seq.episodes[-1] == ("okra_1", "cut", True)
 
@@ -117,8 +132,8 @@ def test_cut_gate_blocks_cut() -> None:
         publish_gripper=lambda js: grip_pub.append(js),
     )
     assert seq.run_episode(Okra(id="okra_2")) is False
-    assert act.ran == 1                    # ACT still ran (approach happened)
-    assert grip_pub == []                  # but the blade never closed
+    assert act.ran == 1  # ACT still ran (approach happened)
+    assert grip_pub == []  # but the blade never closed
     assert seq.episodes[-1] == ("okra_2", "cut_gate", False)
 
 

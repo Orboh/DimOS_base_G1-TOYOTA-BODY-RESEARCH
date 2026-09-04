@@ -58,7 +58,7 @@ from dimos.visualization.vis_module import vis_module
 
 logger = setup_logger()
 
-# ---- robot side (same knobs as the ZED blueprint) ---------------------------
+# robot side (same knobs as the ZED blueprint)
 _NIC = os.getenv("ROBOT_INTERFACE", "enp46s0")
 _LIVE = os.getenv("IK_REACH_LIVE", "").strip() == "1"
 _ARM_VEL_LIMIT = float(os.getenv("IK_ARM_VEL_LIMIT", "12.0"))
@@ -103,10 +103,11 @@ _MAX_JOINT_DELTA_DEG = float(os.getenv("OKRA_MAX_JOINT_DELTA_DEG", "90"))
 # the UMI TCP point (~/umi/okra_20260723_ishimaru dataset_plan grippers[0].tcp_pose).
 _TIP_OFFSET = [float(v) for v in os.getenv("OKRA_TIP_OFFSET_XYZ", "0.1845,-0.003,0.0").split(",")]
 _UMI_TIP_OFFSET = [
-    float(v) for v in os.getenv("OKRA_UMI_TIP_OFFSET_XYZ", ",".join(map(str, _TIP_OFFSET))).split(",")
+    float(v)
+    for v in os.getenv("OKRA_UMI_TIP_OFFSET_XYZ", ",".join(map(str, _TIP_OFFSET))).split(",")
 ]
 
-# ---- UMI diffusion bridge ----
+# UMI diffusion bridge
 _UMI_SERVER = os.getenv("UMI_SERVER_ADDR", "tcp://127.0.0.1:5599")
 _UMI_CONTROL_HZ = float(os.getenv("UMI_CONTROL_HZ", "10.0"))
 # n_exec waypoints per inference. Server inference ~88ms on this PC, so >=2 keeps the
@@ -134,7 +135,7 @@ _UMI_TIP_TO_TCP = [float(v) for v in os.getenv("UMI_TIP_TO_TCP_XYZ", "0,0,0").sp
 _UMI_CONVERGE_EPS_M = float(os.getenv("UMI_CONVERGE_EPS_M", "0.004"))
 _UMI_CONVERGE_HOLD_TICKS = int(os.getenv("UMI_CONVERGE_HOLD_TICKS", "8"))
 
-# ---- UMI observability (see UmiDiffusionBridge's module docstring) ----
+# UMI observability (see UmiDiffusionBridge's module docstring)
 # Default = log every tick: the failure mode being chased is "the policy is not visibly
 # adjusting", and the old 0.5 s throttle made the log thinnest exactly then.
 _UMI_LOG_EVERY_N = int(os.getenv("UMI_LOG_EVERY_N", "1"))
@@ -147,7 +148,7 @@ _UMI_TRACE_PATH = os.getenv("UMI_TRACE_PATH", "auto")
 # run was driven from a 16-hour-old frame). Set 0 only to debug without the GoPro.
 _UMI_REQUIRE_CAMERA = os.getenv("UMI_REQUIRE_CAMERA_OK", "1").strip() != "0"
 
-# ---- spoken phase announcements (Japanese, G1 speaker) ----------------------
+# spoken phase announcements (Japanese, G1 speaker)
 # From outside the robot, an IK coarse reach and a diffusion fine-adjustment look the
 # same, and an adjustment that refused to start looks like nothing at all. The LangGraph
 # harvest app announces every phase; this gives the bridge pipeline the same cue.
@@ -155,7 +156,7 @@ _UMI_REQUIRE_CAMERA = os.getenv("UMI_REQUIRE_CAMERA_OK", "1").strip() != "0"
 _VOICE = os.getenv("OKRA_VOICE", "").strip() == "1"
 _VOICE_VOLUME = int(os.getenv("OKRA_VOICE_VOLUME", "100"))
 
-# ---- chest-ZED camera (same knobs as the ZED blueprint) ---------------------
+# chest-ZED camera (same knobs as the ZED blueprint)
 _ZED_SERIAL = os.getenv("ZED_SERIAL", "").strip() or None
 _PC_FPS = float(os.getenv("ZED_PC_FPS", "3.0"))
 _DEPTH_MODE = os.getenv("ZED_DEPTH_MODE", "NEURAL")
@@ -230,7 +231,7 @@ _MODULES = [
         fire_reach_done=True,
         approach_offset_xyz=[0.0, 0.0, _TARGET_Z_OFFSET - _CUT_BELOW_CENTROID_M],
         standoff_m=_STANDOFF_M,
-        approach_above_m=0.0,   # diffusion owns the final approach
+        approach_above_m=0.0,  # diffusion owns the final approach
         approach_front_m=0.0,
         confirm_click=_CONFIRM_CLICK,
         confirm_min_gap_s=_CONFIRM_MIN_GAP_S,

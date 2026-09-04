@@ -1,3 +1,17 @@
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Build a side-by-side analysis video: what the policy saw, next to what it did.
 
 A run produces records that are painful to correlate by hand:
@@ -48,7 +62,7 @@ def _read_jsonl(path):
             try:
                 out.append(json.loads(line))
             except json.JSONDecodeError:
-                pass          # a run killed mid-write leaves one truncated line; skip it
+                pass  # a run killed mid-write leaves one truncated line; skip it
     return out
 
 
@@ -60,10 +74,13 @@ def _jp(img, text, org, size=17, colour=(235, 235, 235)):
         cv2.putText(img, text, org, cv2.FONT_HERSHEY_SIMPLEX, size / 30.0, colour, 1, cv2.LINE_AA)
         return img
     import glob as _glob
-    cands = (_glob.glob("/usr/share/fonts/opentype/noto/NotoSansCJK*Regular*.ttc")
-             + _glob.glob("/usr/share/fonts/opentype/noto/NotoSansCJK-DemiLight.ttc")
-             + _glob.glob("/usr/share/fonts/truetype/fonts-japanese-*.ttf")
-             + _glob.glob("/usr/share/fonts/**/NotoSansCJK*", recursive=True))
+
+    cands = (
+        _glob.glob("/usr/share/fonts/opentype/noto/NotoSansCJK*Regular*.ttc")
+        + _glob.glob("/usr/share/fonts/opentype/noto/NotoSansCJK-DemiLight.ttc")
+        + _glob.glob("/usr/share/fonts/truetype/fonts-japanese-*.ttf")
+        + _glob.glob("/usr/share/fonts/**/NotoSansCJK*", recursive=True)
+    )
     for path in cands:
         if os.path.exists(path):
             font = ImageFont.truetype(path, size)
@@ -93,15 +110,22 @@ def _plot(series, cursor, title, ylab, note=""):
     n = max(len(s) for s, _, _ in series)
 
     def xy(i, v):
-        return (pad_l + int(w * (i / max(1, n - 1))),
-                pad_t + int(h * (1.0 - (v - lo) / (hi - lo))))
+        return (pad_l + int(w * (i / max(1, n - 1))), pad_t + int(h * (1.0 - (v - lo) / (hi - lo))))
 
     for k in range(5):
         v = lo + (hi - lo) * k / 4
         _, y = xy(0, v)
         cv2.line(img, (pad_l, y), (pad_l + w, y), (54, 54, 54), 1)
-        cv2.putText(img, f"{v:6.0f}", (8, y + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.44,
-                    (155, 155, 155), 1, cv2.LINE_AA)
+        cv2.putText(
+            img,
+            f"{v:6.0f}",
+            (8, y + 4),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.44,
+            (155, 155, 155),
+            1,
+            cv2.LINE_AA,
+        )
     if lo < 0 < hi:
         _, y0 = xy(0, 0.0)
         cv2.line(img, (pad_l, y0), (pad_l + w, y0), (105, 105, 105), 1)
@@ -132,7 +156,9 @@ def _plot(series, cursor, title, ylab, note=""):
 @click.option("--record", required=True, help="server --record directory")
 @click.option("--bridge-trace", default=None, help="umi_diffusion_trace.jsonl from the dimos run")
 @click.option("--out", default=None, help="output mp4 (default: <record>/analysis.mp4)")
-@click.option("--fps", default=15.0, type=float, help="playback rate; match --record-fps for real time")
+@click.option(
+    "--fps", default=15.0, type=float, help="playback rate; match --record-fps for real time"
+)
 def main(record, bridge_trace, out, fps):
     cam_idx = _read_jsonl(os.path.join(record, "cam_index.jsonl"))
     srv = _read_jsonl(os.path.join(record, "server_trace.jsonl"))
@@ -152,8 +178,9 @@ def main(record, bridge_trace, out, fps):
             if dropped:
                 print(f"cam_index: {dropped} entries from earlier sessions ignored")
             cam_idx = [r for r in cam_idx if r.get("tag") == last]
-            frames = [(r["t"], os.path.join(record, "cam_%s_%06d.png" % (r["tag"], r["n"])))
-                      for r in cam_idx]
+            frames = [
+                (r["t"], os.path.join(record, f"cam_{r['tag']}_{r['n']:06d}.png")) for r in cam_idx
+            ]
         else:
             # Legacy layout: `n` restarted at 1 each session into a shared namespace, so a
             # restart overwrote the previous run's files. Keep the last monotonic run only.
@@ -165,13 +192,13 @@ def main(record, bridge_trace, out, fps):
             if cut:
                 print(f"cam_index: dropping {cut} entries from earlier server sessions")
                 cam_idx = cam_idx[cut:]
-            frames = [(r["t"], os.path.join(record, "cam_%06d.png" % r["n"])) for r in cam_idx]
+            frames = [(r["t"], os.path.join(record, f"cam_{r['n']:06d}.png")) for r in cam_idx]
         frames = [(t, p) for t, p in frames if os.path.exists(p)]
         src = "capture stream"
     else:
         fs = sorted(f for f in os.listdir(record) if f.startswith("frame_") and f.endswith(".png"))
         ts = [r["t"] for r in srv] if len(srv) == len(fs) else list(range(len(fs)))
-        frames = [(t, os.path.join(record, f)) for t, f in zip(ts, fs)]
+        frames = [(t, os.path.join(record, f)) for t, f in zip(ts, fs, strict=False)]
         src = "per-inference frames only (re-run with --record-fps for a real video)"
     if not frames:
         raise SystemExit(f"no frames in {record}")
@@ -207,18 +234,23 @@ def main(record, bridge_trace, out, fps):
         if a:
             arr = np.asarray(a, float)
             d = (arr[-1, :3] - arr[0, :3]) * 1000
-            cmd_dx.append(d[0]); cmd_dz.append(d[2])
+            cmd_dx.append(d[0])
+            cmd_dz.append(d[2])
         else:
-            cmd_dx.append(np.nan); cmd_dz.append(np.nan)
+            cmd_dx.append(np.nan)
+            cmd_dz.append(np.nan)
         if p:
             q = np.asarray(p, float) * 1000
-            tip_x.append(q[0]); tip_z.append(q[2])
+            tip_x.append(q[0])
+            tip_z.append(q[2])
         else:
-            tip_x.append(np.nan); tip_z.append(np.nan)
+            tip_x.append(np.nan)
+            tip_z.append(np.nan)
         lat.append(latest(srv, t, "infer_ms"))
 
-    vw = cv2.VideoWriter(out, cv2.VideoWriter_fourcc(*"mp4v"), fps,
-                         (_FRAME_PX + _PANEL_W, _PANEL_H * 2))
+    vw = cv2.VideoWriter(
+        out, cv2.VideoWriter_fourcc(*"mp4v"), fps, (_FRAME_PX + _PANEL_W, _PANEL_H * 2)
+    )
     for i, (t, path) in enumerate(frames):
         im = cv2.imread(path)
         if im is None:
@@ -226,20 +258,38 @@ def main(record, bridge_trace, out, fps):
         col = np.full((_PANEL_H * 2, _FRAME_PX, 3), 24, np.uint8)
         col[:_FRAME_PX] = cv2.resize(im, (_FRAME_PX, _FRAME_PX), interpolation=cv2.INTER_NEAREST)
         _jp(col, "方策が見ている映像 (224x224)", (12, _FRAME_PX + 14), 18)
-        _jp(col, f"経過 {t - t0:5.2f} 秒     {i + 1}/{len(frames)} コマ",
-            (12, _FRAME_PX + 44), 16, (185, 185, 185))
+        _jp(
+            col,
+            f"経過 {t - t0:5.2f} 秒     {i + 1}/{len(frames)} コマ",
+            (12, _FRAME_PX + 44),
+            16,
+            (185, 185, 185),
+        )
         if np.isfinite(cmd_dz[i]):
-            _jp(col, f"この時の指令   上下 {cmd_dz[i]:+6.1f} mm    前後 {cmd_dx[i]:+6.1f} mm",
-                (12, _FRAME_PX + 72), 16, (185, 185, 185))
+            _jp(
+                col,
+                f"この時の指令   上下 {cmd_dz[i]:+6.1f} mm    前後 {cmd_dx[i]:+6.1f} mm",
+                (12, _FRAME_PX + 72),
+                16,
+                (185, 185, 185),
+            )
         if lat[i]:
             _jp(col, f"推論 {lat[i]:.0f} ms", (12, _FRAME_PX + 100), 15, (150, 150, 150))
 
-        top = _plot([(tip_z, "上下 z", _C_Z), (tip_x, "前後 x", _C_X)], i,
-                    "手先が実際にいた位置（胴体基準）", "mm",
-                    "z が増える＝手が上がった / x が減る＝体に近づいた")
-        bot = _plot([(cmd_dz, "上下 z", _C_Z), (cmd_dx, "前後 x", _C_X)], i,
-                    "方策が出した移動量（16点先の目標まで）", "mm",
-                    "0 より上＝そちらへ動けという指令")
+        top = _plot(
+            [(tip_z, "上下 z", _C_Z), (tip_x, "前後 x", _C_X)],
+            i,
+            "手先が実際にいた位置（胴体基準）",
+            "mm",
+            "z が増える＝手が上がった / x が減る＝体に近づいた",
+        )
+        bot = _plot(
+            [(cmd_dz, "上下 z", _C_Z), (cmd_dx, "前後 x", _C_X)],
+            i,
+            "方策が出した移動量（16点先の目標まで）",
+            "mm",
+            "0 より上＝そちらへ動けという指令",
+        )
         vw.write(np.concatenate([col, np.concatenate([top, bot], axis=0)], axis=1))
     vw.release()
 

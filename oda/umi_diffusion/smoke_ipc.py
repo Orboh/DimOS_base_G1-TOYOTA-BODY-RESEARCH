@@ -1,4 +1,18 @@
 #!/usr/bin/env python
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Client-side IPC smoke test for umi_policy_server (Step 3, offline / dummy-cam).
 
 Assumes a server is already running (start it with --dummy-cam). Sends a few predict
@@ -9,6 +23,7 @@ end-to-end WITHOUT a GoPro or a robot.
 Run (after starting the server):
   python oda/umi_diffusion/smoke_ipc.py            # any env with pyzmq+msgpack
 """
+
 import sys
 import time
 
@@ -33,8 +48,13 @@ def main():
 
     ok = True
     for i in range(6):
-        req = {"cmd": "predict", "t": time.time(), "eef_pos": pos, "eef_rot_aa": aa,
-               "reset": (i == 0)}
+        req = {
+            "cmd": "predict",
+            "t": time.time(),
+            "eef_pos": pos,
+            "eef_rot_aa": aa,
+            "reset": (i == 0),
+        }
         t0 = time.time()
         sock.send(msgpack.packb(req, use_bin_type=True))
         rep = msgpack.unpackb(sock.recv(), raw=False)
@@ -45,8 +65,10 @@ def main():
             break
         acts = np.asarray(rep["actions"], dtype=float)
         assert acts.ndim == 2 and acts.shape[-1] == 6, f"expected (N,6), got {acts.shape}"
-        print(f"[{i}] n={rep['n']} shape={acts.shape} infer={rep.get('infer_ms',0):.1f}ms "
-              f"rtt={rtt:.1f}ms wp0_pos={np.round(acts[0,:3],4)} wp0_aa={np.round(acts[0,3:],4)}")
+        print(
+            f"[{i}] n={rep['n']} shape={acts.shape} infer={rep.get('infer_ms', 0):.1f}ms "
+            f"rtt={rtt:.1f}ms wp0_pos={np.round(acts[0, :3], 4)} wp0_aa={np.round(acts[0, 3:], 4)}"
+        )
     sock.close(0)
     print("SMOKE_IPC", "OK" if ok else "FAILED")
     sys.exit(0 if ok else 1)

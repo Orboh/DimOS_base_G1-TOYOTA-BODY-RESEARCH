@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """カメラ座標 -> ロボット(torso)座標 変換の中身をプログラムで調べるスクリプト。
 
 IkReachBridge が実際に使っている変換 (ik_reach_bridge.py の
@@ -41,7 +55,7 @@ def main() -> None:
     print("=" * 72)
     print("[1] 構成要素")
     print("=" * 72)
-    print(f"URDF d435_joint (torso_link -> d435_link):")
+    print("URDF d435_joint (torso_link -> d435_link):")
     print(f"  xyz = {_D435_XYZ}   (前+X, 左+Y, 上+Z [m])")
     print(f"  rpy = {_D435_RPY}   (pitch {np.degrees(_D435_RPY[1]):.1f}° 下向き)")
     print(f"REP-103 光学フレーム回転 (d435_link -> color_optical) wxyz = {_OPTICAL_WXYZ}")
@@ -51,10 +65,8 @@ def main() -> None:
     print("ロボット(torso_link)フレームの軸の意味:")
     print("  +X = ロボットの前方, +Y = 左, +Z = 上")
 
-    # --- 個別の SE3 ---
-    T_torso_d435 = pinocchio.SE3(
-        pinocchio.rpy.rpyToMatrix(*_D435_RPY), _D435_XYZ.copy()
-    )
+    # 個別の SE3
+    T_torso_d435 = pinocchio.SE3(pinocchio.rpy.rpyToMatrix(*_D435_RPY), _D435_XYZ.copy())
     r_opt = pinocchio.Quaternion(*_OPTICAL_WXYZ).toRotationMatrix()
     T_d435_optical = pinocchio.SE3(r_opt, np.zeros(3))
 
@@ -72,9 +84,7 @@ def main() -> None:
     print("変換式(成分表示):")
     R, t = T.rotation, T.translation
     for i, ax in enumerate("xyz"):
-        terms = " + ".join(
-            f"({R[i, j]:+.4f})*{c}_cam" for j, c in enumerate("xyz")
-        )
+        terms = " + ".join(f"({R[i, j]:+.4f})*{c}_cam" for j, c in enumerate("xyz"))
         print(f"  {ax}_torso = {terms} {t[i]:+.4f}")
 
     print()

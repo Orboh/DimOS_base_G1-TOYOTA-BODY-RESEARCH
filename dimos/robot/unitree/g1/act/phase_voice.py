@@ -86,7 +86,7 @@ class PhaseVoice:
             if not isinstance(self._announcer, LogAnnouncer):
                 logger.info(f"[VOICE] {text}")
             self._announcer.say(text)
-        except Exception as exc:  # noqa: BLE001 — audio must never break the robot loop
+        except Exception as exc:
             logger.warning(f"phase voice failed ({exc!r}); line was: {text}")
 
     def reset(self) -> None:
@@ -142,7 +142,7 @@ def build_phase_voice(
             logger.info(f"phase voice: G1 speaker ready (volume={volume})")
             _shared_announcer = ann
             return PhaseVoice(ann)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning(
                 f"phase voice: G1 speaker unavailable ({exc!r}); falling back to log-only. "
                 "Japanese TTS needs `pyopenjtalk` + `scipy` in this venv."

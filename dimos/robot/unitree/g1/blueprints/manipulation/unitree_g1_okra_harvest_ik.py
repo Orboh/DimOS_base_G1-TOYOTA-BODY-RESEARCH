@@ -6,6 +6,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """ブループリント: オクラ収穫 統合構成（胸部ZED検出 → IK → ACT → 切断 + 歩行 + 音声）。
 
@@ -95,11 +109,11 @@ unitree_g1_okra_harvest_ik = (
         *_modules,
         HarvestModule.blueprint(
             use_dummy=False,
-            # --- 検出（胸部 ZED + okra-seg, [[SS-01]] / [[SS-04]]）---
+            # 検出（胸部 ZED + okra-seg, [[SS-01]] / [[SS-04]]）
             use_zed_depth=True,
             yolo_model=os.getenv("OKRA_YOLO_MODEL", "Kota0612/okra-seg-detector"),
             target_classes=os.getenv("OKRA_TARGET", "okra"),
-            # --- 把持（IK → (任意)ACT → 切断 シーケンス, [[SS-04/05/06]]）---
+            # 把持（IK → (任意)ACT → 切断 シーケンス, [[SS-04/05/06]]）
             # OKRA_ACT=0 で ACT を無効化（IK到達→スクリプト式グリッパ close のみ）。
             use_act_grasp=_USE_ACT_GRASP,
             use_ik_grasp_sequence=_ARM,
@@ -107,13 +121,15 @@ unitree_g1_okra_harvest_ik = (
             # act_service を ACT_REPO_ID=sotata/act-okura-kinesthetic-wrist-7d で起動すること。
             act_right_arm_only_7d=True,
             act_endpoint=os.getenv("ACT_ENDPOINT", "tcp://127.0.0.1:5701"),
-            cut_close_q=4.4,   # 切断時のグリッパ閉じ位置 [rad]
-            blade_max_q=5.2,   # 刃保護の上限 [rad]（BladeGuard）
-            cam_to_torso_xyzquat=os.getenv("OKRA_CAM_TO_TORSO", ""),  # 要実測（未設定=camera素通り）
-            # --- 切断可否 / 確認 VLM（moondream, [[SS-02]]）---
+            cut_close_q=4.4,  # 切断時のグリッパ閉じ位置 [rad]
+            blade_max_q=5.2,  # 刃保護の上限 [rad]（BladeGuard）
+            cam_to_torso_xyzquat=os.getenv(
+                "OKRA_CAM_TO_TORSO", ""
+            ),  # 要実測（未設定=camera素通り）
+            # 切断可否 / 確認 VLM（moondream, [[SS-02]]）
             vlm_model="moondream",
             ollama_host=os.getenv("OLLAMA_HOST", ""),
-            # --- 歩行（再配置/掃引, [[SS-07]]）+ 音声 ---
+            # 歩行（再配置/掃引, [[SS-07]]）+ 音声
             use_base_move=_WALK,
             use_forward_search=_WALK,
             use_g1_speaker=True,
@@ -123,9 +139,7 @@ unitree_g1_okra_harvest_ik = (
         # 右手首は color_image を出すため、ACT 手首入力（cam_right_wrist）にリネーム。
         # ZED の color_image / depth_image は head のまま検出へ。ACT 無効時はモジュール
         # 自体が組み込まれていないので、remap も不要（空リスト）。
-        [(RightWristTeleimagerCamera, "color_image", "cam_right_wrist")]
-        if _USE_ACT_GRASP
-        else []
+        [(RightWristTeleimagerCamera, "color_image", "cam_right_wrist")] if _USE_ACT_GRASP else []
     )
     .transports(
         {
@@ -139,7 +153,9 @@ unitree_g1_okra_harvest_ik = (
             ),
             ("motor_states", JointState): LCMTransport("/g1/motor_states", JointState),
             ("arm_target", JointState): LCMTransport("/g1/arm_target", JointState),
-            ("right_gripper_state", JointState): LCMTransport("/g1/right_gripper_state", JointState),
+            ("right_gripper_state", JointState): LCMTransport(
+                "/g1/right_gripper_state", JointState
+            ),
             ("gripper_target", JointState): LCMTransport("/g1/gripper_target", JointState),
             ("cmd_vel", Twist): LCMTransport("/cmd_vel", Twist),
         }

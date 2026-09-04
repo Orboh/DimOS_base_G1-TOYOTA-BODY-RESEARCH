@@ -6,6 +6,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """点群 3D 検出(B2)の可視化: フィルタ後の物体点群を画像に再投影してオーバーレイ（診断用）。
 
@@ -56,8 +70,15 @@ def main() -> None:
     fx, fy, cx, cy = calib.fx, calib.fy, calib.cx, calib.cy
     K = [fx, 0.0, cx, 0.0, fy, cy, 0.0, 0.0, 1.0]
     P = [fx, 0.0, cx, 0.0, 0.0, fy, cy, 0.0, 0.0, 0.0, 1.0, 0.0]
-    camera_info = CameraInfo(height=h, width=w, distortion_model="plumb_bob",
-                             D=list(calib.disto), K=K, P=P, frame_id="zed_optical")
+    camera_info = CameraInfo(
+        height=h,
+        width=w,
+        distortion_model="plumb_bob",
+        D=list(calib.disto),
+        K=K,
+        P=P,
+        frame_id="zed_optical",
+    )
     ident = Transform.identity()
     detector = Yolo2DDetector(model_name=args.model)
 
@@ -107,8 +128,16 @@ def main() -> None:
         c = d3d.center
         cu, cv_ = int(fx * c.x / max(c.z, 1e-6) + cx), int(fy * c.y / max(c.z, 1e-6) + cy)
         cv2.circle(bgr, (cu, cv_), 8, (0, 255, 255), -1)  # centroid yellow
-        cv2.putText(bgr, f"{det.name} z={c.z:.2f}m ({len(obj)}pts)", (x1, max(0, y1 - 8)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2, cv2.LINE_AA)
+        cv2.putText(
+            bgr,
+            f"{det.name} z={c.z:.2f}m ({len(obj)}pts)",
+            (x1, max(0, y1 - 8)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (0, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
 
     cv2.imwrite(args.out, bgr)
     print(f"saved={args.out} detections={len(dets)}")

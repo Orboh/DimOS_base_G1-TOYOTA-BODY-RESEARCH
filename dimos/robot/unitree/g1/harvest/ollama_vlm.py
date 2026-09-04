@@ -5,6 +5,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """``verify_harvest`` backed by a LOCAL Ollama vision model (Moondream / Qwen3-VL).
 
@@ -55,7 +69,7 @@ _EMPTY_KEYWORDS = ("empty", "nothing", "no object", "not holding")
 
 _AFFIRMATIVE = ("yes", "y", "true", "はい", "holding", "ある")
 
-# --- detection (scene-level "is there okra in view?") --------------------------
+# detection (scene-level "is there okra in view?")
 # moondream path: describe the scene, then keyword-match for okra presence.
 DETECT_CAPTION_PROMPT = "Briefly describe any okra or green vegetables/pods visible in the image."
 # qwen3-vl path: a direct yes/no question.
@@ -64,7 +78,16 @@ DETECT_YESNO_PROMPT = (
     "Answer with only 'yes' or 'no'."
 )
 # Caption words that indicate okra is present in the scene.
-_OKRA_PRESENT_KEYWORDS = ("okra", "okura", "pod", "ladyfinger", "lady finger", "green vegetable", "green bean", "green")
+_OKRA_PRESENT_KEYWORDS = (
+    "okra",
+    "okura",
+    "pod",
+    "ladyfinger",
+    "lady finger",
+    "green vegetable",
+    "green bean",
+    "green",
+)
 # Caption words that override a stray match (no okra in the scene).
 _OKRA_ABSENT_KEYWORDS = ("no okra", "no green", "no vegetable", "nothing", "empty")
 
@@ -113,7 +136,7 @@ def make_ollama_verify(
 
     enc = encode or _encode
 
-    # --- moondream: /api/generate caption, then keyword-match ----------------
+    # moondream: /api/generate caption, then keyword-match
     def _default_generate(b64: str, text: str) -> str:
         import requests
 
@@ -144,7 +167,7 @@ def make_ollama_verify(
         logger.info(f"[ollama-verify] moondream caption {caption[:60]!r} -> {result}")
         return result
 
-    # --- qwen3-vl & others: chat yes/no (reasoning on) -----------------------
+    # qwen3-vl & others: chat yes/no (reasoning on)
     def _build_llm() -> Any:
         from langchain_ollama import ChatOllama
 
@@ -179,8 +202,10 @@ def make_ollama_verify(
             return False
         try:
             return _verify_moondream(frame) if moondream else _verify_chat(frame)
-        except Exception as exc:  # noqa: BLE001 — Ollama down / model error => not verified
-            logger.warning(f"[ollama-verify] failed ({exc}); is Ollama running with '{model}'? -> False")
+        except Exception as exc:
+            logger.warning(
+                f"[ollama-verify] failed ({exc}); is Ollama running with '{model}'? -> False"
+            )
             return False
 
     return verify
@@ -295,25 +320,29 @@ def make_ollama_detect_okra(
             return []
         try:
             present = _present_moondream(frame) if moondream else _present_chat(frame)
-        except Exception as exc:  # noqa: BLE001 — Ollama down / model error => no detection
-            logger.warning(f"[ollama-detect] failed ({exc}); is Ollama running with '{model}'? -> []")
+        except Exception as exc:
+            logger.warning(
+                f"[ollama-detect] failed ({exc}); is Ollama running with '{model}'? -> []"
+            )
             return []
         if not present:
             return []
         state["n"] += 1
         # Fresh id each sighting so the flow keeps engaging (bounded by
         # max_harvest_iterations); in-reach + ripe so select routes to grasp.
-        return [Okra(id=f"vlm_okra_{state['n']}", pos_3d=dict(pos), ripeness=ripeness, reachable=True)]
+        return [
+            Okra(id=f"vlm_okra_{state['n']}", pos_3d=dict(pos), ripeness=ripeness, reachable=True)
+        ]
 
     return detect_okra
 
 
 __all__ = [
-    "make_ollama_verify",
-    "make_ollama_detect_okra",
-    "DEFAULT_HOST",
-    "YESNO_PROMPT",
     "CAPTION_PROMPT",
+    "DEFAULT_HOST",
     "DETECT_CAPTION_PROMPT",
     "DETECT_YESNO_PROMPT",
+    "YESNO_PROMPT",
+    "make_ollama_detect_okra",
+    "make_ollama_verify",
 ]

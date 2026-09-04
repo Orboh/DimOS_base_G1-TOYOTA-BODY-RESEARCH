@@ -5,6 +5,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """Stoppable okra-ACT reach as one grasp episode (the real ``grasp_okra``).
 
@@ -29,9 +43,9 @@ The okra-ACT model itself (right-arm reach) is the verified Stage-B policy; an
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import threading
 import time
-from collections.abc import Callable
 from typing import Any
 
 from dimos.utils.logging_config import setup_logger
@@ -199,7 +213,9 @@ class ActGraspModule:
         if self._act_call is None:
             self._act_call = make_zmq_act_call(self._act_endpoint)
         okra_id = getattr(okra, "id", "?")
-        logger.info(f"[act-grasp] reach START okra={okra_id} force={f} (max_steps={self._max_steps})")
+        logger.info(
+            f"[act-grasp] reach START okra={okra_id} force={f} (max_steps={self._max_steps})"
+        )
 
         period = 1.0 / max(1e-3, self._rate_hz)
         reset, steps, iters = True, 0, 0
@@ -226,14 +242,22 @@ class ActGraspModule:
                             # from image_jpeg, so send the wrist there.
                             wrist_jpeg = self._encode(wrist)
                             images = {"cam_right_wrist": wrist_jpeg}
-                            req = {"state": obs_state, "images": images,
-                                   "image_jpeg": wrist_jpeg, "reset": reset}
+                            req = {
+                                "state": obs_state,
+                                "images": images,
+                                "image_jpeg": wrist_jpeg,
+                                "reset": reset,
+                            }
                         else:
                             images = {"cam_high": self._encode(image)}
                             if wrist is not None:
                                 images["cam_right_wrist"] = self._encode(wrist)
-                            req = {"state": obs_state, "images": images,
-                                   "image_jpeg": images["cam_high"], "reset": reset}
+                            req = {
+                                "state": obs_state,
+                                "images": images,
+                                "image_jpeg": images["cam_high"],
+                                "reset": reset,
+                            }
                         action = self._act_call(req)
                         reset = False
                         steps += 1
@@ -241,7 +265,7 @@ class ActGraspModule:
                         if self._reached_fn and self._reached_fn(list(action), steps):
                             reached = True
                             break
-                    except Exception as exc:  # noqa: BLE001 — ACT service hiccup; keep trying
+                    except Exception as exc:
                         logger.warning(f"[act-grasp] act_call failed: {exc}")
             next_t += period
             wait = next_t - time.perf_counter()
