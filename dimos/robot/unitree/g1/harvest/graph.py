@@ -61,7 +61,10 @@ background safety interrupt.
 
 from __future__ import annotations
 
+from typing import Any
+
 from langgraph.graph import END, START, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 
 from dimos.robot.unitree.g1.harvest import announce
 from dimos.robot.unitree.g1.harvest.announce import Announcer, NullAnnouncer
@@ -94,7 +97,7 @@ def build_harvest_graph(
     config: HarvestConfig | None = None,
     announcer: Announcer | None = None,
     safety: SafetyGate | None = None,
-):
+) -> CompiledStateGraph[HarvestState, Any, Any, Any]:
     """Build and compile the harvest ``StateGraph``.
 
     Args:

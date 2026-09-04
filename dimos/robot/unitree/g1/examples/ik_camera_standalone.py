@@ -98,7 +98,7 @@ _DISTORTION = {
 _running = True
 
 
-def _stop(*_a):
+def _stop(*_a: object) -> None:
     global _running
     _running = False
 

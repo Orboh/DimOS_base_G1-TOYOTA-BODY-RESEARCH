@@ -186,7 +186,7 @@ def build_live_harvest_skills(
     pixel_to_base: Callable[[float, float, Any], dict[str, float]] | None = None,
     depth_getter: Callable[[float, float], float] | None = None,
     verify_fn: Callable[[], bool] | None = None,
-    detect_fn: Callable[[], list] | None = None,
+    detect_fn: Callable[[], list[Okra]] | None = None,
     next_station_fn: Callable[[], bool] | None = None,
     yolo_model: str = "yolo11n.pt",
 ) -> tuple[DimosHarvestSkills, Any]:

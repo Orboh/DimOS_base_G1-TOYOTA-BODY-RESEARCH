@@ -145,7 +145,7 @@ class _PolicyClient:
             pass
         self._sock = None
 
-    def request(self, payload: dict) -> dict | None:
+    def request(self, payload: dict[str, Any]) -> dict[str, Any] | None:
         import msgpack
 
         try:
@@ -424,7 +424,7 @@ class UmiDiffusionBridge(Module):
             return None
         return p
 
-    def _trace(self, rec: dict) -> None:
+    def _trace(self, rec: dict[str, Any]) -> None:
         """Append one JSONL record. Diagnostic only — must never disturb the control path."""
         if self._trace_path is None:
             return
@@ -435,7 +435,7 @@ class UmiDiffusionBridge(Module):
             logger.warning(f"UmiDiffusionBridge: trace write failed ({e!r}); disabling trace.")
             self._trace_path = None
 
-    def _camera_health(self) -> dict | None:
+    def _camera_health(self) -> dict[str, Any] | None:
         """Ask the server about the wrist camera. None = server unreachable.
 
         Uses its own (short) timeout: no inference runs, so the predict budget — which is
@@ -491,7 +491,7 @@ class UmiDiffusionBridge(Module):
         span = float(np.linalg.norm(self._to_torso(chunk[-1][:3]) - self._to_torso(chunk[0][:3])))
         return " ".join(parts) + f" span={span * 1000:.1f}"
 
-    def _note_skip(self, stats: dict, key: str, msg: str, rec: dict) -> None:
+    def _note_skip(self, stats: dict[str, Any], key: str, msg: str, rec: dict[str, Any]) -> None:
         stats[key] += 1
         logger.warning(msg)
         self._trace({**rec, "kind": "skip", "reason": key})
