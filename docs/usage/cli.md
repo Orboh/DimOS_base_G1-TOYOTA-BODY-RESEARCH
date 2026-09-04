@@ -75,22 +75,22 @@ dimos run <blueprint> [<blueprint> ...] [--daemon] [--disable <module> ...]
 
 ```bash
 # Foreground (Ctrl-C to stop)
-dimos run unitree-go2
+dimos run unitree-g1
 
 # Background (returns immediately)
-dimos run unitree-go2-agentic --daemon
+dimos run unitree-g1-agentic --daemon
 
 # Replay with Rerun viewer
-dimos --replay --viewer rerun run unitree-go2
+dimos --replay --viewer rerun run unitree-g1
 
 # Real robot
-dimos run unitree-go2-agentic --robot-ip 192.168.123.161
+dimos run unitree-g1-agentic --robot-ip 192.168.123.161
 
 # Compose modules dynamically
-dimos run unitree-go2 keyboard-teleop
+dimos run unitree-g1 keyboard-teleop
 
 # Disable specific modules
-dimos run unitree-go2-agentic --disable OsmSkill WebInput
+dimos run unitree-g1-agentic --disable OsmSkill WebInput
 ```
 
 When `--daemon` is used, the process:
@@ -168,7 +168,7 @@ dimos log                    # last 50 lines, human-readable
 dimos log -f                 # follow in real time
 dimos log -n 100             # last 100 lines
 dimos log --json | jq .event # raw JSONL, extract events
-dimos log -r 20260306-143022-unitree-go2  # specific run
+dimos log -r 20260306-143022-unitree-g1  # specific run
 ```
 
 All processes (main + workers) write to the same `main.jsonl`. Filter by module:
@@ -209,7 +209,7 @@ Works with any agentic blueprint — does not require MCP. Publishes directly to
 
 ### `dimos mcp`
 
-Interact with the running MCP server. **Requires a blueprint that includes `McpServer`** — for example `unitree-go2-agentic`. The MCP server runs at `http://localhost:9990/mcp` by default (`--mcp-port` / `--mcp-host` to override).
+Interact with the running MCP server. **Requires a blueprint that includes `McpServer`** — for example `unitree-g1-agentic`. The MCP server runs at `http://localhost:9990/mcp` by default (`--mcp-port` / `--mcp-host` to override).
 
 To add MCP to a blueprint, include both `McpServer` (exposes skills as HTTP tools) and `McpClient.blueprint()` (LLM agent that fetches tools from the server):
 
@@ -308,7 +308,7 @@ agentspy
 Live resource monitor TUI — CPU, memory, and process stats. Can also be activated during a run with `--dtop`:
 
 ```bash
-dimos --dtop run unitree-go2
+dimos --dtop run unitree-g1
 ```
 
 Or run standalone:

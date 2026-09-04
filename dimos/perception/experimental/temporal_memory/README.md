@@ -35,12 +35,10 @@ Five components, each independently testable:
 ## Quickstart
 
 ```bash
-# With a real robot or simulation
+# The shipped `unitree-go2-temporal-memory` blueprint was removed with the Go2
+# stack. Compose the standalone `temporal-memory` component with a camera source
+# (see below), then:
 export OPENAI_API_KEY=...
-dimos --simulation run unitree-go2-temporal-memory
-
-# With replay data
-dimos --replay run unitree-go2-temporal-memory
 
 # Chat with the agent (queries temporal memory)
 humancli

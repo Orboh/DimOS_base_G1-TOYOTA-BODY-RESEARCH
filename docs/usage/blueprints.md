@@ -246,7 +246,7 @@ config(**blueprint_args)  # raises pydantic.ValidationError if args are incorrec
 
 `dimos.robot.cli.dimos.arg_help()` is a helper function that will return a string
 containing all details of these arguments (this is how the output is produced when
-running `dimos run unitree-go2 --help`, for example):
+running `dimos run unitree-g1 --help`, for example):
 
 ```python session=blueprint-ex1
 from dimos.robot.cli.dimos import arg_help

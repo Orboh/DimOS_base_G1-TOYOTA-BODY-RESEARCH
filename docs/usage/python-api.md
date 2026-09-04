@@ -58,7 +58,7 @@ cv2.waitKey(0)
 Start a daemon first (via CLI or another script), then connect to it:
 
 ```bash
-dimos run unitree-go2-agentic
+dimos run unitree-g1-agentic
 ```
 
 ```python skip

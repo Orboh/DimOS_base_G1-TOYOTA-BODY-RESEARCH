@@ -26,9 +26,10 @@ Centralized control system for multi-arm robots with per-joint arbitration.
 
 ```bash
 # Terminal 1: Run coordinator
-dimos run coordinator-mock          # Single 7-DOF mock arm
-dimos run coordinator-dual-mock     # Dual arms (7+6 DOF)
-dimos run coordinator-piper-xarm    # Real hardware
+dimos run unitree-g1-coordinator    # G1 whole-body coordinator (the only one
+                                    # shipped in this fork; the mock / xArm /
+                                    # Piper coordinators were removed with the
+                                    # vendor arm stacks)
 
 # Terminal 2: Control via CLI
 python -m dimos.manipulation.control.coordinator_client

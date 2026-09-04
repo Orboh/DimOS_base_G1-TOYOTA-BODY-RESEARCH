@@ -118,3 +118,9 @@ oda/ZED_M_Depth_check/finetune_V5/output/
 oda/ZED_M_Depth_check/finetune_V5/runs/
 oda/ZED_M_Depth_check/finetune_V5/model/
 oda/ZED_M_Depth_check/**/*.pt
+
+# --- Runtime debug captures (never commit these; see chore/prune-non-okra) ---
+seat_finder_debug/
+*_debug/
+*_detected.jpg
+*_input.jpg

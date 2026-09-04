@@ -8,30 +8,30 @@ Choose your viewer via the CLI:
 
 ```bash
 # Rerun native viewer (default) - dimos-viewer with built-in teleop + click-to-navigate
-dimos run unitree-go2
+dimos run unitree-g1
 
 # Explicitly select the viewer backend:
-dimos --viewer rerun run unitree-go2
-dimos --viewer none run unitree-go2
+dimos --viewer rerun run unitree-g1
+dimos --viewer none run unitree-g1
 ```
 
 Control how the Rerun viewer opens with `--rerun-open` and `--rerun-web`:
 
 ```bash
 # Open native desktop viewer (default)
-dimos --rerun-open native run unitree-go2
+dimos --rerun-open native run unitree-g1
 
 # Open web viewer in browser
-dimos --rerun-open web run unitree-go2
+dimos --rerun-open web run unitree-g1
 
 # Open both native and web
-dimos --rerun-open both run unitree-go2
+dimos --rerun-open both run unitree-g1
 
 # No viewer (headless) — data still accessible via gRPC
-dimos --rerun-open none run unitree-go2
+dimos --rerun-open none run unitree-g1
 
 # Serve the web viewer without auto-opening a browser
-dimos --rerun-web --rerun-open native run unitree-go2
+dimos --rerun-web --rerun-open native run unitree-g1
 ```
 
 ## Viewer Modes Explained
@@ -97,14 +97,16 @@ This happens on lower-end hardware (NUC, older laptops) with large maps.
 
 ### Increase Voxel Size
 
-Edit [`dimos/robot/unitree/go2/blueprints/smart/unitree_go2.py`](/dimos/robot/unitree/go2/blueprints/smart/unitree_go2.py):
+Raise `voxel_size` where the mapper is composed — e.g.
+[`uintree_g1_primitive_no_nav.py`](/dimos/robot/unitree/g1/blueprints/primitive/uintree_g1_primitive_no_nav.py)
+deploys [`VoxelGridMapper`](/dimos/mapping/voxels.py):
 
 ```python skip
 # Before (high detail, slower on large maps)
-voxel_mapper(voxel_size=0.05),  # 5cm voxels
+VoxelGridMapper.blueprint(voxel_size=0.05),  # 5cm voxels
 
 # After (lower detail, 8x faster)
-voxel_mapper(voxel_size=0.1),   # 10cm voxels
+VoxelGridMapper.blueprint(voxel_size=0.1),   # 10cm voxels
 ```
 
 **Trade-off:**
