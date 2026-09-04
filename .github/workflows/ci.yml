@@ -93,32 +93,18 @@ jobs:
             (cd "$crate" && cargo test --workspace --all-features --locked)
           done
 
-  md-babel:
-    timeout-minutes: 15
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read  # For checkout
-
-    steps:
-      - uses: actions/checkout@v6
-      - name: Fetch LFS data needed by doc code blocks
-        run: git lfs pull --include="data/.lfs/go2_bigoffice.db.tar.gz,data/.lfs/unitree_go2_bigoffice_map.pickle.tar.gz"
-      # Docs decode JPEG from SQLite via PyTurboJPEG; pyaudio needs portaudio.
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libturbojpeg portaudio19-dev
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: true
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 'lts/*'
-      - name: Install Python dependencies
-        run: uv sync --group tests --frozen
-      - name: Execute documentation code blocks
-        run: ./bin/run-doc-codeblocks --ci --no-cache
+  # md-babel（docs のコードブロック実行）はこのフォークでは無効化している。
+  #
+  # 理由: ジョブは get_data() 経由で data/.lfs の実体を要求するが、Orboh フォークの
+  # LFS ストアに blob が push されておらず `git lfs pull` が [404] で失敗する。
+  # 必要なデータセットは cafe.jpg / apartment / models_yolo / go2_short /
+  # unitree_office_walk で計約 695MB あり、GitHub の LFS 無料枠(1GB)を超える。
+  #
+  # 復活させる場合: 上流(dimensionalOS/dimos)から上記オブジェクトを取得して
+  #   git lfs push origin --object-id <OID>...
+  # で origin の LFS ストアへ入れたうえで、このジョブと ci-complete の needs を戻す。
+  # なお LFS を揃えても、コードブロック側に別の失敗
+  # (`1 validation error for Config: extra_forbidden`) が残っていることを確認済み。
 
   docs-validate:
     timeout-minutes: 5
@@ -338,7 +324,6 @@ jobs:
     needs:
     - lint
     - rust
-    - md-babel
     - docs-validate
     - tests
     - self-hosted-tests
