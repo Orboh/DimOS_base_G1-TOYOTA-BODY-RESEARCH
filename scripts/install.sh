@@ -877,9 +877,9 @@ run_post_install_tests() {
 
     local cmd
     if [[ "$EXTRAS" == *"sim"* ]] || [[ "$EXTRAS" == "all" ]]; then
-        cmd="dimos --simulation run unitree-go2"
+        cmd="dimos --simulation run unitree-g1-sim"
     else
-        cmd="dimos --replay run unitree-go2"
+        cmd="dimos --simulation run unitree-g1-sim"
     fi
 
     info "running: ${DIM}${cmd}${RESET} (Ctrl+C to stop)"
@@ -915,11 +915,11 @@ print_quickstart() {
     fi
 
     if [[ "$EXTRAS" == *"unitree"* ]] || [[ "$EXTRAS" == "all" ]] || [[ "$EXTRAS" == *"base"* ]]; then
-        printf "    %s# simulation%s\n    dimos --simulation run unitree-go2\n\n" "$DIM" "$RESET"
-        printf "    %s# real hardware%s\n    ROBOT_IP=192.168.1.100 dimos run unitree-go2\n\n" "$DIM" "$RESET"
+        printf "    %s# simulation%s\n    dimos --simulation run unitree-g1-sim\n\n" "$DIM" "$RESET"
+        printf "    %s# real hardware%s\n    ROBOT_IP=192.168.1.100 dimos run unitree-g1-basic\n\n" "$DIM" "$RESET"
     fi
     if [[ "$EXTRAS" == *"sim"* ]] || [[ "$EXTRAS" == "all" ]]; then
-        printf "    %s# MuJoCo simulation%s\n    dimos --simulation run unitree-go2\n\n" "$DIM" "$RESET"
+        printf "    %s# MuJoCo simulation%s\n    dimos --simulation run unitree-g1-sim\n\n" "$DIM" "$RESET"
     fi
     if [[ "$INSTALL_MODE" == "dev" ]]; then
         printf "    %s# tests%s\n    uv run pytest dimos\n\n    %s# type check%s\n    uv run mypy dimos\n\n" "$DIM" "$RESET" "$DIM" "$RESET"

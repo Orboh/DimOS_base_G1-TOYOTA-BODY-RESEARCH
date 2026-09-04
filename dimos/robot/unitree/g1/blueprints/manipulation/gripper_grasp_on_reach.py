@@ -104,10 +104,10 @@ class GripperGraspOnReach(Module):
 
     config: GripperGraspOnReachConfig
 
-    reach_done: In[Bool]              # IK settled at pre-grasp -> close now
-    clicked_point: In[PointStamped]   # new cycle trigger: ensure standard opening
+    reach_done: In[Bool]  # IK settled at pre-grasp -> close now
+    clicked_point: In[PointStamped]  # new cycle trigger: ensure standard opening
     right_gripper_state: In[JointState]  # measured Dex1 q (from G1GripperConnection)
-    gripper_target: Out[JointState]   # right Dex1 target q (position[0])
+    gripper_target: Out[JointState]  # right Dex1 target q (position[0])
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -166,9 +166,7 @@ class GripperGraspOnReach(Module):
             return  # click on another entity -- the bridge rejects it too; keep gates in sync
         if self.config.confirm_click:
             with self._lock:
-                fire = self._confirm.feed(
-                    float(_msg.x), float(_msg.y), float(_msg.z), time.time()
-                )
+                fire = self._confirm.feed(float(_msg.x), float(_msg.y), float(_msg.z), time.time())
             if not fire:
                 return  # armed only -- IkReachBridge logs the ARMED message
         with self._lock:

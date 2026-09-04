@@ -150,7 +150,9 @@ class G1RightArmIK:
 def load_g1_right_arm_ik(
     urdf_path: str | Path = DEFAULT_URDF,
     ik_config: PinocchioIKConfig | None = None,
-    gripper_offset_xyz: NDArray[np.floating[Any]] | list[float] | tuple[float, float, float] = PALM_OFFSET_FROM_WRIST,
+    gripper_offset_xyz: NDArray[np.floating[Any]]
+    | list[float]
+    | tuple[float, float, float] = PALM_OFFSET_FROM_WRIST,
 ) -> G1RightArmIK:
     """Build the 7-DOF right-arm reduced model and wrap it in PinocchioIK.
 
@@ -211,7 +213,10 @@ def load_g1_right_arm_ik(
     offset = np.asarray(gripper_offset_xyz, dtype=np.float64).reshape(3)
     reduced.addFrame(
         pinocchio.Frame(
-            GRIPPER_TIP_FRAME, ee_joint_id, 0, pinocchio.SE3(np.eye(3), offset),
+            GRIPPER_TIP_FRAME,
+            ee_joint_id,
+            0,
+            pinocchio.SE3(np.eye(3), offset),
             pinocchio.FrameType.OP_FRAME,
         )
     )
@@ -277,14 +282,16 @@ def fk_sanity_check(arm: G1RightArmIK | None = None) -> None:
     print(f"lower limits          : {arm.lower}")
     print(f"upper limits          : {arm.upper}")
 
-    # --- gripper-tip frame checks (Method B) ------------------------------------
+    # gripper-tip frame checks (Method B)
     # Bare wrist-joint placement vs the real tip frame: their difference == the offset
     # rotated into ROOT. Demonstrates the offset is applied (vs the old wrist-only target).
     pinocchio.forwardKinematics(arm.ik.model, arm.ik._data, q0)
     pinocchio.updateFramePlacements(arm.ik.model, arm.ik._data)
     wrist0 = arm.ik._data.oMi[arm.ee_joint_id].translation.copy()
     tip0 = arm.fk_tip(q0).translation
-    print(f"tip - wrist (ROOT)    : {np.asarray(tip0) - np.asarray(wrist0)}  (== offset rotated to ROOT)")
+    print(
+        f"tip - wrist (ROOT)    : {np.asarray(tip0) - np.asarray(wrist0)}  (== offset rotated to ROOT)"
+    )
 
     # Wrist-yaw consideration: rotating the last joint MUST move the tip (unless the
     # offset is parallel to the yaw axis). This is exactly what Method A could not do.
@@ -292,7 +299,9 @@ def fk_sanity_check(arm: G1RightArmIK | None = None) -> None:
     q_yaw[-1] = np.radians(30.0)  # right_wrist_yaw_joint is the last reduced DOF
     tip_yaw = arm.fk_tip(q_yaw).translation
     print(f"tip @ wrist_yaw=30deg : {np.asarray(tip_yaw)}")
-    print(f"tip shift from yaw    : {np.asarray(tip_yaw) - np.asarray(tip0)}  (nonzero => yaw is accounted for)")
+    print(
+        f"tip shift from yaw    : {np.asarray(tip_yaw) - np.asarray(tip0)}  (nonzero => yaw is accounted for)"
+    )
 
     # --- IK drives the tip onto the target (standoff is now a caller-side torso -X
     # offset, NOT baked into a wrist frame) -------------------------------------
@@ -303,7 +312,9 @@ def fk_sanity_check(arm: G1RightArmIK | None = None) -> None:
     q_sol, conv, err = arm.ik.solve(target, np.zeros(arm.ik.nq))
     tip_sol = arm.fk_tip(q_sol).translation
     back = np.linalg.norm(np.asarray(target.translation) - np.asarray(tip_sol))
-    print(f"\nsolve conv={conv} err={err:.5f}; |target - tip(sol)| = {back:.5f} m  (EXPECT ~0; tip==ik frame)")
+    print(
+        f"\nsolve conv={conv} err={err:.5f}; |target - tip(sol)| = {back:.5f} m  (EXPECT ~0; tip==ik frame)"
+    )
 
 
 if __name__ == "__main__":

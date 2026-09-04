@@ -34,7 +34,6 @@ from dimos.robot.unitree.g1.g1_rerun import (
 )
 from dimos.visualization.vis_module import vis_module
 
-
 unitree_g1_mid360_fastlio = autoconnect(
     FastLio2.blueprint(
         host_ip=os.getenv("LIDAR_HOST_IP", "192.168.123.164"),

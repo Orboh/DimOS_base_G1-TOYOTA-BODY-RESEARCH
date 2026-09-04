@@ -5,6 +5,20 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
 """ZMQ subscriber for RealSense camera frames from the G1 NX.
 
@@ -25,17 +39,17 @@ subscriber used by `examples/g1_vla_bringup.py` stage 3 and, later,
 from __future__ import annotations
 
 import base64
+from dataclasses import dataclass
 import threading
 import time
-from dataclasses import dataclass
 from typing import Any
 
 import cv2
 import msgpack
 import numpy as np
-import zmq
 from reactivex import Observable
 from reactivex.subject import Subject
+import zmq
 
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 
@@ -58,8 +72,8 @@ class ZmqImageSource:
 
     def __init__(self, config: ZmqCameraConfig | None = None) -> None:
         self.config = config or ZmqCameraConfig()
-        self._ctx: zmq.Context | None = None
-        self._socket: zmq.Socket | None = None
+        self._ctx: zmq.Context[zmq.Socket[bytes]] | None = None
+        self._socket: zmq.Socket[bytes] | None = None
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._subject: Subject[Image] = Subject()
@@ -114,7 +128,7 @@ class ZmqImageSource:
             rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
             ts = float((msg.get("timestamps") or {}).get(self.config.topic, time.time()))
             return Image.from_numpy(rgb, format=ImageFormat.RGB, frame_id=self.config.topic, ts=ts)
-        except Exception:  # noqa: BLE001
+        except Exception:
             return None
 
     def wait_for_first_frame(self, timeout_s: float) -> Image | None:
@@ -136,6 +150,6 @@ class ZmqImageSource:
         if self._socket is not None:
             try:
                 self._socket.close(linger=0)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             self._socket = None

@@ -1,4 +1,19 @@
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import time
+
 import numpy as np
 import pyzed.sl as sl
 
@@ -76,7 +91,9 @@ if __name__ == "__main__":
         if r["error"]:
             print(f"  FAILED: {r['error']}")
         else:
-            print(f"  FPS: {r['fps']:.1f}  |  coverage: {r['coverage_pct']:.1f}%  |  mean depth: {r['mean_depth_m']:.3f}m")
+            print(
+                f"  FPS: {r['fps']:.1f}  |  coverage: {r['coverage_pct']:.1f}%  |  mean depth: {r['mean_depth_m']:.3f}m"
+            )
         time.sleep(1)  # let the camera fully release before reopening
 
     print("\n" + "=" * 70)
@@ -86,5 +103,7 @@ if __name__ == "__main__":
         if r["error"]:
             print(f"{r['mode']:<18}{'FAILED':>10}")
         else:
-            print(f"{r['mode']:<18}{r['fps']:>10.1f}{r['coverage_pct']:>14.1f}{r['mean_depth_m']:>18.3f}")
+            print(
+                f"{r['mode']:<18}{r['fps']:>10.1f}{r['coverage_pct']:>14.1f}{r['mean_depth_m']:>18.3f}"
+            )
     print("=" * 70)

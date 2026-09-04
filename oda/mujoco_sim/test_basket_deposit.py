@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Verify a right-arm transfer and release into the fixed abdominal basket.
 
 The G1 URDF ends at the rubber hand: it has no actuated finger joints.  This test
@@ -135,9 +149,7 @@ def _solve(arm, target_torso: np.ndarray, q_seed: np.ndarray) -> np.ndarray:  # 
     import pinocchio
 
     target_root = arm.torso_to_root(target_torso)
-    solution, converged, err = arm.ik.solve(
-        pinocchio.SE3(np.eye(3), target_root), q_seed
-    )
+    solution, converged, err = arm.ik.solve(pinocchio.SE3(np.eye(3), target_root), q_seed)
     if not converged or err > 1e-3:
         raise RuntimeError(
             f"IK did not converge for {np.round(target_torso, 4).tolist()}: err={err:.6f}"
@@ -180,7 +192,9 @@ def main() -> int:
     ap.add_argument("--scene", type=Path, default=_OUT)
     args = ap.parse_args()
     if not args.scene.exists():
-        print(f"scene missing: {args.scene}\nrun: .venv/bin/python oda/mujoco_sim/build_g1_scene.py")
+        print(
+            f"scene missing: {args.scene}\nrun: .venv/bin/python oda/mujoco_sim/build_g1_scene.py"
+        )
         return 2
 
     rig = _make_rig(_scene_with_free_cargo(args.scene, held=True))
@@ -200,7 +214,9 @@ def main() -> int:
         ("drop", DROP_TORSO, q_drop),
         ("retreat", RETREAT_TORSO, q_retreat),
     ):
-        print(f"    {label:7s} target={np.round(target, 4).tolist()} q={np.round(solution, 4).tolist()}")
+        print(
+            f"    {label:7s} target={np.round(target, 4).tolist()} q={np.round(solution, 4).tolist()}"
+        )
 
     failures: list[str] = []
     print("[2] carry down through the open (+Z) face")
@@ -210,8 +226,7 @@ def main() -> int:
         arm_basket = [p for p in pairs if not any("cargo_okra" in geom for geom in p)]
         carried_pod_basket = [p for p in pairs if "cargo_okra_pod" in p]
         print(
-            f"    {label:7s} tip_err={tip_err * 1000:.2f} mm "
-            f"basket_depth={deepest * 1000:.2f} mm"
+            f"    {label:7s} tip_err={tip_err * 1000:.2f} mm basket_depth={deepest * 1000:.2f} mm"
         )
         if tip_err > TRACK_TOL_M:
             failures.append(f"{label}: tip error {tip_err * 1000:.1f} mm")
@@ -238,7 +253,7 @@ def main() -> int:
     cargo_rot_torso = np.array([[0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0]])
     cargo_quat = np.empty(4)
     mujoco.mju_mat2Quat(cargo_quat, (torso_rot @ cargo_rot_torso).reshape(-1))
-    release_qpos[cargo_qpos + 3:cargo_qpos + 7] = cargo_quat
+    release_qpos[cargo_qpos + 3 : cargo_qpos + 7] = cargo_quat
     rig = _make_rig(_scene_with_free_cargo(args.scene, held=False))
     cargo_body = mujoco.mj_name2id(rig.model, mujoco.mjtObj.mjOBJ_BODY, "cargo_okra")
     cargo_joint = mujoco.mj_name2id(rig.model, mujoco.mjtObj.mjOBJ_JOINT, "cargo_okra_free")
@@ -254,13 +269,14 @@ def main() -> int:
             rig.data.contact[i].dist,
         )
         for i in range(rig.data.ncon)
-        if "cargo_okra_pod" in {
+        if "cargo_okra_pod"
+        in {
             mujoco.mj_id2name(rig.model, mujoco.mjtObj.mjOBJ_GEOM, rig.data.contact[i].geom1),
             mujoco.mj_id2name(rig.model, mujoco.mjtObj.mjOBJ_GEOM, rig.data.contact[i].geom2),
         }
     ]
     print(
-        f"    cargo pose at open={np.round(release_qpos[cargo_qpos:cargo_qpos + 7], 4).tolist()} "
+        f"    cargo pose at open={np.round(release_qpos[cargo_qpos : cargo_qpos + 7], 4).tolist()} "
         f"contacts={release_contacts}"
     )
     deepest, pairs, torso_pairs = _advance(rig, q_retreat, seconds=SETTLE_SECONDS)
@@ -268,8 +284,8 @@ def main() -> int:
     # The capsule may retain harmless axial spin in MuJoCo after it has come to
     # rest on cardboard.  The placement requirement is translational rest, not
     # zero angular velocity of an idealised low-damping pod.
-    cargo_speed = float(np.linalg.norm(rig.data.qvel[cargo_qvel:cargo_qvel + 3]))
-    cargo_angular_speed = float(np.linalg.norm(rig.data.qvel[cargo_qvel + 3:cargo_qvel + 6]))
+    cargo_speed = float(np.linalg.norm(rig.data.qvel[cargo_qvel : cargo_qvel + 3]))
+    cargo_angular_speed = float(np.linalg.norm(rig.data.qvel[cargo_qvel + 3 : cargo_qvel + 6]))
     cargo_basket_contacts = [p for p in pairs if "cargo_okra_pod" in p]
     inside = 0.090 < cargo_t[0] < 0.275 and abs(cargo_t[1]) < 0.040 and -0.165 < cargo_t[2] < -0.080
     print(

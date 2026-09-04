@@ -117,9 +117,11 @@ def main() -> int:
         if latest["img"] is None:
             print("[capture] no /camera/right_wrist_color — is the wrist publisher running?")
             return 2
-    print("[capture] ready. Per episode: click okra -> arm reaches & holds -> 's' "
-          "(arm goes compliant + record starts) -> hand-guide -> 's' stop. 'q' quit. "
-          "('c' = compliant only, optional.)")
+    print(
+        "[capture] ready. Per episode: click okra -> arm reaches & holds -> 's' "
+        "(arm goes compliant + record starts) -> hand-guide -> 's' stop. 'q' quit. "
+        "('c' = compliant only, optional.)"
+    )
 
     # Single-keypress control (like xr_teleoperate): 'c' compliant, 's' record toggle, 'q' quit.
     # Uses cbreak (no Enter needed) when stdin is a TTY; falls back to line-mode otherwise.
@@ -159,7 +161,9 @@ def main() -> int:
 
     # Continue numbering AFTER any existing episodes (don't reset to 0 / overwrite
     # earlier runs). Each run appends new episode_NNN dirs.
-    existing = [int(p.name.split("_")[1]) for p in out.glob("episode_*") if p.name.split("_")[1].isdigit()]
+    existing = [
+        int(p.name.split("_")[1]) for p in out.glob("episode_*") if p.name.split("_")[1].isdigit()
+    ]
     ep = (max(existing) + 1) if existing else 0
     if existing:
         print(f"[capture] {len(existing)} existing episodes; new ones start at episode_{ep:03d}.")
@@ -190,7 +194,9 @@ def main() -> int:
             if cmd["compliant"]:
                 cmd["compliant"] = False
                 lc.publish(compliant_topic, Bool(data=True))
-                print("[c] -> RIGHT arm compliant (hand-guide; support it). Next okra click re-stiffens.")
+                print(
+                    "[c] -> RIGHT arm compliant (hand-guide; support it). Next okra click re-stiffens."
+                )
             if cmd["toggle"]:
                 cmd["toggle"] = False
                 if not recording:
@@ -198,12 +204,16 @@ def main() -> int:
                     lc.publish(compliant_topic, Bool(data=True))
                     qbuf, frames = [], []
                     recording = True
-                    print(f"[REC] episode_{ep:03d} START (arm compliant) — hand-guide the grasp. 's' to stop.")
+                    print(
+                        f"[REC] episode_{ep:03d} START (arm compliant) — hand-guide the grasp. 's' to stop."
+                    )
                 else:
                     recording = False
                     save_episode()
-                    print("[capture] stopped. NEXT episode: click okra -> wait until the arm reaches "
-                          "the pre-grasp -> 's' (compliant + record) -> hand-guide -> 's' stop.  ('q' quit)")
+                    print(
+                        "[capture] stopped. NEXT episode: click okra -> wait until the arm reaches "
+                        "the pre-grasp -> 's' (compliant + record) -> hand-guide -> 's' stop.  ('q' quit)"
+                    )
             if recording:
                 with lock:
                     q = None if latest["q"] is None else latest["q"].copy()
@@ -225,7 +235,9 @@ def main() -> int:
         except Exception:
             pass
     print(f"[capture] done. {ep} episodes -> {out}")
-    print(f"  convert (ACT venv): ~/act-okura/.venv_act/bin/python scripts/okra_lerobot_writer.py --raw {out}")
+    print(
+        f"  convert (ACT venv): ~/act-okura/.venv_act/bin/python scripts/okra_lerobot_writer.py --raw {out}"
+    )
     return 0
 
 

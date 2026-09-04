@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Render close-up views of the G1 right-hand UMI mounting envelope.
 
 This is an inspection image, not a motion result.  It makes the relationship between the
@@ -96,7 +110,9 @@ def _scene_with_closeup_cameras(xml_text: str, wrist_pos: np.ndarray, wrist_rot:
 def _label(frame: np.ndarray, text: str) -> np.ndarray:
     """Add a compact title strip without affecting the simulated pixels."""
     cv2.rectangle(frame, (0, 0), (frame.shape[1], 31), (20, 20, 20), -1)
-    cv2.putText(frame, text, (12, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (245, 245, 245), 1, cv2.LINE_AA)
+    cv2.putText(
+        frame, text, (12, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (245, 245, 245), 1, cv2.LINE_AA
+    )
     return frame
 
 

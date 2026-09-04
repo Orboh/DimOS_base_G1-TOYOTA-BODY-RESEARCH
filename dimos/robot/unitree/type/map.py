@@ -14,7 +14,7 @@
 
 from pathlib import Path
 import time
-from typing import Any
+from typing import Any, Protocol
 
 import open3d as o3d  # type: ignore[import-untyped]
 from reactivex import interval
@@ -30,7 +30,6 @@ from dimos.mapping.pointclouds.accumulators.protocol import PointCloudAccumulato
 from dimos.mapping.pointclouds.occupancy import general_occupancy
 from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
-from dimos.robot.unitree.go2.connection import Go2ConnectionProtocol
 
 
 class MapConfig(ModuleConfig):
@@ -111,7 +110,13 @@ class Map(Module):
         self.global_costmap.publish(occupancygrid)
 
 
-def deploy(dimos: ModuleCoordinator, connection: Go2ConnectionProtocol):  # type: ignore[no-untyped-def]
+class _PointcloudSource(Protocol):
+    """Minimal shape ``deploy`` needs from a robot connection module."""
+
+    pointcloud: Out[PointCloud2]
+
+
+def deploy(dimos: ModuleCoordinator, connection: _PointcloudSource):  # type: ignore[no-untyped-def]
     mapper = dimos.deploy(Map, global_publish_interval=1.0)
     mapper.global_map.transport = LCMTransport("/global_map", PointCloud2)
     mapper.global_costmap.transport = LCMTransport("/global_costmap", OccupancyGrid)

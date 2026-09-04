@@ -9,6 +9,13 @@ this run, as long as it's part of the global map.
 ![relocalize on the live go2 and nav_to a point in the premap](assets/reloc_and_nav_to.webp)
 
 
+<Note>
+The `unitree-go2-*` blueprints used in this walkthrough shipped with the Go2
+stack, which this fork no longer carries. `RelocalizationModule` and the mem2
+recording path are unchanged - compose them into a G1 blueprint (see
+`dimos/robot/unitree/g1/blueprints/`) and the steps below apply as written.
+</Note>
+
 ## 1. Record a run
 
 ```bash

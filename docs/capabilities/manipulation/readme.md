@@ -32,12 +32,15 @@ Keyboard controls:
 ### Motion Planning (two terminals)
 
 ```bash
-# Terminal 1: Mock coordinator
-dimos run coordinator-mock
-
-# Terminal 2: Planner with Drake visualization
-dimos run xarm7-planner-coordinator
+# Terminal 1: a control coordinator (this fork ships the G1 one)
+dimos run unitree-g1-coordinator
 ```
+
+<Note>
+The xArm / Piper / OpenArm blueprints listed below shipped with the vendor arm
+stacks, which this fork no longer carries. The planning and control libraries
+themselves are unchanged.
+</Note>
 
 Then use the IPython client:
 
@@ -105,9 +108,6 @@ KeyboardTeleopModule ──→ ControlCoordinator ──→ ManipulationModule
 | File | Description |
 |------|-------------|
 | [`manipulation_module.py`](/dimos/manipulation/manipulation_module.py) | Main module (RPC interface, state machine) |
-| [`manipulation/blueprints.py`](/dimos/manipulation/blueprints.py) | Planner and perception blueprints |
-| [`robot/manipulators/piper/blueprints.py`](/dimos/robot/manipulators/piper/blueprints.py) | Piper keyboard teleop blueprint |
-| [`robot/manipulators/xarm/blueprints.py`](/dimos/robot/manipulators/xarm/blueprints.py) | XArm keyboard teleop blueprints |
 | [`teleop/keyboard/keyboard_teleop_module.py`](/dimos/teleop/keyboard/keyboard_teleop_module.py) | Keyboard teleop module |
 | [`planning/world/drake_world.py`](/dimos/manipulation/planning/world/drake_world.py) | Drake physics backend |
 | [`planning/planners/rrt_planner.py`](/dimos/manipulation/planning/planners/rrt_planner.py) | RRT-Connect motion planner |

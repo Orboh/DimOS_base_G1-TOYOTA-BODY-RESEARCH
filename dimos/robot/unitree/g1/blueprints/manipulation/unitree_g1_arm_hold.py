@@ -50,9 +50,7 @@ _LIVE_REQUESTED = os.getenv("G1_ARM_HOLD_LIVE", "").strip() == "1"
 # the module opens its DDS publisher is safer than attempting discovery on an
 # arbitrary interface.
 if _LIVE_REQUESTED and not _NIC:
-    raise RuntimeError(
-        "G1_ARM_HOLD_LIVE=1 requires ROBOT_INTERFACE to name the wired robot NIC"
-    )
+    raise RuntimeError("G1_ARM_HOLD_LIVE=1 requires ROBOT_INTERFACE to name the wired robot NIC")
 
 if _LIVE_REQUESTED:
     logger.warning(

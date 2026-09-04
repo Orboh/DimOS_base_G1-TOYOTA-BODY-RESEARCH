@@ -1,6 +1,20 @@
-import pyzed.sl as sl
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import numpy as np
 import open3d as o3d
+import pyzed.sl as sl
 
 zed = sl.Camera()
 init = sl.InitParameters()
@@ -18,7 +32,9 @@ runtime = sl.RuntimeParameters()
 point_cloud = sl.Mat()
 
 vis = o3d.visualization.Visualizer()
-vis.create_window("ZED Mini - Live Neural Depth Point Cloud (close window to quit)", width=1280, height=800)
+vis.create_window(
+    "ZED Mini - Live Neural Depth Point Cloud (close window to quit)", width=1280, height=800
+)
 
 pcd = o3d.geometry.PointCloud()
 first_frame = True

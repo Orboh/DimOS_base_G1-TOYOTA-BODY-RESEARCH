@@ -58,12 +58,40 @@ from dimos.visualization.vis_module import vis_module
 
 logger = setup_logger()
 
-# ---- robot side (same knobs as the ZED blueprint) ---------------------------
+# robot side (same knobs as the ZED blueprint)
 _NIC = os.getenv("ROBOT_INTERFACE", "enp46s0")
 _LIVE = os.getenv("IK_REACH_LIVE", "").strip() == "1"
-_ARM_VEL_LIMIT = float(os.getenv("IK_ARM_VEL_LIMIT", "20.0"))
+_ARM_VEL_LIMIT = float(os.getenv("IK_ARM_VEL_LIMIT", "12.0"))
 _KP_ARM = float(os.getenv("OKRA_NOACT_KP_ARM", "80.0"))
 _KD_ARM = float(os.getenv("OKRA_NOACT_KD_ARM", "3.0"))
+# Gravity feedforward on the RIGHT arm during position tracking (default OFF = unchanged).
+# Without it the arm holds a pose only by carrying a permanent position error
+# (e = tau_gravity / kp; measured 3-7 deg = 45-90 mm at the tip on hw with kp=80 plus the
+# wrist-mounted payload). That droop is what stalls the diffusion loop: the policy asks for
+# "measured + delta", the arm settles at "commanded - droop", so the tip never advances.
+# OKRA_GRAVITY_TAU_SCALE trims for what the URDF does NOT model (GoPro, Media Mod, mount,
+# cabling): start LOW (0.6-0.8) and raise while watching `arm track` shrink.
+# 実装は stiff_gravity_* 系（feat/g1-right-arm-gravity-ff で一本化）。関節ごとの選択・
+# トルク上限・ランプ・非有限ガードを持つ。OKRA_GRAVITY_FF / OKRA_GRAVITY_TAU_SCALE の
+# 名前は運用の手を変えないため据え置き、下の3項目へ写像する。
+# 既定値は oda/ik_up.sh と揃えた: 全7関節 / 上限 12 N*m（実測 |g(q)| 最大 8.67 N*m なので
+# 通常は張り付かない暴走時の防波堤）。
+_GRAVITY_FF = os.getenv("OKRA_GRAVITY_FF", "").strip() == "1"
+# 既定 1.0 = 全補償。ブランチ側の設計意図どおり（同じ校正済みURDFの g(q) を
+# collection_mode(kp=0) のホールドテストで実機検証済み、#37。位置ゲインを残したまま
+# 上乗せする今回はより緩い条件）。下げたい場合は OKRA_GRAVITY_TAU_SCALE で。
+_GRAVITY_TAU_SCALE = float(os.getenv("OKRA_GRAVITY_TAU_SCALE", "1.0"))
+_GRAVITY_JOINTS = [int(v) for v in os.getenv("OKRA_GRAVITY_JOINTS", "0,1,2,3,4,5,6").split(",")]
+_GRAVITY_TAU_LIMIT_NM = float(os.getenv("OKRA_GRAVITY_TAU_LIMIT_NM", "12.0"))
+# End-effector payload the URDF does NOT model. It ends in a 0.170 kg `right_rubber_hand`
+# (G1's display hand), so this is the mass to ADD: (real payload) - 0.170.
+# 2026-08-25 hardware: Dex1-1 550 g + GoPro HERO9 158 g + attachments 100 g = 808 g
+#   -> 0.808 - 0.170 = 0.638 kg.
+_TIP_EXTRA_MASS_KG = float(os.getenv("OKRA_TIP_EXTRA_MASS_KG", "0.638"))
+# Payload CoM in the wrist-yaw frame [m] (0.0415 = hand mount face, 0.1845 = fingertip).
+_TIP_EXTRA_COM = [
+    float(v) for v in os.getenv("OKRA_TIP_EXTRA_COM_XYZ", "0.113,-0.003,0.0").split(",")
+]
 # Pre-grasp standoff: stop the IK reach SHORT so the diffusion policy fine-adjusts the
 # last leg. Default 0.05 m (was 0.0 in the scripted-close blueprint). approach legs OFF.
 _STANDOFF_M = float(os.getenv("OKRA_STANDOFF_M", "0.05"))
@@ -74,16 +102,22 @@ _CONFIRM_MIN_GAP_S = float(os.getenv("OKRA_CONFIRM_MIN_GAP_S", "0.35"))
 _CONFIRM_WINDOW_S = float(os.getenv("OKRA_CONFIRM_WINDOW_S", "3.5"))
 _FIXED_ORI_RAW = os.getenv("OKRA_FIXED_ORI_XYZW", "").strip()
 _FIXED_ORI = [float(v) for v in _FIXED_ORI_RAW.split(",")] if _FIXED_ORI_RAW else []
+# One-shot sanity gate on the reach. 90 deg is right for a position-only reach, where the
+# wrist barely moves. Pinning OKRA_FIXED_ORI_XYZW makes the reach 6-DOF, and if the hand
+# starts out badly aimed the wrist legitimately has to swing >90 deg to obey -- raise this
+# deliberately for that first re-aiming move, with the e-stop in hand.
+_MAX_JOINT_DELTA_DEG = float(os.getenv("OKRA_MAX_JOINT_DELTA_DEG", "90"))
 
 # Tool-tip offset from the wrist [m], WRIST frame. IkReach drives this onto the click;
 # UmiDiffusionBridge uses it as the FK/IK EE frame. Step 6 aligns the diffusion one to
 # the UMI TCP point (~/umi/okra_20260723_ishimaru dataset_plan grippers[0].tcp_pose).
 _TIP_OFFSET = [float(v) for v in os.getenv("OKRA_TIP_OFFSET_XYZ", "0.1845,-0.003,0.0").split(",")]
 _UMI_TIP_OFFSET = [
-    float(v) for v in os.getenv("OKRA_UMI_TIP_OFFSET_XYZ", ",".join(map(str, _TIP_OFFSET))).split(",")
+    float(v)
+    for v in os.getenv("OKRA_UMI_TIP_OFFSET_XYZ", ",".join(map(str, _TIP_OFFSET))).split(",")
 ]
 
-# ---- UMI diffusion bridge ----
+# UMI diffusion bridge
 _UMI_SERVER = os.getenv("UMI_SERVER_ADDR", "tcp://127.0.0.1:5599")
 _UMI_CONTROL_HZ = float(os.getenv("UMI_CONTROL_HZ", "10.0"))
 # n_exec waypoints per inference. Server inference ~88ms on this PC, so >=2 keeps the
@@ -97,12 +131,21 @@ _UMI_PREDICT_TIMEOUT_MS = int(os.getenv("UMI_PREDICT_TIMEOUT_MS", "300"))
 # v1 fallback: position-only IK (orientation held) = safest first bring-up. Set
 # UMI_POSITION_ONLY=0 for full 6-DOF (follow the policy's commanded orientation).
 _UMI_POSITION_ONLY = os.getenv("UMI_POSITION_ONLY", "1").strip() == "1"
+# EE frame handed to the policy. The UMI/roboharvest TCP frame is the GoPro OPTICAL
+# frame (+x right, +y down, +z forward); the G1 gripper_tip frame is torso-aligned
+# (+x forward, +y left, +z up). Sending gripper_tip unconverted turns the policy's
+# "approach" (+z) into "straight up" (+z) -- the 2026-08-26 failure. UMI_EE_FRAME=tip
+# reproduces that old behaviour for an A/B; "camera" is correct.
+_UMI_EE_FRAME = os.getenv("UMI_EE_FRAME", "camera").strip().lower()
+# UMI TCP point in gripper_tip coordinates [m]. Cancels exactly while position-only, so
+# it only needs measuring before the 6-DOF mode is enabled.
+_UMI_TIP_TO_TCP = [float(v) for v in os.getenv("UMI_TIP_TO_TCP_XYZ", "0,0,0").split(",")]
 # Convergence -> adjust_done. Observed commanded steps were 3.2-4.3 mm on hw 2026-07-30,
 # i.e. right at the 4 mm default, so keep these reachable without an edit-rebuild cycle.
 _UMI_CONVERGE_EPS_M = float(os.getenv("UMI_CONVERGE_EPS_M", "0.004"))
 _UMI_CONVERGE_HOLD_TICKS = int(os.getenv("UMI_CONVERGE_HOLD_TICKS", "8"))
 
-# ---- UMI observability (see UmiDiffusionBridge's module docstring) ----
+# UMI observability (see UmiDiffusionBridge's module docstring)
 # Default = log every tick: the failure mode being chased is "the policy is not visibly
 # adjusting", and the old 0.5 s throttle made the log thinnest exactly then.
 _UMI_LOG_EVERY_N = int(os.getenv("UMI_LOG_EVERY_N", "1"))
@@ -110,8 +153,20 @@ _UMI_LOG_JOINTS = os.getenv("UMI_LOG_JOINTS", "1").strip() == "1"
 _UMI_LOG_CHUNK_MAX = int(os.getenv("UMI_LOG_CHUNK_MAX", "4"))
 # "auto" = <per-run log dir>/umi_diffusion_trace.jsonl. Empty string disables the trace.
 _UMI_TRACE_PATH = os.getenv("UMI_TRACE_PATH", "auto")
+# Wrist-camera preflight: refuse to start the adjustment on a stale/black frame. A dead
+# camera is indistinguishable from an idle policy once running (2026-08-25: a whole LIVE
+# run was driven from a 16-hour-old frame). Set 0 only to debug without the GoPro.
+_UMI_REQUIRE_CAMERA = os.getenv("UMI_REQUIRE_CAMERA_OK", "1").strip() != "0"
 
-# ---- chest-ZED camera (same knobs as the ZED blueprint) ---------------------
+# spoken phase announcements (Japanese, G1 speaker)
+# From outside the robot, an IK coarse reach and a diffusion fine-adjustment look the
+# same, and an adjustment that refused to start looks like nothing at all. The LangGraph
+# harvest app announces every phase; this gives the bridge pipeline the same cue.
+# Needs pyopenjtalk + scipy in the venv; without them it degrades to [VOICE] log lines.
+_VOICE = os.getenv("OKRA_VOICE", "").strip() == "1"
+_VOICE_VOLUME = int(os.getenv("OKRA_VOICE_VOLUME", "100"))
+
+# chest-ZED camera (same knobs as the ZED blueprint)
 _ZED_SERIAL = os.getenv("ZED_SERIAL", "").strip() or None
 _PC_FPS = float(os.getenv("ZED_PC_FPS", "3.0"))
 _DEPTH_MODE = os.getenv("ZED_DEPTH_MODE", "NEURAL")
@@ -146,6 +201,7 @@ if _LIVE:
         "unitree_g1_okra_ik_diffusion LAUNCHING **LIVE (arm only)** -- arm WILL move via "
         f"rt/arm_sdk on NIC {_NIC!r} at <= {_ARM_VEL_LIMIT} rad/s. IK reach -> standoff "
         f"{_STANDOFF_M} m -> UMI diffusion EE adjust ({'pos-only' if _UMI_POSITION_ONLY else '6-DOF'}, "
+        f"ee_frame={_UMI_EE_FRAME}, "
         f"server {_UMI_SERVER}). Gripper is your SEPARATE program (subscribe /g1/adjust_done). "
         "Keep an e-stop in hand."
     )
@@ -185,23 +241,36 @@ _MODULES = [
         fire_reach_done=True,
         approach_offset_xyz=[0.0, 0.0, _TARGET_Z_OFFSET - _CUT_BELOW_CENTROID_M],
         standoff_m=_STANDOFF_M,
-        approach_above_m=0.0,   # diffusion owns the final approach
+        approach_above_m=0.0,  # diffusion owns the final approach
         approach_front_m=0.0,
         confirm_click=_CONFIRM_CLICK,
         confirm_min_gap_s=_CONFIRM_MIN_GAP_S,
         confirm_window_s=_CONFIRM_WINDOW_S,
         fixed_orientation_xyzw=_FIXED_ORI,
+        max_joint_delta_deg=_MAX_JOINT_DELTA_DEG,
         gripper_offset_xyz=_TIP_OFFSET,
         camera_mount_xyzrpy=_ZED_MOUNT,
         click_in_camera_body_frame=True,
+        voice=_VOICE,
+        voice_nic=_NIC,
+        voice_volume=_VOICE_VOLUME,
     ),
     G1ArmSdkConnection.blueprint(
         network_interface=_NIC,
         arm_velocity_limit=_ARM_VEL_LIMIT,
+        voice=_VOICE,
+        voice_nic=_NIC,
+        voice_volume=_VOICE_VOLUME,
         publish_cmd=_LIVE,
         kp_arm=_KP_ARM,
         kd_arm=_KD_ARM,
         enable_disconnect=True,
+        stiff_gravity_compensation_right=_GRAVITY_FF,
+        stiff_gravity_right_joint_indices=(_GRAVITY_JOINTS if _GRAVITY_FF else []),
+        stiff_gravity_tau_scale=_GRAVITY_TAU_SCALE,
+        stiff_gravity_tau_limit_nm=_GRAVITY_TAU_LIMIT_NM,
+        tip_extra_mass_kg=_TIP_EXTRA_MASS_KG,
+        tip_extra_com_xyz=_TIP_EXTRA_COM,
     ),
     UmiDiffusionBridge.blueprint(
         server_addr=_UMI_SERVER,
@@ -209,10 +278,16 @@ _MODULES = [
         n_exec_per_infer=_UMI_N_EXEC,
         predict_timeout_ms=_UMI_PREDICT_TIMEOUT_MS,
         position_only=_UMI_POSITION_ONLY,
+        ee_frame=_UMI_EE_FRAME,
+        tip_to_tcp_xyz=_UMI_TIP_TO_TCP,
         gripper_offset_xyz=_UMI_TIP_OFFSET,
         converge_pos_eps_m=_UMI_CONVERGE_EPS_M,
         converge_hold_ticks=_UMI_CONVERGE_HOLD_TICKS,
         log_only=not _LIVE,
+        require_camera_ok=_UMI_REQUIRE_CAMERA,
+        voice=_VOICE,
+        voice_nic=_NIC,
+        voice_volume=_VOICE_VOLUME,
         log_every_n=_UMI_LOG_EVERY_N,
         log_joints=_UMI_LOG_JOINTS,
         log_chunk_max=_UMI_LOG_CHUNK_MAX,

@@ -1,4 +1,18 @@
 #!/usr/bin/env python
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Dump a few camera0_rgb frames from the training replay buffer (umi env).
 
 The zarr's camera0_rgb IS exactly the preprocessed 224x224 image the policy trained on
@@ -8,15 +22,16 @@ gripper/mirror mask present?, mirrored?, RGB vs BGR.
 
 Run: conda run -n umi python oda/umi_diffusion/inspect_dataset_frames.py
 """
+
 import os
 import sys
 
 sys.path.append(os.path.expanduser("~/umi/universal_manipulation_interface"))
 
-import numpy as np
-import zarr
 # UMI stores camera0_rgb JPEG-XL compressed -> register the numcodecs codec first.
 from diffusion_policy.codecs.imagecodecs_numcodecs import register_codecs
+import numpy as np
+import zarr
 
 register_codecs()
 
@@ -55,14 +70,18 @@ def main():
         bgr = img[..., ::-1]
         p = os.path.join(OUT, f"train_frame_{i:05d}.png")
         cv2.imwrite(p, bgr)
-        print(f"  saved {p}  (min={img.min()} max={img.max()} "
-              f"mean={img.mean():.1f}  black-pixels={(img.sum(-1)==0).mean()*100:.1f}%)")
+        print(
+            f"  saved {p}  (min={img.min()} max={img.max()} "
+            f"mean={img.mean():.1f}  black-pixels={(img.sum(-1) == 0).mean() * 100:.1f}%)"
+        )
 
     # gripper_width sanity (should be the dead 1e-4 constant)
     if "robot0_gripper_width" in data.array_keys():
         gw = np.asarray(data["robot0_gripper_width"][:])
-        print(f"\nrobot0_gripper_width: min={gw.min():.5f} max={gw.max():.5f} "
-              f"std={gw.std():.6f}  (confirms dead channel if ~0)")
+        print(
+            f"\nrobot0_gripper_width: min={gw.min():.5f} max={gw.max():.5f} "
+            f"std={gw.std():.6f}  (confirms dead channel if ~0)"
+        )
 
 
 if __name__ == "__main__":

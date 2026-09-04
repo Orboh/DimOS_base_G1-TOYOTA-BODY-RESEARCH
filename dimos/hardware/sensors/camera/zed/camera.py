@@ -61,6 +61,12 @@ class ZEDCameraConfig(ModuleConfig, DepthCameraConfig):
     base_transform: Transform | None = Field(default_factory=default_base_transform)
     align_depth_to_color: bool = True
     enable_depth: bool = True
+    # Runtime depth toggle (grab-level enable_depth). When False, grab() skips the
+    # (heavy) depth compute and depth_image/pointcloud are NOT published -> lighter,
+    # higher RGB FPS. Flip live with set_depth_streaming() (no camera re-open;
+    # a fresh depth map is ready ~1 grab later). Requires enable_depth=True.
+    # Default True = legacy always-on behaviour.
+    depth_streaming: bool = True
     enable_pointcloud: bool = False
     pointcloud_fps: float = 5.0
     # Voxel size [m] for downsampling the published cloud (upstream default 0.005).
@@ -132,6 +138,10 @@ class ZEDCamera(DepthCameraHardware, Module, perception.DepthCamera):
         self._stream_width = self.config.width
         self._stream_height = self.config.height
         self._sl_camera_info: sl.CameraInformation | None = None
+        # Runtime depth on/off (see ZEDCameraConfig.depth_streaming). Read each
+        # grab in the capture loop; flipped by set_depth_streaming(). Folds in
+        # config.enable_depth so the loop only needs to check this one flag.
+        self._depth_on = bool(self.config.enable_depth and self.config.depth_streaming)
 
     def _publish_camera_info(self) -> None:
         ts = time.time()
@@ -169,6 +179,7 @@ class ZEDCamera(DepthCameraHardware, Module, perception.DepthCamera):
 
         self._runtime_params = sl.RuntimeParameters()
         self._runtime_params.enable_fill_mode = self.config.enable_fill_mode
+        self._runtime_params.enable_depth = self._depth_on
         self._image_left = sl.Mat()
         self._depth_map = sl.Mat()
         self._pose = sl.Pose()
@@ -284,6 +295,12 @@ class ZEDCamera(DepthCameraHardware, Module, perception.DepthCamera):
 
     def _capture_loop(self) -> None:
         while self._running and self._zed is not None:
+            # Snapshot the runtime depth toggle and apply it to this grab. When
+            # off, grab skips depth compute entirely (the source of the speedup).
+            # depth_on already folds in config.enable_depth.
+            depth_on = self._depth_on
+            if self._runtime_params is not None:
+                self._runtime_params.enable_depth = depth_on
             try:
                 err = self._zed.grab(self._runtime_params)
             except Exception:
@@ -313,7 +330,7 @@ class ZEDCamera(DepthCameraHardware, Module, perception.DepthCamera):
                 self.color_image.publish(color_img)
 
             depth_img = None
-            if self.config.enable_depth and self._depth_map is not None:
+            if depth_on and self._depth_map is not None:
                 self._zed.retrieve_measure(self._depth_map, sl.MEASURE.DEPTH)
                 depth_data = self._depth_map.get_data()
                 if depth_data.ndim == 3:
@@ -335,6 +352,11 @@ class ZEDCamera(DepthCameraHardware, Module, perception.DepthCamera):
                 with self._pointcloud_lock:
                     self._latest_color_img = color_img
                     self._latest_depth_img = depth_img
+            elif not depth_on:
+                # Depth streaming off: drop the stale frame so _generate_pointcloud
+                # stops emitting an outdated cloud while depth is paused.
+                with self._pointcloud_lock:
+                    self._latest_depth_img = None
 
             self._publish_tf(ts)
 
@@ -495,6 +517,28 @@ class ZEDCamera(DepthCameraHardware, Module, perception.DepthCamera):
     @rpc
     def get_depth_scale(self) -> float:
         return self._depth_scale
+
+    @rpc
+    def set_depth_streaming(self, enabled: bool) -> bool:
+        """Toggle depth compute + publish at runtime (grab-level enable_depth).
+
+        When ``False``, the capture loop runs ``grab`` with ``enable_depth=False``
+        so the (heavy) depth is NOT computed and ``depth_image`` / ``pointcloud``
+        are not published -> lighter, higher RGB FPS. Flip to ``True`` ~1 frame
+        before depth is needed (e.g. just before an IK reach); a fresh depth map
+        is ready on the next grab (~1 frame, measured ≈76 ms on the ZED-M /
+        NEURAL, no camera re-open).
+
+        Requires ``config.enable_depth=True`` (the depth capability). Returns the
+        effective state (False if depth is disabled at the config level).
+        """
+        self._depth_on = bool(enabled and self.config.enable_depth)
+        return self._depth_on
+
+    @rpc
+    def get_depth_streaming(self) -> bool:
+        """Return whether depth is currently being computed + published."""
+        return self._depth_on
 
 
 def main() -> None:

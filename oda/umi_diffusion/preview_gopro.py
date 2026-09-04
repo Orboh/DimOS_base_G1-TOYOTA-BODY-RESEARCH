@@ -1,4 +1,18 @@
 #!/usr/bin/env python
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Live version of smoke_gopro.py: continuously show [ raw capture | live 224 preprocessed |
 training frame ] in one window so you can AIM the GoPro / check the HDMI signal in real time.
 
@@ -11,6 +25,7 @@ Run (umi env):
   conda run -n umi python oda/umi_diffusion/preview_gopro.py    # --cam-device defaults to the by-id Elgato path
 Keys: q or ESC = quit, s = save current pair to gopro_vs_train.png + gopro_live_224.png
 """
+
 import os
 import sys
 
@@ -21,26 +36,34 @@ import numpy as np
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # reuse the exact training-matched preprocessing (also does the umi sys.path setup)
-from smoke_gopro import GOPRO_DEV, HERE, preprocess  # noqa: E402
+from smoke_gopro import GOPRO_DEV, HERE, preprocess
 
 
 @click.command()
-@click.option("--cam-device", default=GOPRO_DEV,
-              help="default = Elgato HD60 X by-id path (/dev/videoN numbers shuffle on replug)")
+@click.option(
+    "--cam-device",
+    default=GOPRO_DEV,
+    help="default = Elgato HD60 X by-id path (/dev/videoN numbers shuffle on replug)",
+)
 @click.option("--cap-w", default=1920, type=int)
 @click.option("--cap-h", default=1080, type=int)
 @click.option("--train-frame", default=os.path.join(HERE, "train_frame_00000.png"))
 @click.option("--fisheye/--no-fisheye", default=False)
-@click.option("--camera-intrinsics",
-              default=os.path.expanduser(
-                  "~/umi/universal_manipulation_interface/example/calibration/gopro_intrinsics_2_7k.json"))
+@click.option(
+    "--camera-intrinsics",
+    default=os.path.expanduser(
+        "~/umi/universal_manipulation_interface/example/calibration/gopro_intrinsics_2_7k.json"
+    ),
+)
 @click.option("--sim-fov", default=None, type=float)
 @click.option("--no-mirror", is_flag=True, default=False)
 def main(cam_device, cap_w, cap_h, train_frame, fisheye, camera_intrinsics, sim_fov, no_mirror):
     fisheye_converter = None
     if fisheye:
         import json
-        from umi.common.cv_util import parse_fisheye_intrinsics, FisheyeRectConverter
+
+        from umi.common.cv_util import FisheyeRectConverter, parse_fisheye_intrinsics
+
         assert sim_fov is not None, "--fisheye requires --sim-fov"
         intr = parse_fisheye_intrinsics(json.load(open(camera_intrinsics)))
         fisheye_converter = FisheyeRectConverter(**intr, out_size=(224, 224), out_fov=sim_fov)

@@ -19,3 +19,7 @@
 docs/capabilities/memory/assets/** filter=lfs diff=lfs merge=lfs -text
 docs/capabilities/memory/assets/.gitattributes -filter -diff -merge text
 docs/capabilities/mapping/assets/** filter=lfs diff=lfs merge=lfs -text
+# README のトップ画像は通常の blob として持つ（LFS 対象外）。
+# 理由: 現場PCに git-lfs が入っておらず(brew/nix なし)、LFS ポインタだと README に
+# 画像が出ないまま気づかれない事故が起きる。380KB なので実害はない。
+assets/readme/okra_g1_field.jpg -filter -diff -merge -text

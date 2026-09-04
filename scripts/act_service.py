@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """ACT inference service, bridged to dimos over ZMQ.
 
 Runs in the dedicated lerobot venv (.venv_act, separate process from dimos). It
@@ -56,7 +70,7 @@ import torch
 # service supports the single-cam 16-dim model AND the 2-cam 8-dim tree-right
 # model without code edits. The image keys + state dim are derived from the
 # model config at load time (see ActService.__init__), not hard-coded here.
-REPO_ID = os.getenv("ACT_REPO_ID", "sotata/act-okura-pick-06102026")   # policy checkpoint
+REPO_ID = os.getenv("ACT_REPO_ID", "sotata/act-okura-pick-06102026")  # policy checkpoint
 DATASET_REPO = os.getenv("ACT_DATASET_REPO", "Orboh/okura-sub-lerobot")  # norm stats + task
 IMG_KEY = "observation.images.cam_left_high"  # fallback head key if cfg has no image features
 STATE_KEY = "observation.state"
@@ -95,9 +109,11 @@ class ActService:
             },
         )
         self._reset()
-        print(f"[act] loaded {repo_id} on {self.device} | task={self.task!r} "
-              f"| head_img={self.head_img_key} wrist_img={self.wrist_img_key} "
-              f"| normalization via preprocessor/postprocessor (dataset={dataset_repo})")
+        print(
+            f"[act] loaded {repo_id} on {self.device} | task={self.task!r} "
+            f"| head_img={self.head_img_key} wrist_img={self.wrist_img_key} "
+            f"| normalization via preprocessor/postprocessor (dataset={dataset_repo})"
+        )
 
     def _reset(self) -> None:
         self.policy.reset()
@@ -139,7 +155,7 @@ class ActService:
             observation[self.wrist_img_key] = torch.from_numpy(
                 np.ascontiguousarray(self._to_rgb_hwc(wrist_bgr))
             )
-        # --- predict_action (verbatim from unitree_lerobot eval path) ---
+        # predict_action (verbatim from unitree_lerobot eval path)
         observation = copy(observation)
         for name in list(observation):
             if not hasattr(observation[name], "unsqueeze"):
@@ -171,7 +187,9 @@ class ActService:
                 wrist_bgr = cv2.imdecode(
                     np.frombuffer(req["image_right_wrist_jpeg"], dtype=np.uint8), cv2.IMREAD_COLOR
                 )
-            action = self.infer(state, bgr, wrist_bgr=wrist_bgr, reset=bool(req.get("reset", False)))
+            action = self.infer(
+                state, bgr, wrist_bgr=wrist_bgr, reset=bool(req.get("reset", False))
+            )
             sock.send(msgpack.packb({"action": action.astype(float).tolist()}, use_bin_type=True))
 
 
@@ -197,7 +215,9 @@ def _selftest() -> int:
     np.set_printoptions(precision=3, suppress=True)
     print(f"\n[selftest] recorded action : {rec}")
     print(f"[selftest] service action  : {a}")
-    print(f"[selftest] max|err| = {err:.4f} rad  -> {'OK' if err < 0.2 else 'FAIL (normalization?)'}")
+    print(
+        f"[selftest] max|err| = {err:.4f} rad  -> {'OK' if err < 0.2 else 'FAIL (normalization?)'}"
+    )
     return 0 if err < 0.2 else 1
 
 

@@ -29,14 +29,14 @@ in one lookup; the module no longer needs an intermediate ``base_link`` hop.
 OpenCV 4.7+ uses ``ArucoDetector``; pose uses ``solvePnP`` (``estimatePoseSingleMarkers``
 was removed in newer OpenCV builds).
 
-Compose with a camera publisher (e.g. Go2) via matching stream names::
+Compose with a camera publisher via matching stream names::
 
     from dimos.core.coordination.blueprints import autoconnect
     from dimos.perception.fiducial.marker_tf_module import MarkerTfModule
-    from dimos.robot.unitree.go2.blueprints.basic.unitree_go2_basic import unitree_go2_basic
+    from dimos.robot.unitree.g1.blueprints.basic.unitree_g1_basic import unitree_g1_basic
 
-    unitree_go2_with_markers = autoconnect(
-        unitree_go2_basic,
+    unitree_g1_with_markers = autoconnect(
+        unitree_g1_basic,
         MarkerTfModule.blueprint(marker_length_m=0.18),
     )
 """

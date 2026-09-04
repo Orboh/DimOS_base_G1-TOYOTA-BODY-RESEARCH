@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """ラップトップ直結の ZED を、カラー画像・3D点群・okra検出3D位置つきで
 ブラウザ(localhost)へライブ配信する。rerun 0.32 の同梱Webビューアを使うので
 インターネット不要（rerun/pyzed/AIモデルが導入済みならオフラインで動く）。
@@ -12,31 +26,38 @@
 実行:  ./.venv/bin/python scripts/zed_rerun_stream_local.py [stride] [yolo_every] [imgsz] [conf] [depth]
 表示:  ブラウザで  http://localhost:9090
 """
+
 from __future__ import annotations
-import sys, os, time
+
+import os
+import sys
+import time
 from urllib.parse import quote
-import numpy as np
+
 import cv2
+import numpy as np
 import pyzed.sl as sl
 import rerun as rr
 from ultralytics import YOLO
 
-HOST      = "localhost"        # 同一マシン表示
+HOST = "localhost"  # 同一マシン表示
 GRPC_PORT = 9876
-WEB_PORT  = 9090
-HERE      = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODEL     = os.path.join(HERE, "data/models_yolo/okra11n-seg.pt")
+WEB_PORT = 9090
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 重みは既定でリポ同梱パス。Jetson など置き場所が違う環境では OKRA_MODEL で上書きする
+# （2026-07-16 に Jetson 実機で必要になった改良を取り込み）。
+MODEL = os.environ.get("OKRA_MODEL", os.path.join(HERE, "data/models_yolo/okra11n-seg.pt"))
 
-STRIDE     = int(sys.argv[1]) if len(sys.argv) > 1 else 3
-YOLO_EVERY = int(sys.argv[2]) if len(sys.argv) > 2 else 2      # GPU なので密でも可
-IMGSZ      = int(sys.argv[3]) if len(sys.argv) > 3 else 1280
-CONF       = float(sys.argv[4]) if len(sys.argv) > 4 else 0.25
-DEPTH_PREF = (sys.argv[5].upper() if len(sys.argv) > 5 else "NEURAL")
+STRIDE = int(sys.argv[1]) if len(sys.argv) > 1 else 3
+YOLO_EVERY = int(sys.argv[2]) if len(sys.argv) > 2 else 2  # GPU なので密でも可
+IMGSZ = int(sys.argv[3]) if len(sys.argv) > 3 else 1280
+CONF = float(sys.argv[4]) if len(sys.argv) > 4 else 0.25
+DEPTH_PREF = sys.argv[5].upper() if len(sys.argv) > 5 else "NEURAL"
 
-# ---- rerun web viewer -------------------------------------------------------
+# rerun web viewer
 rr.init("okra_zed_live_local")
 rr.serve_grpc(grpc_port=GRPC_PORT, cors_allow_origin=["*"])
-uri = "rerun+http://%s:%d/proxy" % (HOST, GRPC_PORT)
+uri = f"rerun+http://{HOST}:{GRPC_PORT}/proxy"
 rr.serve_web_viewer(web_port=WEB_PORT, open_browser=False, connect_to=uri)
 # ★ 素の http://host:port で開くと Welcome 画面のまま「空ソースに固着」する。
 #   理由: rerun の serve_web_viewer は connect_to を open_browser=True の時しか
@@ -45,16 +66,17 @@ rr.serve_web_viewer(web_port=WEB_PORT, open_browser=False, connect_to=uri)
 #   open_browser=False の本スクリプトでは ?url= でブラウザ側から渡すのが唯一の手段。
 #   （Jetson で SSH 常駐起動する用途なので open_browser=True にはできない）
 #   `+` `:` `/` はクエリで壊れるため percent-encode する（quote(safe="")）。
-VIEWER_URL = "http://%s:%d/?url=%s" % (HOST, WEB_PORT, quote(uri, safe=""))
+VIEWER_URL = f"http://{HOST}:{WEB_PORT}/?url={quote(uri, safe='')}"
 print("=" * 64, flush=True)
 print("  WEB VIEWER (このURLで開くこと):", flush=True)
-print("  %s" % VIEWER_URL, flush=True)
-print("  ※ 素の http://%s:%d は空ソースに固着するので使わない" % (HOST, WEB_PORT), flush=True)
+print(f"  {VIEWER_URL}", flush=True)
+print(f"  ※ 素の http://{HOST}:{WEB_PORT} は空ソースに固着するので使わない", flush=True)
 print("=" * 64, flush=True)
 
 rr.log("world", rr.ViewCoordinates.RDF, static=True)
 
-# ---- ZED（NEURAL 失敗時は PERFORMANCE に自動フォールバック）-----------------
+
+# ZED（NEURAL 失敗時は PERFORMANCE に自動フォールバック）
 def open_zed(mode_name):
     cam = sl.Camera()
     init = sl.InitParameters()
@@ -65,24 +87,30 @@ def open_zed(mode_name):
     st = cam.open(init)
     return (cam, st)
 
+
 cam, st = open_zed(DEPTH_PREF)
 used_mode = DEPTH_PREF
 if st != sl.ERROR_CODE.SUCCESS and DEPTH_PREF == "NEURAL":
-    print("NEURAL 起動失敗(%s)。PERFORMANCE にフォールバック（オフライン時など）" % st, flush=True)
+    print(f"NEURAL 起動失敗({st})。PERFORMANCE にフォールバック（オフライン時など）", flush=True)
     cam, st = open_zed("PERFORMANCE")
     used_mode = "PERFORMANCE"
 if st != sl.ERROR_CODE.SUCCESS:
-    raise SystemExit("ZED open failed: %s" % st)
+    raise SystemExit(f"ZED open failed: {st}")
 
 info = cam.get_camera_information()
 calib = info.camera_configuration.calibration_parameters.left_cam
 fx, fy, cx, cy = calib.fx, calib.fy, calib.cx, calib.cy
 W = info.camera_configuration.resolution.width
 H = info.camera_configuration.resolution.height
-rr.log("world/cam", rr.Pinhole(focal_length=[fx, fy], principal_point=[cx, cy],
-                               width=W, height=H), static=True)
-print("ZED %s S/N %s %dx%d depth=%s | streaming..."
-      % (info.camera_model, info.serial_number, W, H, used_mode), flush=True)
+rr.log(
+    "world/cam",
+    rr.Pinhole(focal_length=[fx, fy], principal_point=[cx, cy], width=W, height=H),
+    static=True,
+)
+print(
+    f"ZED {info.camera_model} S/N {info.serial_number} {W}x{H} depth={used_mode} | streaming...",
+    flush=True,
+)
 
 model = YOLO(MODEL)
 rt = sl.RuntimeParameters()
@@ -109,7 +137,8 @@ def okra_3d(res, pc):
         if good.sum() < 10:
             continue
         X, Y, Z = np.median(xyz[good], axis=0)
-        u = float(res.boxes.xywh[i][0]); v = float(res.boxes.xywh[i][1])
+        u = float(res.boxes.xywh[i][0])
+        v = float(res.boxes.xywh[i][1])
         out.append((u, v, float(X), float(Y), float(Z), conf))
     return out
 
@@ -119,7 +148,8 @@ last = []
 try:
     while True:
         if cam.grab(rt) != sl.ERROR_CODE.SUCCESS:
-            time.sleep(0.01); continue
+            time.sleep(0.01)
+            continue
         cam.retrieve_image(img_mat, sl.VIEW.LEFT)
         bgr = np.ascontiguousarray(img_mat.get_data()[:, :, :3])
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
@@ -140,12 +170,24 @@ try:
 
         if last:
             pos = np.array([[d[2], d[3], d[4]] for d in last], np.float32)
-            rr.log("world/okra", rr.Points3D(pos, colors=[255, 40, 40], radii=0.02,
-                                             labels=["%.2f / %.2fm" % (d[5], d[4]) for d in last]))
-            rr.log("world/cam/image/okra2d",
-                   rr.Points2D(np.array([[d[0], d[1]] for d in last], np.float32),
-                               colors=[255, 40, 40], radii=6,
-                               labels=["%.2fm" % d[4] for d in last]))
+            rr.log(
+                "world/okra",
+                rr.Points3D(
+                    pos,
+                    colors=[255, 40, 40],
+                    radii=0.02,
+                    labels=[f"{d[5]:.2f} / {d[4]:.2f}m" for d in last],
+                ),
+            )
+            rr.log(
+                "world/cam/image/okra2d",
+                rr.Points2D(
+                    np.array([[d[0], d[1]] for d in last], np.float32),
+                    colors=[255, 40, 40],
+                    radii=6,
+                    labels=[f"{d[4]:.2f}m" for d in last],
+                ),
+            )
         frame += 1
 except KeyboardInterrupt:
     pass

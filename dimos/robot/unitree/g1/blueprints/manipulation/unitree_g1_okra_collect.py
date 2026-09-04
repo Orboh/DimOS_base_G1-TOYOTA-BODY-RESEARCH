@@ -66,6 +66,12 @@ _TARGET_Z_OFFSET = float(os.getenv("OKRA_TARGET_Z_OFFSET", "0.05"))
 # intercept -1.515cm). Override via OKRA_GRIP_OPEN_Q; set to empty to hold current.
 _grip_env = os.getenv("OKRA_GRIP_OPEN_Q", "3.0").strip()
 _GRIP_OPEN_Q = float(_grip_env) if _grip_env else None
+# 重力モデルURDF(collection_modeのg(q)計算に使う右腕縮約モデルの元URDF)。既定は
+# g1.urdf(手先=170gダミーラバーハンド)。実機にDex1-1を装着している場合は、Dex1-1
+# 実装込みの公式URDF(g1_dex1_1_official.urdf, Dex1-1合計365g)に切り替えて重力補償の
+# 効き方を比較する。既知の乖離: 実測Dex1-1=546g vs 本URDF365g(過小評価、2026-09-04)。
+# 詳細は g1_dex1_1_official.urdf のヘッダーコメント参照。
+_GRAVITY_URDF = os.getenv("OKRA_GRAVITY_URDF", "").strip()
 
 
 def _camera_info_overlay(ci):  # type: ignore[no-untyped-def]
@@ -88,15 +94,18 @@ def _pointcloud_rgb_overlay(pc):  # type: ignore[no-untyped-def]
     return rr.Points3D(positions=np.asarray(points), colors=rgb, radii=radius)
 
 
+_grav_urdf_label = _GRAVITY_URDF or "g1.urdf (default, dummy rubber hand 170g)"
 if _LIVE:
     logger.warning(
         f"unitree-g1-okra-collect LAUNCHING **LIVE** — click okra -> IK reaches pre-grasp (stiff) -> "
         f"on settle the RIGHT arm goes COMPLIANT (hand-guide it). Left arm + waist stay stiff. "
-        f"NIC {_NIC!r}, <= {_ARM_VEL_LIMIT} rad/s. SUPPORT THE RIGHT ARM. E-stop in hand."
+        f"NIC {_NIC!r}, <= {_ARM_VEL_LIMIT} rad/s. gravity model urdf={_grav_urdf_label!r}. "
+        f"SUPPORT THE RIGHT ARM. E-stop in hand."
     )
 else:
     logger.info(
         f"unitree-g1-okra-collect DRY-RUN (set IK_REACH_LIVE=1 to drive the arm). NIC={_NIC!r}. "
+        f"gravity model urdf={_grav_urdf_label!r}. "
         f"Run scripts/okra_kinesthetic_capture.py in another terminal to record."
     )
 
@@ -126,6 +135,7 @@ unitree_g1_okra_collect = autoconnect(
         arm_velocity_limit=_ARM_VEL_LIMIT,
         publish_cmd=_LIVE,
         collection_mode=True,  # reach_done -> right arm compliant (kp->0 + gravity tau)
+        urdf_path=_GRAVITY_URDF,  # "" = g1.urdf既定(ダミーハンド170g)。OKRA_GRAVITY_URDFで上書き。
     ),
     # Hold the right Dex1 open (~3cm, tune OKRA_GRIP_OPEN_Q) during teaching. Gripper
     # stays OUT of the ACT model — this is just the physical open state while recording.

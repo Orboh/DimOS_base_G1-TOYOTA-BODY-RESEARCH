@@ -57,8 +57,10 @@ def main() -> int:
     lc.start()
     disc = Topic(DISCONNECT_TOPIC, Bool)
     print(f"[harvest-keys] LCM {LCM_URL} -> {DISCONNECT_TOPIC}")
-    print("[harvest-keys] press 'q' to CUT G1 transmission (weight->0, arm back to the "
-          "onboard controller) and then quit.")
+    print(
+        "[harvest-keys] press 'q' to CUT G1 transmission (weight->0, arm back to the "
+        "onboard controller) and then quit."
+    )
 
     cmd = {"quit": False}
 
@@ -92,8 +94,10 @@ def main() -> int:
         # (the launcher tears the blueprint down once this exits).
         try:
             lc.publish(disc, Bool(data=True))
-            print(f"[q] -> CUT G1 transmission (weight->0); waiting {DISCONNECT_WAIT_S:.1f}s "
-                  "for the handover, then quitting ...")
+            print(
+                f"[q] -> CUT G1 transmission (weight->0); waiting {DISCONNECT_WAIT_S:.1f}s "
+                "for the handover, then quitting ..."
+            )
             time.sleep(DISCONNECT_WAIT_S)
         except Exception:
             pass

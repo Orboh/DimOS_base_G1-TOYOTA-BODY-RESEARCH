@@ -32,7 +32,7 @@ fi
 IMAGE="go2-agentic-gpu:latest"
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    echo "ERROR: image '$IMAGE' not found. Build it from dimensional-applications/docker-gpu/" >&2
+    echo "ERROR: image '$IMAGE' not found. Build it from dimensional-applications-g1/docker-gpu/" >&2
     echo "       or load the shipped tar: gunzip -c go2-agentic-gpu.tar.gz | docker load" >&2
     exit 1
 fi

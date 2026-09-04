@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Generate the MuJoCo scene for the G1 okra IK+Diffusion rig, from ``g1.urdf``.
 
 WHY GENERATE INSTEAD OF SHIPPING AN MJCF: the IK that this sim exists to test is
@@ -55,11 +69,9 @@ _MESH_DIR_CANDIDATES = (
     Path("/home/techshare/drl_kit/mujoco_ws/ts_mujoco-main/unitree_robots/g1"),
 )
 
-# ---------------------------------------------------------------------------
 # Home posture. 29-DOF canonical order (== make_humanoid_joints("g1")).
 # Legs/waist straight; both arms in the natural lowered pose that -- per the hardware
 # session on 2026-07-23 -- does NOT occlude the chest camera.
-# ---------------------------------------------------------------------------
 _LEG_HOME = [0.0] * 12
 _WAIST_HOME = [0.0, 0.0, 0.0]
 _LEFT_ARM_HOME = [0.20, 0.25, 0.0, 0.40, 0.0, 0.0, 0.0]
@@ -85,10 +97,8 @@ KP_POST, KD_POST = 400.0, 20.0
 # default, so they cannot silently diverge; _check_chest_fov() below asserts the geometry.
 SIM_ZED_MOUNT_ENV = "SIM_ZED_MOUNT_XYZRPY"
 SIM_ZED_MOUNT_DEFAULT = "0.109,0.030,0.248,0.0,0.25,0.0"
-CHEST_MOUNT = [
-    float(v) for v in os.getenv(SIM_ZED_MOUNT_ENV, SIM_ZED_MOUNT_DEFAULT).split(",")
-]
-CHEST_FOVY_DEG = 70.0        # ZED Mini vertical FOV, approximate
+CHEST_MOUNT = [float(v) for v in os.getenv(SIM_ZED_MOUNT_ENV, SIM_ZED_MOUNT_DEFAULT).split(",")]
+CHEST_FOVY_DEG = 70.0  # ZED Mini vertical FOV, approximate
 CHEST_RES = (640, 360)
 
 # Wrist GoPro mount on right_wrist_yaw_link (the UMI observation camera).  The supplied
@@ -96,7 +106,7 @@ CHEST_RES = (640, 360)
 # centre is above the UMI base top face rather than embedded in the plate.  Pitch is +25
 # deg (nose down) so the gripper occupies the lower part of the frame like UMI data.
 WRIST_MOUNT = [0.055, -0.020, 0.100, 0.0, 0.436, 0.0]
-WRIST_FOVY_DEG = 92.0        # GoPro Wide, de-fisheyed equivalent (sim renders pinhole)
+WRIST_FOVY_DEG = 92.0  # GoPro Wide, de-fisheyed equivalent (sim renders pinhole)
 WRIST_RES = (320, 240)
 
 # Spectator camera so the run is watchable in rerun without a MuJoCo GL window.
@@ -112,9 +122,7 @@ SPECTATOR_RES = (640, 480)
 #   - >= 0.35 m from the chest camera (the ZED Mini's minimum measurement distance)
 #   - reachable by the right arm (neutral tip sits at torso [0.245,-0.152,0.051])
 SIM_OKRA_ENV = "SIM_OKRA_IN_TORSO"
-OKRA_IN_TORSO = [
-    float(v) for v in os.getenv(SIM_OKRA_ENV, "0.45,-0.20,0.15").split(",")
-]
+OKRA_IN_TORSO = [float(v) for v in os.getenv(SIM_OKRA_ENV, "0.45,-0.20,0.15").split(",")]
 OKRA_RADIUS = 0.013
 OKRA_HALF_LEN = 0.045
 # Keep the target this far inside the frame edge (fraction of the half-FOV). A pod sitting
@@ -183,8 +191,8 @@ TORSO_CORE_HALF_EXTENTS = (0.0755, 0.1080, 0.1605)
 # (parent_body, child_body, radius): one capsule per segment, spanning parent origin to
 # child origin for this specific chain.
 _ARM_COLLISION_SEGMENTS = [
-    ("right_shoulder_yaw_link", "right_elbow_link", ARM_COLLISION_RADIUS_LIMB),        # upper arm
-    ("right_elbow_link", "right_wrist_roll_link", ARM_COLLISION_RADIUS_LIMB),          # forearm
+    ("right_shoulder_yaw_link", "right_elbow_link", ARM_COLLISION_RADIUS_LIMB),  # upper arm
+    ("right_elbow_link", "right_wrist_roll_link", ARM_COLLISION_RADIUS_LIMB),  # forearm
     ("right_wrist_roll_link", "right_wrist_pitch_link", ARM_COLLISION_RADIUS_WRIST),
     ("right_wrist_pitch_link", "right_wrist_yaw_link", ARM_COLLISION_RADIUS_WRIST),
 ]
@@ -205,7 +213,7 @@ _ARM_COLLISION_EXCLUDE_PAIRS = [
     # adjacency, not an arm-through-chest event.  All elbow, wrist, hand and
     # UMI bodies remain collidable with the torso core.
     ("torso_link", "right_shoulder_yaw_link"),
-    ("right_elbow_link", "right_wrist_pitch_link"),   # forearm vs wrist_pitch->wrist_yaw
+    ("right_elbow_link", "right_wrist_pitch_link"),  # forearm vs wrist_pitch->wrist_yaw
     ("right_wrist_roll_link", "right_wrist_yaw_link"),  # wrist_roll->wrist_pitch vs hand
 ]
 
@@ -219,7 +227,11 @@ _ARM_COLLISION_EXCLUDE_PAIRS = [
 # the visual plates keep the true dimensions so renders still look like the actual box.
 BASKET_COLLISION_MARGIN_M = 0.015
 _BASKET_COLLISION_NAMES = [
-    "basket_back", "basket_front", "basket_bottom", "basket_left", "basket_right",
+    "basket_back",
+    "basket_front",
+    "basket_bottom",
+    "basket_left",
+    "basket_right",
 ]
 
 
@@ -236,7 +248,7 @@ def _resolve_visual_mesh_dir(root: ET.Element, requested: Path | None = None) ->
         for visual in root.findall(".//visual")
         for mesh in visual.findall(".//mesh")
     }
-    candidates = ([requested] if requested is not None else [])
+    candidates = [requested] if requested is not None else []
     env_dir = os.getenv(_MESH_DIR_ENV)
     if env_dir:
         candidates.append(Path(env_dir))
@@ -357,9 +369,9 @@ def _cam_quat_from_body_rpy(rpy: list[float]) -> tuple[float, float, float, floa
     # instead of forward, which renders a plausible-looking but useless view.
     basis = np.array(
         [
-            [0.0, 0.0, -1.0],   # row x: cam_X has no body-x, cam_Z is -body_X
-            [-1.0, 0.0, 0.0],   # row y: cam_X is -body_Y
-            [0.0, 1.0, 0.0],    # row z: cam_Y is +body_Z
+            [0.0, 0.0, -1.0],  # row x: cam_X has no body-x, cam_Z is -body_X
+            [-1.0, 0.0, 0.0],  # row y: cam_X is -body_Y
+            [0.0, 1.0, 0.0],  # row z: cam_Y is +body_Z
         ]
     )
     r_cam = r_body @ basis
@@ -554,7 +566,9 @@ def _pad_basket_collision(root: ET.Element, margin: float) -> int:
             continue
         size = [float(v) + margin for v in geom.get("size", "").split()]
         if len(size) != 3:
-            raise RuntimeError(f"basket collision geom {geom.get('name')!r} has size {geom.get('size')!r}, expected 3 values")
+            raise RuntimeError(
+                f"basket collision geom {geom.get('name')!r} has size {geom.get('size')!r}, expected 3 values"
+            )
         geom.set("size", " ".join(f"{v:.6f}" for v in size))
         padded += 1
     if padded != len(_BASKET_COLLISION_NAMES):
@@ -648,7 +662,9 @@ def _add_scene_furniture(root: ET.Element, floor_z: float, okra_world: np.ndarra
         material="grid_mat",
     )
     ET.SubElement(worldbody, "light", pos="0.8 0.4 2.4", dir="-0.3 -0.15 -1", diffuse="0.8 0.8 0.8")
-    ET.SubElement(worldbody, "light", pos="-0.8 -0.8 2.0", dir="0.3 0.3 -1", diffuse="0.35 0.35 0.35")
+    ET.SubElement(
+        worldbody, "light", pos="-0.8 -0.8 2.0", dir="0.3 0.3 -1", diffuse="0.35 0.35 0.35"
+    )
 
     # Spectator view: front-right of the robot, looking back at the reach volume.
     ET.SubElement(
@@ -730,9 +746,9 @@ def _check_chest_fov(res: tuple[int, int], fovy_deg: float) -> tuple[float, floa
     # axis in body coords is R_y(pitch) @ x_hat = [cos p, 0, -sin p] and the camera's up is
     # R_y(pitch) @ z_hat = [sin p, 0, cos p]; the components are just those dot products.
     cp, sp = np.cos(pitch), np.sin(pitch)
-    fwd = cp * v[0] - sp * v[2]          # along the optical axis
-    up = sp * v[0] + cp * v[2]           # + = above the axis
-    horiz = np.degrees(np.arctan2(-v[1], fwd))   # + = to the camera's right
+    fwd = cp * v[0] - sp * v[2]  # along the optical axis
+    up = sp * v[0] + cp * v[2]  # + = above the axis
+    horiz = np.degrees(np.arctan2(-v[1], fwd))  # + = to the camera's right
     vert = np.degrees(np.arctan2(up, fwd))
 
     width, height = res
@@ -817,8 +833,8 @@ def build(
     probe_data.qpos[7:] = HOME_Q
     mujoco.mj_forward(probe_model, probe_data)
     ankle_id = mujoco.mj_name2id(probe_model, mujoco.mjtObj.mjOBJ_BODY, "left_ankle_roll_link")
-    foot_drop = float(probe_data.xpos[ankle_id][2])          # negative: below the pelvis
-    pelvis_z = -foot_drop + 0.03                             # +3 cm for the sole thickness
+    foot_drop = float(probe_data.xpos[ankle_id][2])  # negative: below the pelvis
+    pelvis_z = -foot_drop + 0.03  # +3 cm for the sole thickness
 
     joints = _joint_names_in_order(root)
     if len(joints) != 29:
@@ -836,7 +852,9 @@ def build(
     # torso_link placement is constant once the base is welded, so the okra's world pos is
     # just torso_world + OKRA_IN_TORSO. Recomputed from the welded model below.
     torso_id = mujoco.mj_name2id(probe_model, mujoco.mjtObj.mjOBJ_BODY, "torso_link")
-    torso_world = np.asarray(probe_data.xpos[torso_id], dtype=float) + np.array([0.0, 0.0, pelvis_z])
+    torso_world = np.asarray(probe_data.xpos[torso_id], dtype=float) + np.array(
+        [0.0, 0.0, pelvis_z]
+    )
     okra_world = torso_world + np.asarray(OKRA_IN_TORSO, dtype=float)
 
     _add_scene_furniture(root, floor_z=0.0, okra_world=okra_world)
@@ -863,7 +881,9 @@ def build(
         print(f"  mesh collisions off: {collision_meshes_dropped} (primitive contacts retained)")
         print(f"  torso collision geoms: {torso_collision_n}")
         print(f"  arm collision geoms: {arm_collision_n}")
-        print(f"  basket geoms padded: {basket_pad_n} (+{BASKET_COLLISION_MARGIN_M * 1000:.0f} mm/face)")
+        print(
+            f"  basket geoms padded: {basket_pad_n} (+{BASKET_COLLISION_MARGIN_M * 1000:.0f} mm/face)"
+        )
         print(f"  gravcomp bodies    : {gravcomp_n}")
         print(f"  nq/nv/nu           : {check.nq}/{check.nv}/{check.nu}")
         print(f"  pelvis weld z      : {pelvis_z:.4f} m (foot drop {foot_drop:.4f})")

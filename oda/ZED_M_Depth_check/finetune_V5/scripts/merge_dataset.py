@@ -1,15 +1,29 @@
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import os
-import shutil
 import random
+import shutil
 
 SOURCES = [
     "/home/techshare/user/Okra_detaction/finetune_v2/dataset",
     "/home/techshare/user/Okra_detaction/finetune_V4/dataset",
 ]
 
-OUT_DIR   = "/home/techshare/user/Okra_detaction/finetune_V5/dataset"
-SPLITS    = {"train": 0.8, "valid": 0.1, "test": 0.1}
-SEED      = 42
+OUT_DIR = "/home/techshare/user/Okra_detaction/finetune_V5/dataset"
+SPLITS = {"train": 0.8, "valid": 0.1, "test": 0.1}
+SEED = 42
 
 random.seed(SEED)
 
@@ -25,8 +39,8 @@ for src in SOURCES:
         for fname in os.listdir(img_dir):
             if not fname.lower().endswith((".jpg", ".jpeg", ".png")):
                 continue
-            stem  = os.path.splitext(fname)[0]
-            lbl   = os.path.join(lbl_dir, stem + ".txt")
+            stem = os.path.splitext(fname)[0]
+            lbl = os.path.join(lbl_dir, stem + ".txt")
             if not os.path.exists(lbl):
                 continue
             if fname not in pairs:
@@ -35,14 +49,14 @@ for src in SOURCES:
 all_pairs = list(pairs.values())
 random.shuffle(all_pairs)
 
-n      = len(all_pairs)
-n_tr   = int(n * SPLITS["train"])
-n_val  = int(n * SPLITS["valid"])
+n = len(all_pairs)
+n_tr = int(n * SPLITS["train"])
+n_val = int(n * SPLITS["valid"])
 
 split_map = {
     "train": all_pairs[:n_tr],
-    "valid": all_pairs[n_tr:n_tr + n_val],
-    "test":  all_pairs[n_tr + n_val:],
+    "valid": all_pairs[n_tr : n_tr + n_val],
+    "test": all_pairs[n_tr + n_val :],
 }
 
 print(f"Total unique pairs : {n}")
@@ -62,8 +76,8 @@ with open(yaml_path, "w") as f:
     f.write(f"train: {OUT_DIR}/train/images\n")
     f.write(f"val:   {OUT_DIR}/valid/images\n")
     f.write(f"test:  {OUT_DIR}/test/images\n")
-    f.write(f"nc: 1\n")
-    f.write(f"names: ['okra']\n")
+    f.write("nc: 1\n")
+    f.write("names: ['okra']\n")
 
 print(f"\ndata.yaml → {yaml_path}")
 print("Merge complete!")

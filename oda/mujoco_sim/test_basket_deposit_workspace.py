@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Sweep okra pick positions across the IK workspace and, for each reachable one, chain a
 reach-to-standoff IK solve straight into the entry->drop->release->retreat basket deposit.
 
@@ -76,7 +90,6 @@ _OUT_DIR = Path(__file__).resolve().parent / "output"
 _RIGHT_SLICE = slice(22, 29)
 REACH_SETTLE_S = 2.0
 
-# ---------------------------------------------------------------------------------------
 # Sample points, torso_link frame [m]. IkReachBridge's workspace box is
 # x in [0.05,0.65] y in [-0.75,0.20] z in [-0.35,0.85] -- but that is the box the *bridge*
 # clamps a click into, not "the right arm can reach every point in it" (a 7-DOF arm
@@ -87,19 +100,18 @@ REACH_SETTLE_S = 2.0
 # the edges of the workspace box (near centerline, very close, very far, very high/low) to
 # surface real reach-limit failures for the report, per Yokote's request to see where it
 # does NOT work, not just where it does.
-# ---------------------------------------------------------------------------------------
 _GRID_X = [0.30, 0.40, 0.50]
 _GRID_Y = [-0.45, -0.30, -0.15, 0.00]
 _GRID_Z = [-0.05, 0.15]
 _STRESS_POINTS = [
-    (0.15, -0.30, 0.10),   # very close to the torso
-    (0.60, -0.30, 0.10),   # far reach
-    (0.45, 0.15, 0.10),    # near/past the body centerline (left of the right arm's side)
-    (0.45, -0.30, 0.45),   # high
+    (0.15, -0.30, 0.10),  # very close to the torso
+    (0.60, -0.30, 0.10),  # far reach
+    (0.45, 0.15, 0.10),  # near/past the body centerline (left of the right arm's side)
+    (0.45, -0.30, 0.45),  # high
     (0.45, -0.30, -0.30),  # low, near basket height
-    (0.45, -0.60, 0.10),   # far to the right
-    (0.20, -0.60, 0.35),   # corner
-    (0.55, 0.10, -0.20),   # corner
+    (0.45, -0.60, 0.10),  # far to the right
+    (0.20, -0.60, 0.35),  # corner
+    (0.55, 0.10, -0.20),  # corner
 ]
 
 # Operational front-side harvesting envelope, torso_link frame [m]. This is intentionally
@@ -151,7 +163,9 @@ def center_sample_points() -> list[tuple[float, float, float]]:
     return [(x, y, z) for x in _CENTER_GRID_X for y in _CENTER_GRID_Y for z in _CENTER_GRID_Z]
 
 
-def _contact_report(model: mujoco.MjModel, data: mujoco.MjData, ignore: set[str]) -> list[tuple[str, str]]:
+def _contact_report(
+    model: mujoco.MjModel, data: mujoco.MjData, ignore: set[str]
+) -> list[tuple[str, str]]:
     floor_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "floor")
     out = []
     for i in range(data.ncon):
@@ -198,7 +212,11 @@ def _reach_point(
     q_sol, converged, err = arm.ik.solve(pinocchio.SE3(np.eye(3), target_root), q_seed)
 
     if not converged:
-        return {"ok": False, "stage": "reach_ik", "reason": f"IK did not converge (err={err:.4f} m)"}
+        return {
+            "ok": False,
+            "stage": "reach_ik",
+            "reason": f"IK did not converge (err={err:.4f} m)",
+        }
     if not arm.clamp_ok(q_sol):
         return {"ok": False, "stage": "reach_ik", "reason": "IK solution violates joint limits"}
 
@@ -346,7 +364,11 @@ def _deposit_from_pose(scene: Path, q_reach: np.ndarray, tip_world: np.ndarray, 
     inside = 0.090 < cargo_t[0] < 0.275 and abs(cargo_t[1]) < 0.040 and -0.165 < cargo_t[2] < -0.080
 
     if not cargo_basket_contacts:
-        return {"ok": False, "stage": "deposit_release", "reason": "released cargo never contacted the basket"}
+        return {
+            "ok": False,
+            "stage": "deposit_release",
+            "reason": "released cargo never contacted the basket",
+        }
     if not inside:
         return {
             "ok": False,
@@ -354,9 +376,17 @@ def _deposit_from_pose(scene: Path, q_reach: np.ndarray, tip_world: np.ndarray, 
             "reason": f"released cargo landed outside the basket: torso={np.round(cargo_t, 4).tolist()}",
         }
     if cargo_speed > 0.03:
-        return {"ok": False, "stage": "deposit_release", "reason": f"cargo did not settle: speed={cargo_speed:.3f} m/s"}
+        return {
+            "ok": False,
+            "stage": "deposit_release",
+            "reason": f"cargo did not settle: speed={cargo_speed:.3f} m/s",
+        }
     if torso_pairs:
-        return {"ok": False, "stage": "deposit_release", "reason": f"retreat arm/UMI touched torso: {torso_pairs[0]}"}
+        return {
+            "ok": False,
+            "stage": "deposit_release",
+            "reason": f"retreat arm/UMI touched torso: {torso_pairs[0]}",
+        }
     if deepest < -MAX_BASKET_PENETRATION_M:
         return {
             "ok": False,
@@ -393,7 +423,9 @@ def run(scene: Path, points: list[tuple[float, float, float]], verbose: bool = T
                 scene, np.asarray(reach["q_reach"]), np.asarray(reach["tip_world"]), arm
             )
             if not deposit["ok"]:
-                record.update({"success": False, "stage": deposit["stage"], "reason": deposit["reason"]})
+                record.update(
+                    {"success": False, "stage": deposit["stage"], "reason": deposit["reason"]}
+                )
             else:
                 record.update(
                     {
@@ -430,9 +462,25 @@ def plot(results: list[dict], out_path: Path) -> None:
     ok = np.array([r["point_torso"] for r in results if r["success"]])
     bad = np.array([r["point_torso"] for r in results if not r["success"]])
     if len(ok):
-        ax.scatter(ok[:, 0], ok[:, 1], ok[:, 2], c="#2ca02c", marker="o", s=60, label=f"success ({len(ok)})")
+        ax.scatter(
+            ok[:, 0],
+            ok[:, 1],
+            ok[:, 2],
+            c="#2ca02c",
+            marker="o",
+            s=60,
+            label=f"success ({len(ok)})",
+        )
     if len(bad):
-        ax.scatter(bad[:, 0], bad[:, 1], bad[:, 2], c="#d62728", marker="x", s=70, label=f"failure ({len(bad)})")
+        ax.scatter(
+            bad[:, 0],
+            bad[:, 1],
+            bad[:, 2],
+            c="#d62728",
+            marker="x",
+            s=70,
+            label=f"failure ({len(bad)})",
+        )
     ax.set_xlabel("x (torso, m)")
     ax.set_ylabel("y (torso, m)")
     ax.set_zlabel("z (torso, m)")
@@ -474,7 +522,9 @@ def render_representatives(scene: Path, reps: list[dict], out_dir: Path) -> list
         out_path = out_dir / f"deposit_{tag}.mp4"
         reach = _reach_point(model, data, arm, pt, home_key, torso_id, wrist_id, okra_mocap)
         if not reach["ok"]:
-            print(f"  [video] {pt} failed at reach ({reach['reason']}) -- skipping video (nothing to show past that point)")
+            print(
+                f"  [video] {pt} failed at reach ({reach['reason']}) -- skipping video (nothing to show past that point)"
+            )
             continue
         try:
             q_transfer = _solve(arm, TRANSFER_STAGE_TORSO, np.asarray(reach["q_reach"]))
@@ -509,7 +559,9 @@ def main() -> int:
     ap.add_argument("--skip-videos", action="store_true", help="skip representative mp4 rendering")
     args = ap.parse_args()
     if not args.scene.exists():
-        print(f"scene missing: {args.scene}\nrun: .venv/bin/python oda/mujoco_sim/build_g1_scene.py")
+        print(
+            f"scene missing: {args.scene}\nrun: .venv/bin/python oda/mujoco_sim/build_g1_scene.py"
+        )
         return 2
 
     points = {
@@ -529,12 +581,17 @@ def main() -> int:
         "front": FRONT_WORKSPACE_BOX_TORSO,
         "center": CENTER_WORKSPACE_BOX_TORSO,
     }.get(args.profile, {"x": [0.05, 0.65], "y": [-0.75, 0.20], "z": [-0.35, 0.85]})
-    results_path.write_text(json.dumps({
-        "profile": args.profile,
-        "points": results,
-        "workspace_box_torso": workspace_box,
-        "all_points_required": args.profile in ("front", "center"),
-    }, indent=2))
+    results_path.write_text(
+        json.dumps(
+            {
+                "profile": args.profile,
+                "points": results,
+                "workspace_box_torso": workspace_box,
+                "all_points_required": args.profile in ("front", "center"),
+            },
+            indent=2,
+        )
+    )
     print(f"wrote {results_path}")
 
     plot_path = _OUT_DIR / f"workspace_{args.profile}_test_plot.png"

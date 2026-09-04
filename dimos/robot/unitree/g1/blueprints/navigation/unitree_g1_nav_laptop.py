@@ -31,9 +31,10 @@ Usage::
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import ipaddress
 import os
-from typing import Any, Callable
+from typing import Any
 
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.global_config import global_config
@@ -69,6 +70,7 @@ def _detect_robot_link() -> tuple[str, str]:
 
 
 _host_ip, _interface = _detect_robot_link()
+
 
 def build_nav_laptop(rerun_blueprint: Callable[[], Any] | None = None) -> Any:
     """Build the laptop nav blueprint; variants may override the Rerun layout.

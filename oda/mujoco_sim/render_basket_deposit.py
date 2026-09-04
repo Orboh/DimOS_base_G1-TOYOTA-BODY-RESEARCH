@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Render the basket-deposit sequence (entry -> drop -> release -> fall -> settle) to mp4.
 
 This is a pure visualization companion to ``test_basket_deposit.py`` -- same sequence,
@@ -148,9 +162,7 @@ class VideoRecorder:
     def __init__(self, out_path: Path, fps: int, res: tuple[int, int]) -> None:
         self.res = res
         self.renderer: mujoco.Renderer | None = None
-        self.writer = cv2.VideoWriter(
-            str(out_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, res
-        )
+        self.writer = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, res)
         self.n_frames = 0
 
     def rebind(self, model: mujoco.MjModel) -> None:
@@ -196,8 +208,10 @@ def _advance_recorded(
             b = mujoco.mj_id2name(rig.model, mujoco.mjtObj.mjOBJ_GEOM, contact.geom2) or "<unnamed>"
             if "torso_collision_core" in (a, b):
                 raise RuntimeError(f"unsafe arm/UMI-to-torso contact while rendering: {a} vs {b}")
-            if not allow_cargo_basket_contact and "cargo_okra_pod" in (a, b) and (
-                "basket_" in a or "basket_" in b
+            if (
+                not allow_cargo_basket_contact
+                and "cargo_okra_pod" in (a, b)
+                and ("basket_" in a or "basket_" in b)
             ):
                 raise RuntimeError(
                     f"unsafe carried-okra-to-basket contact while rendering: {a} vs {b}"
@@ -289,7 +303,9 @@ def render(
     _advance_recorded(rig, q_entry, seconds=DEPOSIT_MOVE_SECONDS, rec=rec, frame_every=frame_every)
     _advance_recorded(rig, q_drop, seconds=DEPOSIT_MOVE_SECONDS, rec=rec, frame_every=frame_every)
     if verbose:
-        print(f"[render] carried entry -> drop, cargo(torso)={np.round(_cargo_torso(rig, cargo_body), 4).tolist()}")
+        print(
+            f"[render] carried entry -> drop, cargo(torso)={np.round(_cargo_torso(rig, cargo_body), 4).tolist()}"
+        )
 
     # Release: same recipe as test_basket_deposit.py -- copy qpos across into a freshly
     # compiled, collidable-cargo model at the exact release pose.
@@ -328,7 +344,9 @@ def render(
 
     inside = 0.090 < cargo_t[0] < 0.275 and abs(cargo_t[1]) < 0.040 and -0.165 < cargo_t[2] < -0.080
     if verbose:
-        print(f"[render] final cargo(torso)={np.round(cargo_t, 4).tolist()} linear_speed={cargo_speed:.4f} m/s inside={inside}")
+        print(
+            f"[render] final cargo(torso)={np.round(cargo_t, 4).tolist()} linear_speed={cargo_speed:.4f} m/s inside={inside}"
+        )
         print(f"[render] wrote {out_path} ({n_frames} frames, {n_frames / FPS:.1f} s)")
     return {
         "cargo_torso": cargo_t.tolist(),
@@ -350,7 +368,9 @@ def main() -> int:
     ap.add_argument("--out", type=Path, default=_OUT_DIR / "basket_deposit.mp4")
     args = ap.parse_args()
     if not args.scene.exists():
-        print(f"scene missing: {args.scene}\nrun: .venv/bin/python oda/mujoco_sim/build_g1_scene.py")
+        print(
+            f"scene missing: {args.scene}\nrun: .venv/bin/python oda/mujoco_sim/build_g1_scene.py"
+        )
         return 2
     render(args.scene, args.out)
     return 0

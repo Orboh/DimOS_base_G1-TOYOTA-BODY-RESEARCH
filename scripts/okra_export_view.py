@@ -38,8 +38,14 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--raw", type=str, default=str(Path.home() / "okra_collect" / "raw"))
     ap.add_argument("--out", type=str, default=str(Path.home() / "okra_collect" / "view"))
-    ap.add_argument("--fps", type=float, default=0.0, help="override fps (0 = read each episode's meta.json)")
-    ap.add_argument("--gif", action="store_true", help="also write a downscaled .gif (plays in any image viewer/browser)")
+    ap.add_argument(
+        "--fps", type=float, default=0.0, help="override fps (0 = read each episode's meta.json)"
+    )
+    ap.add_argument(
+        "--gif",
+        action="store_true",
+        help="also write a downscaled .gif (plays in any image viewer/browser)",
+    )
     args = ap.parse_args()
 
     if not shutil.which("ffmpeg"):
@@ -67,9 +73,18 @@ def main() -> int:
         # image2 needs a sequential pattern; raw frames are 0000.jpg, 0001.jpg, ...
         # +faststart moves the moov atom to the front so browsers/totem can play it.
         cmd = [
-            "ffmpeg", "-y", "-framerate", str(fps),
-            "-i", str(ep / "%04d.jpg"),
-            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+            "ffmpeg",
+            "-y",
+            "-framerate",
+            str(fps),
+            "-i",
+            str(ep / "%04d.jpg"),
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
             str(dst),
         ]
         r = subprocess.run(cmd, capture_output=True, text=True)
@@ -80,8 +95,17 @@ def main() -> int:
         if args.gif:
             gif = out / f"{ep.name}.gif"
             rg = subprocess.run(
-                ["ffmpeg", "-y", "-i", str(dst), "-vf", "fps=10,scale=320:-1:flags=lanczos", str(gif)],
-                capture_output=True, text=True,
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-i",
+                    str(dst),
+                    "-vf",
+                    "fps=10,scale=320:-1:flags=lanczos",
+                    str(gif),
+                ],
+                capture_output=True,
+                text=True,
             )
             msg += "  +gif" if rg.returncode == 0 else "  (gif failed)"
         print(msg)
