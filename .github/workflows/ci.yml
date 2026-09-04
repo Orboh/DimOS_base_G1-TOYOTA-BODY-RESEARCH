@@ -208,7 +208,7 @@ jobs:
         uses: codecov/codecov-action@v6
         with:
           disable_search: true
-          fail_ci_if_error: true
+          fail_ci_if_error: false  # このフォークは Codecov 未登録（Repository not found）
           files: ./coverage.xml
           flags: OS-${{ matrix.os }},Py-${{ matrix.pyver }}
           use_oidc: true
@@ -302,7 +302,7 @@ jobs:
         uses: codecov/codecov-action@v6
         with:
           disable_search: true
-          fail_ci_if_error: true
+          fail_ci_if_error: false  # このフォークは Codecov 未登録（Repository not found）
           files: ./coverage.xml
           flags: SelfHosted-${{ matrix.runner[1] }}
           use_oidc: true
@@ -358,4 +358,4 @@ jobs:
       with:
         run_command: send-notifications
         use_oidc: true
-        fail_ci_if_error: true
+        fail_ci_if_error: false  # このフォークは Codecov 未登録（Repository not found）
