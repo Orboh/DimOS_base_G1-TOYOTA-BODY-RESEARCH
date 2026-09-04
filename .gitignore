@@ -107,3 +107,6 @@ oda/ZED_M_Depth_check/finetune_V5/output/
 oda/ZED_M_Depth_check/finetune_V5/runs/
 oda/ZED_M_Depth_check/finetune_V5/model/
 oda/ZED_M_Depth_check/**/*.pt
+
+# ik_up.sh が起動のたびに生成する一時設定(リスト値は -o で渡せないため)
+oda/ik_reach_cfg.json
