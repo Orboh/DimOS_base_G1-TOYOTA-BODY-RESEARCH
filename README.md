@@ -193,6 +193,9 @@ docs/                        DimOS由来のドキュメント（英語）
 - [STAGE_B_PLAN.md](dimos/robot/unitree/g1/act/STAGE_B_PLAN.md) — ACTのDimOS移植計画
 - [SETUP.md](dimos/robot/unitree/g1/act/SETUP.md) — ACTを一から動かす手順
 - [umi_diffusion/RUN.md](oda/umi_diffusion/RUN.md) — 拡散ポリシーの起動と段階的ロールアウト
+- [Orboh/Dex1-1hand_UMI](https://github.com/Orboh/Dex1-1hand_UMI) — 拡散ポリシーの学習元。
+  UMI（改造Dex1-1カッターハンド）でのデータ収集・EKFによる軌道生成・
+  Diffusion Policy/ACT/Flow Matching学習パイプライン
 - [AGX_ORIN_PORT_SPEC.md](oda/AGX_ORIN_PORT_SPEC.md) — Jetson AGX Orin への移植仕様
 
 **運用・実績**
