@@ -1,0 +1,39 @@
+{
+  "right_arm_body_center": {
+    "right_elbow": 0.5,
+    "right_shoulder_pitch": -0.2,
+    "right_shoulder_roll": -0.1,
+    "right_shoulder_yaw": 0.0,
+    "right_wrist_pitch": 0.0,
+    "right_wrist_roll": 0.0,
+    "right_wrist_yaw": 0.0
+  },
+  "left_arm_body_center": {
+    "left_elbow": 0.5,
+    "left_shoulder_pitch": 0.0,
+    "left_shoulder_roll": 0.0,
+    "left_shoulder_yaw": 0.0,
+    "left_wrist_pitch": 0.0,
+    "left_wrist_roll": 0.0,
+    "left_wrist_yaw": 0.0
+  },
+  "right_arm_drop_pose": {
+    "right_elbow": -0.33172025538834676,
+    "right_shoulder_pitch": -0.766838958213345,
+    "right_shoulder_roll": -0.17520074543425349,
+    "right_shoulder_yaw": 0.34396763100829686,
+    "right_wrist_pitch": -0.4,
+    "right_wrist_roll": -0.4,
+    "right_wrist_yaw": 0.4
+  },
+  "left_basket_pose": {
+    "left_elbow": 1.133,
+    "left_shoulder_pitch": -0.117,
+    "left_shoulder_roll": -0.0167,
+    "left_shoulder_yaw": -0.3997,
+    "left_wrist_pitch": -1.0673,
+    "left_wrist_roll": 0.0834,
+    "left_wrist_yaw": -0.2355
+  },
+  "_source": "Orboh/dex1_1_service feat/drop-to-basket 20260625/src/data (==20260619, \u6700\u65b0\u30fb\u6b63)"
+}
