@@ -141,6 +141,18 @@ _IK_STREAM_LEGS = os.getenv("OKRA_IK_STREAM_LEGS", "1").strip() == "1"
 _IK_STREAM_STEP_M = float(os.getenv("OKRA_IK_STREAM_STEP_M", "0.035"))
 _IK_STREAM_CADENCE_S = float(os.getenv("OKRA_IK_STREAM_CADENCE_S", "0.18"))
 _CUT_SETTLE_S = float(os.getenv("OKRA_CUT_SETTLE_S", "2.5"))
+# [rad] 切断時のグリッパ閉じ位置。既定0.0=全閉方向。2026-09-14 実機確認
+# （oda/gripper_move_probe.py / gripper_close_probe.py）: Dex1-1はqが小さい
+# ほど閉じる・大きいほど開く（公式dex1_1_serviceのキャリブレーション=手で
+# 固く閉じてq=0を記録、と一致）。honbanはアタッチメント無しの素のDex1-1
+# 構成のため、切断+把持は全閉方向へのフルストロークでよいと判断（旧既定
+# 4.4は逆方向＝開く側の値だったため修正、harvest_module.py の cut_close_q
+# コメント参照）。
+_CUT_CLOSE_Q = float(os.getenv("OKRA_CUT_CLOSE_Q", "0.0"))
+_BLADE_MAX_Q = float(os.getenv("OKRA_BLADE_MAX_Q", "5.2"))
+# [rad] 籠投入時にオクラをリリースする開き角度。既定3.7のままで十分
+# （2026-09-14 ユーザー確認 — blade_max_q=5.2まで開く必要はない）。
+_BASKET_OPEN_Q = float(os.getenv("OKRA_BASKET_OPEN_Q", "3.7"))
 _VOICE_LEAD_S = float(os.getenv("OKRA_VOICE_LEAD_S", "2.0"))
 # §5 sweep（HarvestConfig パススルー、既定は未指定=HarvestConfigのデフォルトのまま
 # 後方互換）。sim検証で広い探索範囲(例: 10m先まで)を試す時だけ上書きする
@@ -174,6 +186,13 @@ _BASE_SPEED = float(os.getenv("OKRA_BASE_SPEED", "0.8"))
 _MOVE_SOURCE = os.getenv("OKRA_MOVE_SOURCE", "real").strip().lower()
 
 _USE_BASKET_DEPOSIT = os.getenv("OKRA_BASKET_DEPOSIT", "1").strip() == "1"
+# 教示済みの籠投入姿勢（右腕7関節[rad]、正準順、カンマ区切り）。
+# unitree-g1-teach-pregrasp-pose と同じ手法で、entry→drop→retreatの順に
+# touch保存して得た値を設定する。3つとも空でなければIKを使わず直接再生する
+# （推奨、basket_deposit.py docstring参照）。空文字（既定）=IKモード（後方互換）。
+_BASKET_ENTRY_Q7 = os.getenv("OKRA_BASKET_ENTRY_Q7", "")
+_BASKET_DROP_Q7 = os.getenv("OKRA_BASKET_DROP_Q7", "")
+_BASKET_RETREAT_Q7 = os.getenv("OKRA_BASKET_RETREAT_Q7", "")
 
 _CAM_TO_TORSO = os.getenv(
     "OKRA_CAM_TO_TORSO",
@@ -213,10 +232,14 @@ _MODULES = [
         cam_to_torso_xyzquat=_CAM_TO_TORSO,
         use_ik_grasp_sequence=True,
         use_act_grasp=False,
-        cut_close_q=float(os.getenv("OKRA_CUT_CLOSE_Q", "4.4")),
-        blade_max_q=float(os.getenv("OKRA_BLADE_MAX_Q", "5.2")),
+        cut_close_q=_CUT_CLOSE_Q,
+        blade_max_q=_BLADE_MAX_Q,
         cut_settle_s=_CUT_SETTLE_S,
         use_basket_deposit=_USE_BASKET_DEPOSIT,
+        basket_open_q=_BASKET_OPEN_Q,
+        basket_entry_q7=_BASKET_ENTRY_Q7,
+        basket_drop_q7=_BASKET_DROP_Q7,
+        basket_retreat_q7=_BASKET_RETREAT_Q7,
         gripper_live=(_LIVE and _GRIP_LIVE),
         pregrasp_settle_s=(_GRAVITY_RAMP_S if _GRAVITY_FF else 0.0),
         # ⭐ zed 版と違う2行: above を0で無効化し、front を渡す。
@@ -279,6 +302,7 @@ _approach_note = (
     f"pregrasp_pose_torso={_PREGRASP_POSE_TORSO_XYZ or 'OFF'} "
     f"pregrasp_settle_s={(_GRAVITY_RAMP_S if _GRAVITY_FF else 0.0):.1f} "
     f"stream_legs={_IK_STREAM_LEGS} cut_settle_s={_CUT_SETTLE_S:.1f} "
+    f"cut_close_q={_CUT_CLOSE_Q} blade_max_q={_BLADE_MAX_Q} basket_open_q={_BASKET_OPEN_Q} "
     f"cam_to_torso={'set' if _CAM_TO_TORSO else 'UNSET(camera-frame passthrough)'}"
 )
 _move_note = (
@@ -291,7 +315,7 @@ if _LIVE and _GRIP_LIVE:
         f"automatically (no click needed) and the arm+gripper WILL move via rt/arm_sdk / "
         f"rt/dex1 on NIC {_NIC!r} at <= {_ARM_VEL_LIMIT} rad/s. grasp=IK(front)->cut(no-ACT, no-VLM) "
         f"gravity_ff={_GRAVITY_FF} urdf={_GRAVITY_URDF!r} {_approach_note} "
-        f"basket_deposit={'ON' if _USE_BASKET_DEPOSIT else 'OFF'} {_move_note}. "
+        f"basket_deposit={'ON(' + ('taught' if (_BASKET_ENTRY_Q7 and _BASKET_DROP_Q7 and _BASKET_RETREAT_Q7) else 'IK') + ')' if _USE_BASKET_DEPOSIT else 'OFF'} {_move_note}. "
         f"{'⚠️⚠️ BASE WILL WALK (LocoClient, OKRA_MOVE_LIVE=1). ' if _USE_BASE_MOVE else ''}"
         "Keep an e-stop in hand."
     )
@@ -301,7 +325,7 @@ elif _LIVE:
         f"rt/arm_sdk on NIC {_NIC!r}, but the GRIPPER stays DRY-RUN (set "
         "OKRA_NOACT_GRIP_LIVE=1 to also close/open it). grasp=IK(front)->cut(no-ACT, no-VLM) "
         f"gravity_ff={_GRAVITY_FF} {_approach_note} "
-        f"basket_deposit={'ON' if _USE_BASKET_DEPOSIT else 'OFF'} {_move_note}."
+        f"basket_deposit={'ON(' + ('taught' if (_BASKET_ENTRY_Q7 and _BASKET_DROP_Q7 and _BASKET_RETREAT_Q7) else 'IK') + ')' if _USE_BASKET_DEPOSIT else 'OFF'} {_move_note}."
     )
 else:
     logger.info(
@@ -309,7 +333,7 @@ else:
         f"to drive arm+gripper, +OKRA_MOVE_LIVE=1 to also drive the base). NIC={_NIC!r}. "
         f"grasp=IK(front)->cut(no-ACT, no-VLM) "
         f"gravity_ff={_GRAVITY_FF} {_approach_note} "
-        f"basket_deposit={'ON' if _USE_BASKET_DEPOSIT else 'OFF'} {_move_note}."
+        f"basket_deposit={'ON(' + ('taught' if (_BASKET_ENTRY_Q7 and _BASKET_DROP_Q7 and _BASKET_RETREAT_Q7) else 'IK') + ')' if _USE_BASKET_DEPOSIT else 'OFF'} {_move_note}."
     )
 
 unitree_g1_okra_honban = (

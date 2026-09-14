@@ -59,8 +59,11 @@ logger = setup_logger()
 _RIGHT_GRIPPER_JOINT = "g1/right_gripper"
 
 # Dex1-1 切断グリッパ（[[SS-06-切断と籠収納]]）。
-_Q_CLOSE_CUT = 4.4  # [rad] 閉じ位置＝切断＋把持
-_Q_BLADE_MAX = 5.2  # [rad] 刃保護の上限（機械限界 5.4 の手前。過電流フォルト回避）
+_Q_CLOSE_CUT = 4.4  # [rad] 閉じ位置＝切断＋把持（呼び出し元は通常 config.cut_close_q で上書き）
+# [rad] 開き方向の安全上限（機械限界 5.4 の手前。過電流フォルト回避）。qが小さい
+# ほど閉じる/大きいほど開く（2026-09-14 実機確認、harvest_module.py の
+# cut_close_q コメント参照）ため、実質「開きすぎ防止の上限」。
+_Q_BLADE_MAX = 5.2
 
 
 class GraspSequence:

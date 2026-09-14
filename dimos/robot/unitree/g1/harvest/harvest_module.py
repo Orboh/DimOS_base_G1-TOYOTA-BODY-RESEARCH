@@ -214,8 +214,17 @@ class HarvestModuleConfig(ModuleConfig):
     # 発行されていたことが判明（このケースは購読登録前だったため実害なしと推定される
     # が、タイミング次第では防げなかった）。True にする前に実機のグリッパ挙動を確認すること。
     gripper_live: bool = False
-    cut_close_q: float = 4.4  # [rad] 切断時のグリッパ閉じ位置
-    blade_max_q: float = 5.2  # [rad] 刃保護の上限（機械限界 5.4 の手前）
+    # [rad] 切断時のグリッパ閉じ位置。既定4.4はDex1-1公式サービスの仕様
+    # （手で固く閉じた状態をq=0として校正=qが小さいほど閉じる、q増加が開く方向）
+    # とは逆向きの値だったことが2026-09-14 実機確認(oda/gripper_move_probe.py /
+    # gripper_close_probe.py)で判明。honban.py（アタッチメント無しの素のDex1-1
+    # 構成）は OKRA_CUT_CLOSE_Q="0.0" で上書きして正しい方向（全閉）にしている
+    # ——このデフォルト自体は他ブループリントとの後方互換のため変更していない。
+    cut_close_q: float = 4.4
+    # [rad] グリッパの開き方向の安全上限（機械限界 5.4 の手前、過電流フォルト
+    # 回避）。qが小さいほど閉じる/大きいほど開く（上記コメント参照）ため、
+    # 実質「開きすぎ防止の上限」として機能する。
+    blade_max_q: float = 5.2
     # 切断（グリッパ閉）指令の後、実際に閉じきるまで待つ秒数（GraspSequence.cut_settle_s
     # 参照）。0（既定）だと use_basket_deposit=True の場合に、グリッパが閉じきる前に
     # 籠投入の開き指令が飛ぶ（2026-09-08 実機LIVEで確認）。use_basket_deposit=True と
@@ -228,6 +237,22 @@ class HarvestModuleConfig(ModuleConfig):
     # すること（basket_deposit.py のSAFETY注記参照）。False（既定）= 従来どおり
     # 切断後は保持したまま（プレースホルダー・F-07未接続）。
     use_basket_deposit: bool = False
+    # LIVE + use_basket_deposit: 教示済みの籠投入姿勢（右腕7関節[rad]、正準順、
+    # カンマ区切り、unitree-g1-teach-pregrasp-poseと同じ手法で教示）。3つとも
+    # 指定されていればIKを使わずこれを直接再生する（推奨、basket_deposit.py の
+    # docstring参照）。IK座標(entry_torso等)は自己干渉モデルを持たないため、
+    # お腹や籠の縁に干渉する経路を解いてしまうリスクがある
+    # （2026-09-14 ユーザー指摘）。空文字（既定）=IKモード（後方互換）。
+    basket_entry_q7: str = ""
+    basket_drop_q7: str = ""
+    basket_retreat_q7: str = ""
+    # LIVE + use_basket_deposit: 籠投入時にオクラをリリースする開き角度[rad]
+    # （make_basket_deposit_fn の q_open 参照）。既定 3.7 = basket_deposit_bridge.py
+    # 由来の実機実績値。qが大きいほど開く方向（cut_close_q コメント参照）なので、
+    # 3.7 は起動時の休憩姿勢(≈3.7)と同程度に開いた状態 — 2026-09-14 ユーザー確認
+    # により、リリース角度としてはこのままで十分（フルの開き上限blade_max_q=5.2
+    # まで開く必要はない）。
+    basket_open_q: float = 3.7
     # ZED→torso のハンドアイ外部パラメータ（重心3D を IK の torso フレームへ変換）。
     # 空 = 未校正（Step 4 で配線）。形式は [x,y,z, qx,qy,qz,qw]（torso<-camera）。
     cam_to_torso_xyzquat: str = ""
@@ -637,10 +662,33 @@ class HarvestModule(Module):
                             state = self._latest_state
                         return list(state.position) if state is not None else [0.0] * 29
 
+                    def _parse_q7(spec: str) -> list[float] | None:
+                        if not spec:
+                            return None
+                        try:
+                            q7 = [float(v) for v in spec.split(",")]
+                        except ValueError:
+                            logger.warning(
+                                f"HarvestModule: 籠投入姿勢 {spec!r} の書式が不正 "
+                                "(期待形式: カンマ区切り7要素[rad]) — 無視します"
+                            )
+                            return None
+                        if len(q7) != 7:
+                            logger.warning(
+                                f"HarvestModule: 籠投入姿勢 {spec!r} が7要素でない "
+                                f"({len(q7)}要素) — 無視します"
+                            )
+                            return None
+                        return q7
+
                     place_basket_fn = make_basket_deposit_fn(
                         send_arm=_send_arm,
                         open_gripper=_open_gripper,
                         get_measured=_get_measured,
+                        entry_q7=_parse_q7(self.config.basket_entry_q7),
+                        drop_q7=_parse_q7(self.config.basket_drop_q7),
+                        retreat_q7=_parse_q7(self.config.basket_retreat_q7),
+                        q_open=self.config.basket_open_q,
                     )
 
                 # 籠投入後、次のオクラ探索前に起動時の姿勢へ腕を戻す

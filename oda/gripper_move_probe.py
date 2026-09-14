@@ -22,16 +22,23 @@
 このスクリプトは **開き方向(q増加)へ実際に動かす指令**を送り、q が
 追従して動くかを見る。開き方向はアタッチメント限界から離れる向きなので安全。
 
-実行(あなたのターミナルで。念のため e-stop を手元に):
-  cd ~/workspace/DimOS_base_G1-TOYOTA-BODY-
-  CYCLONEDDS_HOME=~/cyclonedds-noshm LD_LIBRARY_PATH=~/cyclonedds-noshm/lib \
+実行(あなたのターミナルで。念のため e-stop を手元に。honban等のアプリは
+起動していない状態で単独実行すること — 同時起動するとDDS上でコマンドが競合する):
+  ROBOT_INTERFACE=<有線NIC名> OKRA_DEX1_PREFIX=rt/dex1/right \
   .venv/bin/python oda/gripper_move_probe.py
 
 判定:
   q が目標へ向かって動く/tau が出る → モーターは生きている(復帰可能)。
   q が全く動かず tau≈0 のまま      → モーターが指令を実行しない(故障濃厚)。
+
+2026-09-14 追記: NIC/PREFIXを環境変数化（旧enp2s0/rt/dex1/leftは別機体の決め
+打ち値だった）。また、このスクリプト自体が「開き方向(q増加)」と明記している
+通り、公式dex1_1_serviceのキャリブレーション手順（手で閉じてq=0を記録）と
+2026-09-02実機ログ（q増加=開き方向、q減少=閉じ方向、q≈0=全閉）から、
+q=0が全閉・qが大きいほど開く、という理解を裏付ける材料として使う。
 """
 
+import os
 import time
 
 from unitree_sdk2py.core.channel import (
@@ -42,8 +49,8 @@ from unitree_sdk2py.core.channel import (
 from unitree_sdk2py.idl.default import unitree_go_msg_dds__MotorCmd_
 from unitree_sdk2py.idl.unitree_go.msg.dds_ import MotorCmds_, MotorStates_
 
-NIC = "enp2s0"
-PREFIX = "rt/dex1/left"
+NIC = os.getenv("ROBOT_INTERFACE", "enp2s0")
+PREFIX = os.getenv("OKRA_DEX1_PREFIX", "rt/dex1/left")
 KP = 20.0  # 意味のある剛性(農場実績値と同じ)
 OPEN_DELTA = 0.8  # 現在位置から開き方向へ+0.8rad(アタッチメント限界から離れる)
 

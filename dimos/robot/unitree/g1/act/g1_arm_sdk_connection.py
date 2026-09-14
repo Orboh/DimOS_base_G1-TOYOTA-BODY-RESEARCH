@@ -256,6 +256,14 @@ class G1ArmSdkConnection(Module):
         self._stiff_right_grav_model = None
         self._stiff_right_nonfinite_logged = False
         self._startup_arm_q = None  # onboard pose captured at start (weight=0)
+        # 再入防止（2026-09-14 実機LIVEで判明）: DimOSはこのモジュールに対して
+        # stop() を2経路から呼びうる（module_coordinator.py の Stopping module...
+        # 経由のRPC呼び出しと、python_worker.py のワーカーシャットダウン処理内の
+        # 直接呼び出し）。stop() は物理的にhandback（起動時姿勢へ数秒かけて戻る）
+        # を含むため、1回目が完了する前に2回目が割り込むと target_q の書き換えが
+        # 競合し、腕が中途半端な位置（歩行ポリシー想定の姿勢ではない）で取り残
+        # される — 実際に発生を確認。2回目以降は即returnして無視する。
+        self._stop_called = threading.Event()
         self._stiff_left_grav_data = None
         self._stiff_left_grav_indices: frozenset[int] = frozenset()
         if self.config.collection_mode:
@@ -494,6 +502,17 @@ class G1ArmSdkConnection(Module):
 
     @rpc
     def stop(self) -> None:
+        # 再入防止: DimOSがRPC経由とワーカーシャットダウン経由の2回stop()を呼ぶ
+        # ことがある（クラス冒頭の _stop_called コメント参照）。1回目のhandback
+        # （腕を起動時姿勢へ戻す処理）が終わる前に2回目が来ると target_q の
+        # 書き換えが競合し、腕が中途半端な位置に取り残される。
+        if self._stop_called.is_set():
+            logger.info(
+                "G1ArmSdkConnection: stop() already in progress/done; ignoring "
+                "re-entrant call (handback must not be interrupted)."
+            )
+            return
+        self._stop_called.set()
         # Ramp weight back to 0 to hand the arms back to the onboard controller.
         # Collection: clear compliant first so the loop re-stiffens the right arm at its
         # measured pose before the weight ramp-down (never hand back a limp right arm).
