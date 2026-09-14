@@ -228,8 +228,14 @@ class YoloOkraDetector:
         self._depth_getter = depth_getter
         self._ripeness_fn = ripeness_fn
         self._min_conf = min_confidence
+        # 直近の detect() で「YOLO は見つけたが 3D 化できず捨てた」件数。呼び出し側
+        # （graph の detect ノード）が「本当にオクラが無い」と区別するために読む。
+        # 両者とも detect() が [] を返すため、この値が無いと区別する手段が一切ない
+        # （2026-09-14: 音声も既定ログも同じで、実機で切り分け不能だった）。
+        self.last_dropped = 0
 
     def detect(self) -> list[Okra]:
+        self.last_dropped = 0
         frame = self._frame_getter()
         if frame is None:
             return []
@@ -252,6 +258,7 @@ class YoloOkraDetector:
             if pos is None:
                 # 3D 化に必要な情報（ZED の camera_info / 深度）が揃っていない。
                 # 推測値で腕を動かすより捨てる方が安全（make_zed_pixel_to_base 参照）。
+                self.last_dropped += 1
                 logger.debug("detect_okra: skipping %s — no 3D position available", name)
                 continue
             ripeness = float(self._ripeness_fn(det)) if self._ripeness_fn else 1.0
@@ -265,6 +272,12 @@ class YoloOkraDetector:
                     ripeness=ripeness,
                     reachable=False,  # graph recomputes from cfg.reach.contains(pos_3d)
                 )
+            )
+        if self.last_dropped:
+            # WARNING で出す（旧 debug は DIMOS_LOG_LEVEL 既定 INFO では不可視だった）。
+            logger.warning(
+                f"detect_okra: {self.last_dropped} 件の検出を 3D 化できず破棄 "
+                f"(camera_info/深度の未受信か深度外れ値)。有効 {len(out)} 件"
             )
         return out
 
@@ -318,7 +331,15 @@ def make_yolo_detect_okra(
         target_classes=target_classes or {"banana"},
         **kwargs,
     )
-    return yolo.detect
+
+    def detect_fn() -> list[Okra]:
+        return yolo.detect()
+
+    # 呼び出し側（DimosHarvestSkills.last_detect_dropped）が「空の検出」の理由を
+    # 読めるように検出器そのものをぶら下げる。bound method には属性を付けられない
+    # ため、素の関数でラップしている。
+    detect_fn.detector = yolo  # type: ignore[attr-defined]
+    return detect_fn
 
 
 __all__ = [

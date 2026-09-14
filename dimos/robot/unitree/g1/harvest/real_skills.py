@@ -100,6 +100,11 @@ class DimosHarvestSkills:
     def detect_okra(self) -> list[Okra]:
         return self._detect_fn()
 
+    def last_detect_dropped(self) -> int:
+        """``make_yolo_detect_okra`` がぶら下げた検出器から破棄件数を読む（無ければ 0）。"""
+        detector = getattr(self._detect_fn, "detector", None)
+        return int(getattr(detector, "last_dropped", 0) or 0)
+
     def grasp_okra(self, okra: Okra, force: float) -> None:
         self._grasp_fn(okra, force)
 

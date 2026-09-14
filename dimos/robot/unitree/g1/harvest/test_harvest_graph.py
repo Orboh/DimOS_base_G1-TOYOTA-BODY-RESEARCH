@@ -304,3 +304,49 @@ def test_advance_left_waits_only_on_its_one_announcement() -> None:
     # One wait for searching() (first sweep only) + one for station_done()
     # (next_station, unconditional) — NOT one per sweep (that would be 3+).
     assert mock_sleep.call_count == 2
+
+
+# --- 「オクラが無い」と「カメラ準備中」を音声で区別する（2026-09-14） --------------
+# 実機では音声だけが判断材料になる場面があるため、count==0 の理由を読み分けられる
+# ことをグラフ経由で担保する。
+
+
+class _EmptyDetectSkills(MockHarvestSkills):
+    """検出0件を返すが、3D化できず捨てた件数だけを差し替えられるスキル。"""
+
+    def __init__(self, dropped: int) -> None:
+        super().__init__(field=[])  # 空の畑
+        self._dropped = dropped
+
+    def detect_okra(self):  # type: ignore[no-untyped-def]
+        return []
+
+    def last_detect_dropped(self) -> int:
+        return self._dropped
+
+
+def test_voice_reports_detections_that_could_not_be_localized() -> None:
+    voice = RecordingAnnouncer()
+    app = build_harvest_graph(_EmptyDetectSkills(dropped=3), _CFG, announcer=voice)
+    app.invoke(initial_state())
+    assert announce.detect_result(0, 3) in voice.said
+    assert announce.detect_result(0) not in voice.said
+
+
+def test_voice_says_no_okra_when_nothing_was_dropped() -> None:
+    voice = RecordingAnnouncer()
+    app = build_harvest_graph(_EmptyDetectSkills(dropped=0), _CFG, announcer=voice)
+    app.invoke(initial_state())
+    assert announce.detect_result(0) in voice.said
+
+
+def test_detect_result_wording_is_distinct() -> None:
+    assert announce.detect_result(0, 0) == "オクラは見当たりません。"
+    assert announce.detect_result(0, 3) == "オクラを3個見つけましたが、位置が測れません。"
+    assert announce.detect_result(2, 3) == "オクラが2個見えます。"  # 有効があれば通常文言
+
+
+def test_detect_log_records_dropped_count() -> None:
+    app = build_harvest_graph(_EmptyDetectSkills(dropped=2), _CFG)
+    out = app.invoke(initial_state())
+    assert any("dropped 2" in line for line in out["log"])

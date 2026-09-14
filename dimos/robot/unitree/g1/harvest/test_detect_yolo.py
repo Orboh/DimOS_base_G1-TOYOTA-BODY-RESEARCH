@@ -159,3 +159,92 @@ class _FakeSkills:
 
     def record_harvest(self, record):
         pass
+
+
+# --- 3D化できずに捨てた件数の可視化（2026-09-14） ------------------------------
+# 「本当にオクラが無い」と「camera_info/深度がまだ来ていない」は、どちらも detect() が
+# [] を返すため区別できなかった（音声も既定ログも同一）。last_dropped がその区別を担う。
+
+
+def test_last_dropped_counts_undeprojectable_detections() -> None:
+    dets = [
+        _Det("okra", (300, 220, 340, 260), track_id=1),
+        _Det("okra", (100, 220, 140, 260), track_id=2),
+    ]
+    det = _detector(dets, pixel_to_base=lambda u, v, d: None)  # 3D化が常に失敗
+    assert det.detect() == []
+    assert det.last_dropped == 2
+
+
+def test_last_dropped_is_zero_when_all_deprojected() -> None:
+    det = _detector([_Det("okra", (300, 220, 340, 260), track_id=1)])
+    assert len(det.detect()) == 1
+    assert det.last_dropped == 0
+
+
+def test_last_dropped_resets_between_calls() -> None:
+    """前回の破棄件数が残ると「カメラ準備中」を誤って言い続ける。"""
+    dets = [_Det("okra", (300, 220, 340, 260), track_id=1)]
+    fail = {"on": True}
+    det = _detector(
+        dets, pixel_to_base=lambda u, v, d: None if fail["on"] else {"x": 0.0, "y": 0.45, "z": 0.0}
+    )
+    det.detect()
+    assert det.last_dropped == 1
+    fail["on"] = False
+    assert len(det.detect()) == 1
+    assert det.last_dropped == 0
+
+
+def test_class_filtered_detections_are_not_counted_as_dropped() -> None:
+    """対象クラス外/低信頼は「3D化できなかった」ではないので数えない。"""
+    dets = [
+        _Det("person", (10, 10, 50, 50), track_id=1),
+        _Det("okra", (300, 220, 340, 260), confidence=0.1, track_id=2),
+    ]
+    det = _detector(dets, min_confidence=0.5)
+    assert det.detect() == []
+    assert det.last_dropped == 0
+
+
+def test_factory_exposes_detector_for_dropped_count() -> None:
+    """``make_yolo_detect_okra`` の戻り値から破棄件数を辿れる（real_skills が使う）。"""
+    from dimos.robot.unitree.g1.harvest.detect_yolo import make_yolo_detect_okra
+    from dimos.robot.unitree.g1.harvest.real_skills import DimosHarvestSkills
+
+    detect_fn = make_yolo_detect_okra(
+        frame_getter=lambda: _Frame(),
+        target_classes={"okra"},
+        detector=_StubDetector([_Det("okra", (300, 220, 340, 260), track_id=1)]),
+        pixel_to_base=lambda u, v, d: None,
+    )
+    assert detect_fn() == []
+    assert detect_fn.detector.last_dropped == 1
+
+    skills = DimosHarvestSkills(
+        move_cmd=lambda *a, **k: None,
+        detect_fn=detect_fn,
+        grasp_fn=lambda *a, **k: None,
+        verify_fn=lambda: True,
+        next_station_fn=lambda: False,
+        swap_fn=lambda: None,
+        record_fn=lambda r: None,
+    )
+    assert skills.detect_okra() == []
+    assert skills.last_detect_dropped() == 1
+
+
+def test_last_detect_dropped_is_zero_without_detector_attribute() -> None:
+    """検出器をぶら下げない detect_fn（VLM経路など）でも壊れない。"""
+    from dimos.robot.unitree.g1.harvest.real_skills import DimosHarvestSkills
+
+    skills = DimosHarvestSkills(
+        move_cmd=lambda *a, **k: None,
+        detect_fn=lambda: [],
+        grasp_fn=lambda *a, **k: None,
+        verify_fn=lambda: True,
+        next_station_fn=lambda: False,
+        swap_fn=lambda: None,
+        record_fn=lambda r: None,
+    )
+    assert skills.last_detect_dropped() == 0

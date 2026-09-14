@@ -163,10 +163,21 @@ def build_harvest_graph(
         """Phase 2: observe the current view; list every okra in it."""
         gate.checkpoint()  # §6: block here while a safety hazard is active
         okra = skills.detect_okra()
+        # 「見つけたが 3D 化できず捨てた」件数。空の検出の理由が「本当に無い」なのか
+        # 「camera_info/深度がまだ来ていない」なのかを区別する唯一の手掛かり
+        # （2026-09-14: 音声も既定ログも同一で、実機で切り分けできなかった）。
+        # 旧実装のスキル（この任意メソッドを持たない）とも動くよう getattr で読む。
+        _dropped_fn = getattr(skills, "last_detect_dropped", None)
+        dropped = int(_dropped_fn() or 0) if callable(_dropped_fn) else 0
         iterations = state.get("iterations", 0) + 1
         if iterations == 1:
             voice.say(announce.start())
-        voice.say(announce.detect_result(len(okra)))
+        voice.say(announce.detect_result(len(okra), dropped))
+        if not okra and dropped:
+            logger.warning(
+                f"detect: 有効な検出0件だが {dropped} 件を3D化できず破棄している。"
+                "オクラが無いのではなくカメラ情報待ちの可能性が高い（スイープ前に要確認）"
+            )
         # Remember every ripe, not-yet-excluded okra in the odometry frame, so we
         # can return for ones we pass. Refreshes the estimate on each sighting.
         offset = _offset(state)
@@ -184,7 +195,12 @@ def build_harvest_graph(
             okra_visible=okra,
             iterations=iterations,
             pending=pending,
-            log=[*state.get("log", []), f"detect: saw {len(okra)} okra (iter {iterations})"],
+            log=[
+                *state.get("log", []),
+                f"detect: saw {len(okra)} okra (iter {iterations}"
+                + (f", dropped {dropped}" if dropped else "")
+                + ")",
+            ],
         )
 
     def select(state: HarvestState) -> HarvestState:
@@ -287,6 +303,15 @@ def build_harvest_graph(
         _wait_after_voice()
         if target is not None:
             skills.grasp_okra(target, cfg.grasp_force)
+        else:
+            # target_id が立っているのに okra_visible に無い＝腕を一切動かさずに
+            # VERIFY へ抜ける。旧実装は無言だったため「手が動かない」としか観測
+            # できなかった（2026-09-14）。必ず痕跡を残す。
+            logger.warning(
+                f"grasp: target_id={state.get('target_id')!r} が okra_visible に見つからない "
+                f"(可視 {[o.id for o in state.get('okra_visible', [])]})。"
+                "腕を動かさずスキップする"
+            )
         return HarvestState(
             grasp_attempts=attempts,
             log=[

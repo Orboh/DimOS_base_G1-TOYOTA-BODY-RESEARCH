@@ -62,6 +62,16 @@ class HarvestSkills(Protocol):
         """Observe the current view and return every okra in it (relative pose)."""
         ...
 
+    def last_detect_dropped(self) -> int:
+        """直近の :meth:`detect_okra` で「見つけたが 3D 化できず捨てた」件数。
+
+        空の検出には「本当にオクラが無い」と「camera_info/深度がまだ揃っていない」の
+        2通りがあり、どちらも ``[]`` になる（``detect_yolo.py``）。グラフはこの値で
+        両者を区別し、前者のときだけ探索スイープへ進む。3D 化の概念を持たない実装
+        （dummy 等）は 0 を返してよい。
+        """
+        ...
+
     def relative_move(self, lateral: float, forward: float = 0.0, yaw: float = 0.0) -> None:
         """Move the base: ``lateral`` (+right) and ``forward`` (+forward), metres."""
         ...

@@ -168,7 +168,16 @@ def give_up() -> str:
     return "このオクラは収穫できませんでした。次に進みます。"
 
 
-def detect_result(count: int) -> str:
+def detect_result(count: int, dropped: int = 0) -> str:
+    """検出結果の読み上げ。
+
+    ``dropped`` は「YOLO は見つけたが 3D 化できず捨てた」件数（[[SS-04-粗アプローチIK]]）。
+    0 件でも理由が2通りある — 本当にオクラが無い / カメラ情報がまだ揃っていない — が、
+    どちらも ``count==0`` になるため、**音声でしか状況を判断できない運用では区別が
+    つかなかった**（2026-09-14）。``dropped>0`` のときは「見つけたが位置が出せない」と明示的に読み上げる。
+    """
+    if count == 0 and dropped > 0:
+        return f"オクラを{dropped}個見つけましたが、位置が測れません。"
     if count == 0:
         return "オクラは見当たりません。"
     return f"オクラが{count}個見えます。"
