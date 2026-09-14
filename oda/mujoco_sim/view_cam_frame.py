@@ -13,21 +13,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""``OKRA_CAM_TO_TORSO`` が指すカメラ位置を、G1 の**実物の胴体形状**の上に描く。
+"""``OKRA_CAM_TO_TORSO`` が指すカメラ位置を、G1 の**実物の形状**の上に描く。
 
 CAD から出した cam_to_torso が「胸のどこに付いているか」を目視で確認するための道具
 （[[SS-04-粗アプローチIK]]）。``torso_link`` の原点・座標軸と、そこから cam_to_torso で
 置いたカメラの光学3軸（右=赤 / 下=緑 / 前=青）を重ねて描く。
 
-胴体メッシュ ``torso_link_rev_1_0.STL`` が見つかればそれを表示する。**URDF の
-torso_link は visual origin が ``xyz="0 0 0"`` なので、この STL の原点がそのまま
-torso_link 原点**＝ CAD で位置決めするときの基準になる。見つからない場合は
-``g1_okra_scene.xml``（カプセル骨格）へフォールバックするが、胸の面が分からないので
-位置の判断には向かない。
+表示は3段階でフォールバックする:
+
+* ``--view full``（既定）: ``g1.urdf`` をそのまま MuJoCo に読ませた**全身**。頭・腕・脚
+  との位置関係が分かるので「胸のどのあたりか」を掴みやすい。
+* ``--view torso``: ``torso_link_rev_1_0.STL`` だけの寄り。**URDF の torso_link は
+  visual origin が ``xyz="0 0 0"`` なので、この STL の原点がそのまま torso_link 原点**
+  ＝ CAD で位置決めするときの基準そのもの。mm 単位で詰めるときはこちら。
+* メッシュが無い場合: ``g1_okra_scene.xml``（カプセル骨格）。胸の面が分からないので
+  位置の判断には向かない。
+
+メッシュは Unitree 公式の STL 一式（``~/Downloads/unitree_g1_meshes`` 等）を自動探索
+する。``--meshdir`` で明示も可。
 
     .venv/bin/python oda/mujoco_sim/view_cam_frame.py
     .venv/bin/python oda/mujoco_sim/view_cam_frame.py --cam "x,y,z,qx,qy,qz,qw"
-    .venv/bin/python oda/mujoco_sim/view_cam_frame.py --mesh /path/to/torso_link_rev_1_0.STL
+    .venv/bin/python oda/mujoco_sim/view_cam_frame.py --view torso
     .venv/bin/python oda/mujoco_sim/view_cam_frame.py --interactive   # macOS は mjpython
 """
 
@@ -41,13 +48,15 @@ import numpy as np
 import PIL.Image
 
 SCENE = Path(__file__).resolve().parent / "g1_okra_scene.xml"
+URDF = Path(__file__).resolve().parents[2] / "dimos/robot/unitree/g1/g1.urdf"
 DEFAULT_CAM = "0.1090,0.0300,0.2480,-0.49475,0.49475,-0.50520,0.50520"
 
-# 胴体メッシュの探索先（Unitree 公式メッシュ一式を展開した場所）。
-MESH_CANDIDATES = (
-    Path.home() / "Downloads/unitree_g1_meshes/torso_link_rev_1_0.STL",
-    Path(__file__).resolve().parents[3] / "dimos/robot/unitree/g1/meshes/torso_link_rev_1_0.STL",
+# Unitree 公式メッシュ一式を展開した場所（URDF が参照する *.STL が直下にあるもの）。
+MESHDIR_CANDIDATES = (
+    Path.home() / "Downloads/unitree_g1_meshes",
+    Path(__file__).resolve().parents[2] / "dimos/robot/unitree/g1/meshes",
 )
+TORSO_STL = "torso_link_rev_1_0.STL"
 W, H = 1400, 1000
 
 
@@ -62,11 +71,26 @@ def quat_to_rot(q: np.ndarray) -> np.ndarray:
     )
 
 
-def _find_mesh(explicit: str | None) -> Path | None:
-    if explicit:
-        p = Path(explicit).expanduser()
-        return p if p.exists() else None
-    return next((p for p in MESH_CANDIDATES if p.exists()), None)
+def _find_meshdir(explicit: str | None) -> Path | None:
+    """URDF が参照する STL が入ったディレクトリ。見つからなければ None。"""
+    cands = (Path(explicit).expanduser(),) if explicit else MESHDIR_CANDIDATES
+    return next((p for p in cands if (p / TORSO_STL).exists()), None)
+
+
+def _full_scene(meshdir: Path) -> mujoco.MjModel:
+    """g1.urdf をそのまま MuJoCo に読ませて全身を実メッシュで表示する。
+
+    URDF 内の ``<mujoco><compiler meshdir="meshes"/>`` は repo 相対で、この repo には
+    メッシュが同梱されていない。実体のあるディレクトリへ差し替え、``filename`` から
+    ``meshes/`` 接頭辞を外して読む。原点は pelvis（floating base の基準）。
+    """
+    xml = URDF.read_text()
+    xml = xml.replace(
+        '<compiler meshdir="meshes" discardvisual="false"/>',
+        f'<compiler meshdir="{meshdir}" discardvisual="false" balanceinertia="true"/>',
+    )
+    xml = xml.replace('filename="meshes/', 'filename="')
+    return mujoco.MjModel.from_xml_string(xml)
 
 
 def _torso_scene(mesh: Path) -> mujoco.MjModel:
@@ -83,10 +107,7 @@ def _torso_scene(mesh: Path) -> mujoco.MjModel:
     p, q = probe.mesh_pos[0], probe.mesh_quat[0]
     xml = f"""<mujoco model="torso_cam_frame">
   <compiler angle="radian"/>
-  <visual>
-    <global offwidth="{W}" offheight="{H}"/>
-    <headlight ambient="0.45 0.45 0.45" diffuse="0.55 0.55 0.55"/>
-  </visual>
+  <visual><headlight ambient="0.45 0.45 0.45" diffuse="0.55 0.55 0.55"/></visual>
   <asset><mesh name="torso" file="{mesh}"/></asset>
   <worldbody>
     <body name="torso_link" pos="0 0 0">
@@ -131,20 +152,25 @@ def _sphere(scn, pos, rgba, r=0.012):
     scn.ngeom += 1
 
 
-def decorate(scn, d, bid, t, R, axis_len=0.10):
-    """torso フレーム軸と、カメラ位置＋光学3軸を scn に描き足す。"""
+def decorate(scn, d, bid, t, R, axis_len=0.10, r_mark=0.015):
+    """torso フレーム軸と、カメラ位置＋光学3軸を scn に描き足す。
+
+    ``axis_len``/``r_mark`` は画角に合わせて呼び出し側が渡す（全身表示で胴体基準の
+    大きさのままだとマーカーが点にしか見えない）。
+    """
     o = d.xpos[bid].copy()  # torso_link 原点（world）
     Rt = d.xmat[bid].reshape(3, 3)  # torso -> world
+    w = r_mark * 0.28
     for i, c in enumerate(((1, 0.35, 0.35, 0.5), (0.35, 1, 0.35, 0.5), (0.35, 0.35, 1, 0.5))):
-        _arrow(scn, o, o + Rt[:, i] * axis_len, c, width=0.003)
-    _sphere(scn, o, (1, 1, 0, 1), r=0.014)  # torso 原点 = 黄
+        _arrow(scn, o, o + Rt[:, i] * axis_len * 0.8, c, width=w * 0.7)
+    _sphere(scn, o, (1, 1, 0, 1), r=r_mark * 0.9)  # torso 原点 = 黄
 
     cam_w = o + Rt @ t
-    _arrow(scn, o, cam_w, (1, 1, 1, 0.9), width=0.003)  # torso -> カメラ
-    _sphere(scn, cam_w, (1, 0, 1, 1), r=0.016)  # カメラ = マゼンタ
+    _arrow(scn, o, cam_w, (1, 1, 1, 0.9), width=w * 0.7)  # torso -> カメラ
+    _sphere(scn, cam_w, (1, 0, 1, 1), r=r_mark)  # カメラ = マゼンタ
     Rc = Rt @ R  # optical -> world
     for i, c in enumerate(((1, 0, 0, 1), (0, 1, 0, 1), (0, 0.45, 1, 1))):  # 右/下/前
-        _arrow(scn, cam_w, cam_w + Rc[:, i] * axis_len, c)
+        _arrow(scn, cam_w, cam_w + Rc[:, i] * axis_len, c, width=w)
     return o, cam_w
 
 
@@ -153,7 +179,13 @@ def main() -> None:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     p.add_argument("--cam", default=DEFAULT_CAM, help='"x,y,z,qx,qy,qz,qw"')
-    p.add_argument("--mesh", default=None, help="torso_link_rev_1_0.STL のパス（既定は自動探索）")
+    p.add_argument("--meshdir", default=None, help="Unitree の STL 一式があるディレクトリ")
+    p.add_argument(
+        "--view",
+        choices=("full", "torso"),
+        default="full",
+        help="full=全身URDF（既定） / torso=胴体だけの寄り（CADの位置決め確認向き）",
+    )
     p.add_argument("--interactive", action="store_true")
     p.add_argument("--out", default="cam_frame.png")
     a = p.parse_args()
@@ -163,20 +195,27 @@ def main() -> None:
         raise SystemExit(f"--cam は7値必要です（{len(vals)}個でした）")
     t, R = np.array(vals[:3]), quat_to_rot(np.array(vals[3:]))
 
-    mesh = _find_mesh(a.mesh)
-    if mesh is not None:
+    meshdir = _find_meshdir(a.meshdir)
+    mesh = None
+    if meshdir is not None and a.view == "full":
+        print(f"全身 URDF: {URDF}  (メッシュ {meshdir})")
+        m = _full_scene(meshdir)
+    elif meshdir is not None:
+        mesh = meshdir / TORSO_STL
         print(f"胴体メッシュ: {mesh}")
         m = _torso_scene(mesh)
     else:
-        print("胴体メッシュが見つかりません → カプセル骨格で描画（胸の面は分かりません）")
-        print(f"  探索先: {', '.join(str(c) for c in MESH_CANDIDATES)}")
-        xml = SCENE.read_text().replace(
-            "<worldbody>",
-            f'<visual><global offwidth="{W}" offheight="{H}"/></visual>\n  <worldbody>',
-            1,
-        )
-        m = mujoco.MjModel.from_xml_string(xml, {})
+        print("メッシュが見つかりません → カプセル骨格で描画（胸の面は分かりません）")
+        print(f"  探索先: {', '.join(str(c) for c in MESHDIR_CANDIDATES)}")
+        m = mujoco.MjModel.from_xml_string(SCENE.read_text(), {})
 
+    # オフスクリーン既定は 640x480。XML に書くより後から代入する方が、URDF 経路でも
+    # 確実に効く。
+    m.vis.global_.offwidth, m.vis.global_.offheight = W, H
+    # G1 のメッシュは暗いグレーで、既定のライトだと形が読み取りにくい。
+    m.vis.headlight.ambient[:] = 0.55
+    m.vis.headlight.diffuse[:] = 0.65
+    m.vis.headlight.specular[:] = 0.1
     d = mujoco.MjData(m)
     mujoco.mj_forward(m, d)
     bid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, "torso_link")
@@ -216,15 +255,21 @@ def main() -> None:
 
     cam = mujoco.MjvCamera()
     mujoco.mjv_defaultCamera(cam)
-    # 胴体メッシュ＋カメラ位置＋座標軸の全部が入るように自動フレーミングする。
+    # 描くもの全部が入るように自動フレーミングする。マーカーの大きさも画角に合わせて
+    # 変える（全身表示で胴体基準のままだと点にしか見えない）。
     if mesh is not None:
         v = m.mesh_vert[:] + m.mesh_pos[0]
         pts = np.vstack([v, cam_w, o_w, cam_w + 0.10, cam_w - 0.10])
     else:
-        pts = np.vstack([d.xpos, cam_w])
+        # geom の中心だけだと頭や足先が画面外に切れる。各 geom の外接半径を
+        # 足し引きして実際の広がりを取る。
+        rb = m.geom_rbound.reshape(-1, 1)
+        pts = np.vstack([d.geom_xpos - rb, d.geom_xpos + rb, cam_w, o_w])
     lo, hi = pts.min(0), pts.max(0)
+    span = float(np.linalg.norm(hi - lo))
     cam.lookat[:] = (lo + hi) / 2.0
-    cam.distance = float(np.linalg.norm(hi - lo)) * 1.9
+    cam.distance = span * (1.05 if mesh is None else 1.9)
+    axis_len, r_mark = span * 0.10, span * 0.016
     opt = mujoco.MjvOption()
     mujoco.mjv_defaultOption(opt)
     scn = mujoco.MjvScene(m, maxgeom=20000)
@@ -233,7 +278,7 @@ def main() -> None:
         for tag, az, el in views:
             cam.azimuth, cam.elevation = az, el
             mujoco.mjv_updateScene(m, d, opt, None, cam, mujoco.mjtCatBit.mjCAT_ALL, scn)
-            decorate(scn, d, bid, t, R)
+            decorate(scn, d, bid, t, R, axis_len=axis_len, r_mark=r_mark)
             r._scene = scn
             out = Path(a.out).with_name(Path(a.out).stem + f"_{tag}.png")
             PIL.Image.fromarray(r.render()).save(out)
