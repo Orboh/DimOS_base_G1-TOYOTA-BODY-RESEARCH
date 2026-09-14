@@ -98,6 +98,13 @@ _IK_APPROACH_FRONT_M = float(os.getenv("OKRA_APPROACH_FRONT_M", "0.20"))
 # above は明示的に無効（0.0）— 両方>0だと ik_approach.py の規約で above が優先
 # されてしまうため、front を使うには above_m=0 が必須。
 _IK_APPROACH_ABOVE_M = 0.0
+# standoff（切断点手前でIKを止める量）[m]。IkApproachSkill既定の0.05は「最後の
+# standoff分はACTが詰める」前提の値だが、honbanはuse_act_grasp=False（no-ACT、
+# 本ファイル上部docstring参照）で標準の詰めステップが無いため、既定のままだと
+# 刃が莢まで届かない。honbanでは0.0にしてIK自体を重心（切断点）まで到達させる
+# （2026-09-14 ユーザー指摘。IK自体の到達精度は既にmax_reach_pos_err_m=3mmへ
+# 厳格化済み、ik_approach.py参照）。
+_STANDOFF_M = float(os.getenv("OKRA_STANDOFF_M", "0.0"))
 _IK_STREAM_LEGS = os.getenv("OKRA_IK_STREAM_LEGS", "1").strip() == "1"
 _IK_STREAM_STEP_M = float(os.getenv("OKRA_IK_STREAM_STEP_M", "0.035"))
 _IK_STREAM_CADENCE_S = float(os.getenv("OKRA_IK_STREAM_CADENCE_S", "0.18"))
@@ -183,6 +190,7 @@ _MODULES = [
         # ⭐ zed 版と違う2行: above を0で無効化し、front を渡す。
         ik_approach_above_m=_IK_APPROACH_ABOVE_M,
         ik_approach_front_m=_IK_APPROACH_FRONT_M,
+        ik_approach_standoff_m=_STANDOFF_M,
         ik_stream_legs=_IK_STREAM_LEGS,
         ik_stream_step_m=_IK_STREAM_STEP_M,
         ik_stream_cadence_s=_IK_STREAM_CADENCE_S,
@@ -228,7 +236,7 @@ if _USE_BASE_MOVE:
 
 _approach_note = (
     f"camera_source={_CAMERA_SOURCE} "
-    f"approach_front_m={_IK_APPROACH_FRONT_M} "
+    f"approach_front_m={_IK_APPROACH_FRONT_M} standoff_m={_STANDOFF_M} "
     f"pregrasp_settle_s={(_GRAVITY_RAMP_S if _GRAVITY_FF else 0.0):.1f} "
     f"stream_legs={_IK_STREAM_LEGS} cut_settle_s={_CUT_SETTLE_S:.1f} "
     f"cam_to_torso={'set' if _CAM_TO_TORSO else 'UNSET(camera-frame passthrough)'}"

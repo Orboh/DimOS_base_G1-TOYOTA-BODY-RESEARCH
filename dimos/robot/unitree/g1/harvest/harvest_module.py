@@ -149,6 +149,13 @@ class HarvestModuleConfig(ModuleConfig):
     # unitree_g1_okra_honban.py が本番既定として採用（unitree_g1_okra_harvest_zed.py
     # 側は above_m のまま残し、いつでも above 方式へ戻せるフォールバックにしている）。
     ik_approach_front_m: float = 0.0
+    # LIVE + use_ik_grasp_sequence: 切断点手前でIKを止める量 [m]（IkApproachSkill.standoff_m
+    # 参照）。本来は「IKは重心へ寄せれば十分、最後の standoff_m 分は ACT が詰める」設計
+    # （既定 0.05 = IkApproachSkill 既定値と同一、後方互換）。use_act_grasp=False
+    # （no-ACT構成、unitree_g1_okra_honban.py）では ACT が standoff を詰めるステップが
+    # 無いため、既定の 0.05 のままだと刃が莢まで届かない。no-ACT構成では 0.0 を渡し、
+    # IK自体に重心（切断点）まで到達させること（2026-09-14 ユーザー指摘）。
+    ik_approach_standoff_m: float = 0.05
     # LIVE + use_ik_grasp_sequence: IK粗アプローチを IkApproachSkill.stream_legs（密な
     # Cartesianストリーミング、クリック駆動版 IkReachBridge._stream_leg と同じ密度）で
     # 実行する。False（既定）= solve_legs（レグの端点だけを解いて関節空間補間任せに
@@ -548,7 +555,7 @@ class HarvestModule(Module):
                         right_arm_only_7d=self.config.act_right_arm_only_7d,
                     )
 
-                ik_skill = IkApproachSkill()
+                ik_skill = IkApproachSkill(standoff_m=self.config.ik_approach_standoff_m)
 
                 place_basket_fn = None
                 if self.config.use_basket_deposit:
