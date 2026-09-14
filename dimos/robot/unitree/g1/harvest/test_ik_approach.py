@@ -123,17 +123,24 @@ def test_solve_legs_no_approach_matches_direct_solve() -> None:
 
 
 def test_stream_legs_front_m_aligns_position_then_pushes_straight() -> None:
-    """front approach は「今のxのまま対象のy,zへ合わせる」→「そこからxだけ直進」。
+    """front approach は「対象のy,zへ合わせ、対象手前front_align_margin_mまで
+    前進してよい(align)」→「そこからxだけ直進(push)」。
 
     2026-09-12 再修正: 対象のyが現在の手先yと異なる場合でも、push レグが
     x以外(y,z)を動かさない「まっすぐな直進」になっていること（＝グリッパーが
     対象に正対したまま挿入される）を確認する — 旧版はここが斜め移動になり、
     ユーザーから「グリッパーが正面から刺さらない」と指摘された箇所。
+    2026-09-14 再修正: align中にXを完全固定していた旧仕様は、体に近い浅いXから
+    始めるとY,Zを合わせる自由度が2軸しか無く関節可動域超過で頻繁にrejectされて
+    いたため、対象の手前front_align_margin_mまでは前進してよいことにした。
+    ここでは現在位置が対象よりだいぶ手前にあるケース（前進が実際に発生する）を
+    確認する。
     """
     skill = IkApproachSkill()
-    target = np.array([0.40, -0.25, 0.10])
+    target = np.array([0.55, -0.25, 0.10])  # 現在位置よりだいぶ奥 -> align で前進が発生する
     rest_tip = skill.tip_torso([0.0] * 7)  # _rest_state() の右腕7関節に対応する現在のtip位置
     assert abs(rest_tip[1] - target[1]) > 0.05  # 対象のyが現在のyと十分違うことを確認
+    assert rest_tip[0] < target[0] - 0.05 - 0.05  # 現在位置が「対象-standoff-margin」より手前
     waypoints: list[tuple[str, list[float]]] = []
     res = skill.stream_legs(
         target,
@@ -150,16 +157,37 @@ def test_stream_legs_front_m_aligns_position_then_pushes_straight() -> None:
     # 最後の waypoint（push の終端）は standoff 込みの最終目標に到達している。
     last_label, last_p = waypoints[-1]
     assert last_label == "push"
-    assert last_p == pytest.approx([0.35, -0.25, 0.10], abs=1e-6)  # target - standoff(0.05) in X
-    # align レグの終端は「今のxのまま、対象のy,z」に合わせた点
-    # （xは現在のtipのまま、y,zは対象（=push終端）と一致している）。
+    assert last_p == pytest.approx([0.50, -0.25, 0.10], abs=1e-6)  # target - standoff(0.05) in X
+    # align レグの終端は「対象の手前front_align_margin_m(既定0.05)、対象のy,z」
+    # に合わせた点（現在のXが対象よりだいぶ手前なので前進が発生している）。
     align_end = next(p for label, p in reversed(waypoints) if label == "align")
-    assert align_end == pytest.approx([rest_tip[0], -0.25, 0.10], abs=1e-6)
+    assert align_end == pytest.approx([0.45, -0.25, 0.10], abs=1e-6)  # 0.50 - margin(0.05)
     # push の間、y,z は align で合わせた値のまま変化しない（x だけの直進）。
     push_ys = [p[1] for label, p in waypoints if label == "push"]
     push_zs = [p[2] for label, p in waypoints if label == "push"]
     assert push_ys == pytest.approx([-0.25] * len(push_ys), abs=1e-6)
     assert push_zs == pytest.approx([0.10] * len(push_zs), abs=1e-6)
+
+
+def test_stream_legs_front_m_align_does_not_retreat_when_already_close() -> None:
+    """現在のXがすでに対象の手前front_align_margin_mより近い場合、alignは
+    後退させず現在のXのまま（前進のみを許す片側クランプであることの確認）。"""
+    skill = IkApproachSkill()
+    target = np.array([0.40, -0.25, 0.10])  # standoff込み p_final_x=0.35
+    rest_tip = skill.tip_torso([0.0] * 7)
+    assert rest_tip[0] > 0.35 - 0.05  # 現在位置がすでに「対象の手前margin」より近い前提
+    waypoints: list[tuple[str, list[float]]] = []
+    res = skill.stream_legs(
+        target,
+        _rest_state(),
+        front_m=0.15,
+        send_arm=lambda _arm14: None,
+        on_waypoint=lambda label, p, _arm14: waypoints.append((label, p)),
+        sleep_fn=lambda _s: None,
+    )
+    assert res is not None
+    align_end = next(p for label, p in reversed(waypoints) if label == "align")
+    assert align_end[0] == pytest.approx(rest_tip[0], abs=1e-6)
 
 
 def test_tip_torso_matches_internal_fk() -> None:

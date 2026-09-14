@@ -54,6 +54,12 @@ grasp ノードから「呼ぶ → 結果が返る → 次へ」で使える（D
   対象に正対せず挿入できない問題が残っていた（ユーザー指摘）。同日中に
   「①高さ(Z)と左右(Y)を先に合わせる→②奥行き(X)だけをまっすぐ進める」の
   現行版へ再修正した（``docs/sim-setup/compare_ik_approach.py`` 参照）。
+  2026-09-14、実機LIVEで①のXを完全固定する仕様が原因の失敗（体に近い浅い
+  Xから始めるとY,Zを合わせる自由度が2軸しか無く関節可動域超過で頻繁に
+  reject）が判明したため、①のXを「現在のXと『対象の手前
+  front_align_margin_m(既定0.05m)』の大きい方」まで前進させてよいことにした
+  （対象の手前 front_align_margin_m 分は必ず残すため、②は必ず何らかの直進を
+  含む＝正対挿入の設計は変わらない）。
 """
 
 from __future__ import annotations
@@ -129,6 +135,18 @@ class IkApproachSkill:
         # 3mm（要求精度と同じ）に厳格化し、それ以上ズレる解は素直に reject
         # （None＝「届かない」）して次の候補へフォールバックさせる。
         max_reach_pos_err_m: float = 0.003,
+        # front approach（align→push）専用: align フェーズで許容する最大前進量
+        # [m]（対象の手前この距離までは、Y,Zを合わせる際に奥行き(X)が動いて
+        # よい）。旧仕様（align中はXを現在位置に完全固定）は、体に近い浅い
+        # Xから始めるとY,Zを動かす自由度が2軸しか無く、手首が窮屈な姿勢になり
+        # 関節可動域超過で頻繁に reject されていた（2026-09-14 実機LIVEで
+        # 確認: align初手からworkspace外、または途中で関節限界超過）。
+        # align 終端のXを「現在のXと『対象の手前 front_align_margin_m』の
+        # 大きい方（=より対象に近い方）」にすることで、Y,Zを合わせる際にXも
+        # 使える自由度が増え、解ける可能性が上がる。ただし対象の手前
+        # front_align_margin_m 分は必ず残すため、pushフェーズが必ず何らかの
+        # 直進を含む（グリッパーが正対したまま挿入される設計は変わらない）。
+        front_align_margin_m: float = 0.05,
         fixed_orientation_xyzw: list[float] | None = None,  # 空=現在のEE姿勢を保持
         nominal_speed_rad_s: float = 1.0,  # 待機推定の有効スルー速度 [rad/s]
         margin_s: float = 0.5,  # 追加の整定マージン [s]
@@ -157,6 +175,7 @@ class IkApproachSkill:
         self._max_joint_delta_deg = float(max_joint_delta_deg)
         self._require_converged = bool(require_converged)
         self._max_reach_pos_err_m = float(max_reach_pos_err_m)
+        self._front_align_margin_m = float(front_align_margin_m)
         self._fixed_orientation_xyzw = list(fixed_orientation_xyzw or [])
         self._nominal_speed = float(nominal_speed_rad_s)
         self._margin_s = float(margin_s)
@@ -446,9 +465,10 @@ class IkApproachSkill:
             legs_torso.append(("transit", np.array([p_final[0], p_final[1], z_transit])))
             legs_torso.append(("descend", p_final))
         elif front_m > 0.0:
-            # 正面アプローチ（2026-09-12 再修正）: ① 今の手先 X（奥行き）はそのまま、
-            # 対象の高さ(Z)と左右位置(Y)を同時に合わせる(align) ② そこから奥行き
-            # (+X)方向へ「まっすぐ」対象へ押し込む(push)。
+            # 正面アプローチ（2026-09-12 再修正、2026-09-14 align のX許容幅を追加）:
+            # ① 対象の高さ(Z)と左右位置(Y)を合わせる(align)。奥行き(X)は現在位置
+            # のまま、ただし「対象の手前 front_align_margin_m まで」なら前進して
+            # よい ② そこから奥行き(+X)方向へ「まっすぐ」対象へ押し込む(push)。
             #
             # ⚠️ 最初の修正（2026-09-12午前）では①を「高さ(Z)のみ」合わせ、Y,Xは
             # ②でまとめて動かしていた。これだと対象のYが今の手先Yと違う場合、②が
@@ -460,7 +480,17 @@ class IkApproachSkill:
             # なのに対し、front は「先に位置(Y,Z)を合わせる→奥行きに正対して押し
             # 込む」。front_m の具体的な値は経路形状には使わない（>0 で本モードを
             # 有効化するだけ）。
-            legs_torso.append(("align", np.array([tip_now[0], p_final[1], p_final[2]])))
+            #
+            # ⚠️ 2026-09-14 実機LIVEで判明: align中にXを完全固定すると、体に近い
+            # 浅いX（休憩姿勢由来）から始めた場合、Y,Zを合わせる自由度が2軸しか
+            # 無く手首が窮屈な姿勢になり、workspace外/関節可動域超過で頻繁に
+            # rejectされていた（ユーザー所見: 「奥行きを変えずY,Zだけ合わせるのは
+            # IKで解けないケースが多い」）。align終端のXを「現在のXと『対象の手前
+            # front_align_margin_m』の大きい方」にすることで、Y,Zを合わせる際に
+            # Xも自由に使えるようにしつつ、対象の手前 front_align_margin_m 分は
+            # 必ず残す（=pushが必ず直進を含み、正対挿入の設計は変わらない）。
+            align_x = max(float(tip_now[0]), float(p_final[0]) - self._front_align_margin_m)
+            legs_torso.append(("align", np.array([align_x, p_final[1], p_final[2]])))
             legs_torso.append(("push", p_final))
         else:
             legs_torso.append(("direct", p_final))

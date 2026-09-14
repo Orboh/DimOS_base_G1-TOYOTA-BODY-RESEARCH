@@ -80,6 +80,7 @@ all_blueprints = {
     "unitree-g1-shm": "dimos.robot.unitree.g1.blueprints.perceptive.unitree_g1_shm:unitree_g1_shm",
     "unitree-g1-sim": "dimos.robot.unitree.g1.blueprints.perceptive.unitree_g1_sim:unitree_g1_sim",
     "unitree-g1-single-joint-nudge": "dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_single_joint_nudge:unitree_g1_single_joint_nudge",
+    "unitree-g1-teach-pregrasp-pose": "dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_teach_pregrasp_pose:unitree_g1_teach_pregrasp_pose",
     "unitree-g1-zed-ik-view": "dimos.robot.unitree.g1.blueprints.perceptive.unitree_g1_zed_ik_view:unitree_g1_zed_ik_view",
     "unity-sim": "dimos.simulation.unity.blueprint:unity_sim",
 }
@@ -169,6 +170,7 @@ all_modules = {
     "spatial-memory": "dimos.perception.spatial_perception.SpatialMemory",
     "speak-skill": "dimos.agents.skills.speak_skill.SpeakSkill",
     "tare-planner": "dimos.navigation.nav_stack.modules.tare_planner.tare_planner.TarePlanner",
+    "teach-pose-logger": "dimos.robot.unitree.g1.harvest.teach_pose_logger.TeachPoseLogger",
     "teleimager-camera": "dimos.robot.unitree.g1.camera.teleimager_camera_module.TeleimagerCamera",
     "temporal-memory": "dimos.perception.experimental.temporal_memory.temporal_memory.TemporalMemory",
     "terrain-analysis": "dimos.navigation.nav_stack.modules.terrain_analysis.terrain_analysis.TerrainAnalysis",

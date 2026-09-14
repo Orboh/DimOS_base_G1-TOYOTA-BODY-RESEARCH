@@ -81,7 +81,11 @@ _ARM_VEL_LIMIT = float(os.getenv("IK_ARM_VEL_LIMIT", "20.0"))
 _KP_ARM = float(os.getenv("OKRA_NOACT_KP_ARM", "80.0"))
 _KD_ARM = float(os.getenv("OKRA_NOACT_KD_ARM", "3.0"))
 
-_GRAVITY_FF = os.getenv("OKRA_GRAVITY_FF", "").strip() == "1"
+#  既定ON（2026-09-14）: 到達確認([reach-verify])の実機検証で、gravity_ff=False
+#  だと遠めのリーチ(X≈0.37m)でZ方向に約3.9cm垂れ下がっていたのが、ONにする
+#  ことでerr_norm 0.040m→0.004mへ約9倍改善したため。無効化したい場合は
+#  OKRA_GRAVITY_FF=0 を明示する。
+_GRAVITY_FF = os.getenv("OKRA_GRAVITY_FF", "1").strip() == "1"
 _GRAVITY_TAU_SCALE = float(os.getenv("OKRA_GRAVITY_TAU_SCALE", "1.0"))
 _GRAVITY_JOINTS = [int(v) for v in os.getenv("OKRA_GRAVITY_JOINTS", "0,1,2,3,4,5,6").split(",")]
 _GRAVITY_TAU_LIMIT_NM = float(os.getenv("OKRA_GRAVITY_TAU_LIMIT_NM", "12.0"))
@@ -105,6 +109,34 @@ _IK_APPROACH_ABOVE_M = 0.0
 # （2026-09-14 ユーザー指摘。IK自体の到達精度は既にmax_reach_pos_err_m=3mmへ
 # 厳格化済み、ik_approach.py参照）。
 _STANDOFF_M = float(os.getenv("OKRA_STANDOFF_M", "0.0"))
+# IK到達判定の許容残差 [m]（IkApproachSkill.max_reach_pos_err_m 参照）。既定0.003は
+# 2026-09-12に莢の精度要求(3mm)へ厳格化した値と同一。実機再検証等でコマンドから
+# 緩めたい場合はここを上書きする（2026-09-14 ユーザー要望）。
+# ⚠️ 2026-09-14 実機LIVE確認: 同日の到達失敗ログはいずれも「IK err > tol」（精度
+# reject）ではなく「outside workspace」「violates joint limits」だった —
+# この値を緩めても解決しない失敗モードがあることに注意。
+_MAX_REACH_POS_ERR_M = float(os.getenv("OKRA_MAX_REACH_POS_ERR_M", "0.003"))
+# front方式のalignフェーズで許容する最大前進量[m]（対象の手前この距離までは
+# Y,Zを合わせる際にXが動いてよい、IkApproachSkill.front_align_margin_m参照）。
+# 「align中はXを完全固定」だと体に近い浅いXから始めるとY,Zの自由度が2軸しか
+# 無く関節可動域超過で頻繁にrejectされる問題への対処（2026-09-14 ユーザー
+# 指摘・実機LIVEで確認）。
+_FRONT_ALIGN_MARGIN_M = float(os.getenv("OKRA_FRONT_ALIGN_MARGIN_M", "0.05"))
+# 起動直後・把持ループ開始前に一度だけ腕を動かすtorso座標 "x,y,z"[m]（空文字で無効化）。
+# 2026-09-14 実機LIVEで判明: G1の休憩姿勢（腕を下げた状態）の手先Xを実測すると約
+# 0.047m — front方式のalign（現在のXを維持したままY,Zを合わせる）が要求する
+# ワークスペース下限(ws_x[0]=0.05m)をわずかに下回っており、align初手からworkspace
+# 外/関節限界超過でrejectされ手が一切届かない（Isaac Sim検証は肘を曲げた前倣え
+# 姿勢からの起動だったため気づかれなかった）。既定 "0.25,0.0,0.15" は
+# reach-gridの実測(9/12)でX方向の到達率が安定して高い(87%以上)領域から選んだ値
+# （offline IK検証: 収束・関節可動域とも問題なしを確認済み）。
+_PREGRASP_POSE_TORSO_XYZ = os.getenv("OKRA_PREGRASP_POSE_TORSO", "0.25,0.0,0.15")
+# unitree_g1_teach_pregrasp_pose.py（教示ツール）で記録した右腕7関節角度
+# "q0,q1,...,q6"[rad]（正準順）。空文字（既定）=未指定 → 上のIK座標指定
+# (OKRA_PREGRASP_POSE_TORSO)にフォールバックする。指定されればこちらを優先し、
+# IKを経由せず直接その姿勢へ移動する（IK解は「解けるか」しか保証しないため、
+# 実際に人の手で動かして決めた姿勢の方が確実、2026-09-14 ユーザー提案）。
+_PREGRASP_POSE_Q7 = os.getenv("OKRA_PREGRASP_POSE_Q7", "")
 _IK_STREAM_LEGS = os.getenv("OKRA_IK_STREAM_LEGS", "1").strip() == "1"
 _IK_STREAM_STEP_M = float(os.getenv("OKRA_IK_STREAM_STEP_M", "0.035"))
 _IK_STREAM_CADENCE_S = float(os.getenv("OKRA_IK_STREAM_CADENCE_S", "0.18"))
@@ -191,6 +223,10 @@ _MODULES = [
         ik_approach_above_m=_IK_APPROACH_ABOVE_M,
         ik_approach_front_m=_IK_APPROACH_FRONT_M,
         ik_approach_standoff_m=_STANDOFF_M,
+        ik_approach_max_reach_pos_err_m=_MAX_REACH_POS_ERR_M,
+        ik_approach_front_align_margin_m=_FRONT_ALIGN_MARGIN_M,
+        pregrasp_pose_torso_xyz=_PREGRASP_POSE_TORSO_XYZ,
+        pregrasp_pose_q7=_PREGRASP_POSE_Q7,
         ik_stream_legs=_IK_STREAM_LEGS,
         ik_stream_step_m=_IK_STREAM_STEP_M,
         ik_stream_cadence_s=_IK_STREAM_CADENCE_S,
@@ -237,6 +273,10 @@ if _USE_BASE_MOVE:
 _approach_note = (
     f"camera_source={_CAMERA_SOURCE} "
     f"approach_front_m={_IK_APPROACH_FRONT_M} standoff_m={_STANDOFF_M} "
+    f"max_reach_pos_err_m={_MAX_REACH_POS_ERR_M} "
+    f"front_align_margin_m={_FRONT_ALIGN_MARGIN_M} "
+    f"pregrasp_pose_q7={_PREGRASP_POSE_Q7 or '(unset, falls back to torso)'} "
+    f"pregrasp_pose_torso={_PREGRASP_POSE_TORSO_XYZ or 'OFF'} "
     f"pregrasp_settle_s={(_GRAVITY_RAMP_S if _GRAVITY_FF else 0.0):.1f} "
     f"stream_legs={_IK_STREAM_LEGS} cut_settle_s={_CUT_SETTLE_S:.1f} "
     f"cam_to_torso={'set' if _CAM_TO_TORSO else 'UNSET(camera-frame passthrough)'}"

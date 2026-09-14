@@ -95,6 +95,14 @@ class GraspSequence:
             プロトコル）。None（既定）なら ``NullAnnouncer``（何も話さない）。切断・
             籠投入の開始時に発話し、グリッパ開閉/固定モーションが実際に作動している
             ことを操作者が音で確認できるようにする（2026-09-08 ユーザー要望）。
+        post_reach_verify_fn: ``() -> None``。①IK区間（全legのopen-loop待機）完了
+            直後、②ACTの前に呼ばれる任意フック。None（既定）なら何もしない
+            （後方互換）。IK の ``err``（ソルバー内部の残差）は「計算上その角度で
+            目標に届くはずか」でしかなく、実機のPD制御が実際にそこまで追従した
+            か、その結果エンドエフェクタが本当に対象の重心座標に届いたかは別問題
+            — 2026-09-14 ユーザー指摘（5cm程度ズレて把持した実機事例）を受け、
+            実測角度からFKを計算し目標座標との残差をログする「到達確認」を
+            呼び出し側（harvest_module.py）が注入できるようにした。
     """
 
     def __init__(
@@ -107,6 +115,7 @@ class GraspSequence:
         publish_gripper: Callable[[Any], None] | None = None,
         place_basket_fn: Callable[[], None] | None = None,
         return_to_rest_fn: Callable[[], bool] | None = None,
+        post_reach_verify_fn: Callable[[], None] | None = None,
         q_close: float = _Q_CLOSE_CUT,
         q_blade_max: float = _Q_BLADE_MAX,
         cut_settle_s: float = 0.0,
@@ -120,6 +129,7 @@ class GraspSequence:
         self._publish_gripper = publish_gripper
         self._place_basket_fn = place_basket_fn
         self._return_to_rest_fn = return_to_rest_fn
+        self._post_reach_verify_fn = post_reach_verify_fn
         self._q_close = float(q_close)
         self._q_blade_max = float(q_blade_max)
         self._cut_settle_s = float(cut_settle_s)
@@ -198,6 +208,12 @@ class GraspSequence:
             # open-loop 整定待ち（中断可能、レグ間でも中断チェックが効く）
             if self._stop.wait(wait_s):
                 return False
+
+        # 到達確認（任意）: 実測角度からFKを計算し目標座標との残差をログするなど。
+        # IK到達そのものは検証しない（何もしなくてもエピソードは続行する） —
+        # あくまで観測・原因分析用のフック。
+        if self._post_reach_verify_fn is not None:
+            self._post_reach_verify_fn()
 
         # ② ACT 微調整（切断点まで、閉じない） --------------------------------
         if self._act is not None:

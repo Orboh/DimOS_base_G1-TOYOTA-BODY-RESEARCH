@@ -156,6 +156,46 @@ class HarvestModuleConfig(ModuleConfig):
     # 無いため、既定の 0.05 のままだと刃が莢まで届かない。no-ACT構成では 0.0 を渡し、
     # IK自体に重心（切断点）まで到達させること（2026-09-14 ユーザー指摘）。
     ik_approach_standoff_m: float = 0.05
+    # LIVE + use_ik_grasp_sequence: IK到達判定の許容残差 [m]（IkApproachSkill
+    # .max_reach_pos_err_m 参照。内部ソルバー自体の収束判定eps=1e-4(0.1mm)とは別物 —
+    # ここが効くのは「反復上限まで解いても収束しきらなかった(best-effort)」少数
+    # ケースのみ）。既定 0.003 = 2026-09-12 に莢の精度要求(3mm)へ厳格化した値と
+    # 同一（後方互換）。実機再検証等でコマンドから緩めたい場合に上書きする
+    # （2026-09-14 ユーザー要望。honban.py の OKRA_MAX_REACH_POS_ERR_M 参照）。
+    ik_approach_max_reach_pos_err_m: float = 0.003
+    # LIVE + use_ik_grasp_sequence: front方式の align フェーズで許容する最大
+    # 前進量 [m]（IkApproachSkill.front_align_margin_m 参照。対象の手前この
+    # 距離までは、Y,Zを合わせる際に奥行き(X)が動いてよい）。既定0.05は
+    # 「align中はXを完全固定」だと体に近い浅いXから始めた際にY,Zの自由度が
+    # 2軸しか無く関節可動域超過で頻繁にrejectされていた問題への対処
+    # （2026-09-14 ユーザー指摘・実機LIVEで確認）。
+    ik_approach_front_align_margin_m: float = 0.05
+    # LIVE + use_ik_grasp_sequence: 起動直後・把持ループ開始前に一度だけ、腕をこの
+    # torso座標 "x,y,z"[m] へ IK で移動させる（IkApproachSkill.solve() で解き、
+    # return_to_rest.py と同じ多段補間・控えめ速度で送る）。空文字（既定）=
+    # スキップ・後方互換。
+    # ⚠️ 2026-09-14 実機LIVEで判明: front方式の align は「今の奥行き(X)のまま」
+    # Y,Zを合わせる設計だが、G1の休憩姿勢（腕を下げた状態）の手先Xを実測すると
+    # 約0.047m — IkApproachSkill のワークスペース下限 ws_x[0]=0.05m をわずかに
+    # 下回っている。このため休憩姿勢から align を始めると初手から「workspace
+    # 外」でreject、または途中で手首が窮屈になり関節可動域超過でrejectされ、
+    # 手が一切届かない（9/12のIsaac Sim検証は肘を曲げた前倣え姿勢からの起動
+    # だったため気づかれなかった）。起動時に一度、ワークスペース内で安定して
+    # 到達できる位置へ動かしておくことで解消する。IKが解けない場合は警告を
+    # 出して休憩姿勢のまま続行する（起動は止めない）。
+    pregrasp_pose_torso_xyz: str = ""
+    # LIVE + use_ik_grasp_sequence: 起動直後・把持ループ開始前に一度だけ、腕を
+    # この右腕7関節角度 "q0,q1,...,q6"[rad](正準順)へ直接移動させる
+    # （IKを経由しない、return_to_rest.py と同じ多段補間・控えめ速度で送る）。
+    # 空文字（既定）=未指定。指定されていれば pregrasp_pose_torso_xyz より
+    # こちらを優先する。
+    # ⚠️ IKで座標から自動計算した準備姿勢は「解けるか」しか保証しないため、
+    # 2026-09-14 ユーザー提案により、G1ArmSdkConnection.collection_mode
+    # （重力補償のみのコンプライアントモード、実機検証済み）で人の手で実際に
+    # 動かして決めた姿勢をそのまま使えるようにした。教示手順は
+    # unitree_g1_teach_pregrasp_pose.py ブループリント参照
+    # （OKRA_PREGRASP_POSE_Q7 経由でここへ渡す）。
+    pregrasp_pose_q7: str = ""
     # LIVE + use_ik_grasp_sequence: IK粗アプローチを IkApproachSkill.stream_legs（密な
     # Cartesianストリーミング、クリック駆動版 IkReachBridge._stream_leg と同じ密度）で
     # 実行する。False（既定）= solve_legs（レグの端点だけを解いて関節空間補間任せに
@@ -249,6 +289,10 @@ class HarvestModule(Module):
         # 起動時（重力補償ランプ待ち完了後・最初の把持前）の腕姿勢（左7+右7）。
         # 籠投入後にここへ復帰させる（return_to_rest.py）。
         self._rest_q14: list[float] | None = None
+        # 直近のIK計算で狙ったtorso座標（到達確認用、2026-09-14追加）。
+        # _ik_solve が計算するたびに更新し、GraspSequence.post_reach_verify_fn
+        # から参照する。
+        self._last_ik_target_torso: list[float] | None = None
 
     def _on_wrist(self, image: Image) -> None:
         with self._lock:
@@ -555,7 +599,11 @@ class HarvestModule(Module):
                         right_arm_only_7d=self.config.act_right_arm_only_7d,
                     )
 
-                ik_skill = IkApproachSkill(standoff_m=self.config.ik_approach_standoff_m)
+                ik_skill = IkApproachSkill(
+                    standoff_m=self.config.ik_approach_standoff_m,
+                    max_reach_pos_err_m=self.config.ik_approach_max_reach_pos_err_m,
+                    front_align_margin_m=self.config.ik_approach_front_align_margin_m,
+                )
 
                 place_basket_fn = None
                 if self.config.use_basket_deposit:
@@ -639,6 +687,11 @@ class HarvestModule(Module):
                     y_depth = float(pos.get("y", 0.0))
                     z_height = float(pos.get("z", 0.0))
                     target_torso = [y_depth, -x_lat, z_height]
+                    # 到達確認用（2026-09-14追加）: この呼び出しが最後に狙った
+                    # 「オクラの重心そのもの」のtorso座標を保持しておく。
+                    # GraspSequence.post_reach_verify_fn（_verify_reach）が、IK
+                    # legs完了後にこれと実測FK位置を比較する。
+                    self._last_ik_target_torso = list(target_torso)
                     okra_id = getattr(okra, "id", "?")
                     logger.info(
                         f"[ik-grasp] {okra_id}: pos_3d(harvest x=lateral,y=depth,z=height)="
@@ -684,6 +737,37 @@ class HarvestModule(Module):
                         front_m=self.config.ik_approach_front_m,
                     )
 
+                def _verify_reach() -> None:
+                    """到達確認（2026-09-14追加）: IK legs完了直後、実測の右腕
+                    関節角度からFK（tip_torso）を計算し、_ik_solve が最後に狙った
+                    「オクラの重心」座標との残差をログする。IK の err（ソルバー内部
+                    の収束判定）は計算上の値でしかなく、実機のPD制御が実際にそこ
+                    まで追従したか・エンドエフェクタが本当に対象へ届いたかは別問題
+                    — ユーザー指摘（実機で約5cmずれて把持した事例）を受けて追加。
+                    残差が大きい場合、原因が「腕の追従誤差」なのか「そもそも目標
+                    座標(cam_to_torso変換/検出)がずれている」のかを切り分ける
+                    材料にする。
+                    """
+                    target = self._last_ik_target_torso
+                    if target is None:
+                        return
+                    with self._lock:
+                        state = self._latest_state
+                    if state is None:
+                        logger.warning(
+                            "[reach-verify] motor_states 未受信のため到達確認をスキップ"
+                        )
+                        return
+                    q_right_measured = list(state.position)[22:29]
+                    tip = ik_skill.tip_torso(q_right_measured)
+                    err_xyz = [float(tip[i] - target[i]) for i in range(3)]
+                    err_norm = float(sum(e * e for e in err_xyz) ** 0.5)
+                    logger.info(
+                        f"[reach-verify] target_torso(重心)={[round(float(v), 4) for v in target]} "
+                        f"actual_tip(X前,Y左,Z上)={[round(float(v), 4) for v in tip]} "
+                        f"err_xyz={[round(v, 4) for v in err_xyz]} err_norm={err_norm:.4f}m"
+                    )
+
                 # 切断可否ゲート: verify_fn（moondream）を流用。未配線なら None=常許可。
                 grasp_override = GraspSequence(
                     ik_solve=_ik_solve,
@@ -696,6 +780,7 @@ class HarvestModule(Module):
                     cut_settle_s=self.config.cut_settle_s,
                     place_basket_fn=place_basket_fn,
                     return_to_rest_fn=return_to_rest_fn,
+                    post_reach_verify_fn=_verify_reach,
                     announcer=voice,
                 )
                 grasp_note = (
@@ -788,6 +873,13 @@ class HarvestModule(Module):
                     "（G1ArmSdkConnection.stiff_gravity_ramp_s の完了を待ってから把持を開始）"
                 )
                 _time.sleep(self.config.pregrasp_settle_s)
+            # 起動時、休憩姿勢のままだと front方式の align がworkspace外/関節限界
+            # で失敗する問題への対処（config.pregrasp_pose_torso_xyz 参照）。
+            # ik_skill は use_ik_grasp_sequence ブロックでのみ定義されるためガードする。
+            if self.config.use_ik_grasp_sequence and (
+                self.config.pregrasp_pose_q7 or self.config.pregrasp_pose_torso_xyz
+            ):
+                self._move_to_pregrasp_pose(ik_skill)
             # 最初の把持の直前の腕姿勢を「起動時姿勢」としてキャプチャ（左7+右7）。
             # 籠投入後、次のオクラ探索前にここへ戻る（return_to_rest.py）。
             with self._lock:
@@ -807,6 +899,101 @@ class HarvestModule(Module):
         self._thread = Thread(target=self._run, daemon=True, name="okra-harvest")
         self._thread.start()
         logger.info(f"HarvestModule 起動 — {mode}")
+
+    def _move_to_pregrasp_pose(self, ik_skill: Any) -> None:
+        """起動直後に一度だけ、腕を準備姿勢へ移動する。
+
+        ``config.pregrasp_pose_q7``（教示ツールで記録した右腕7関節角度）があれば
+        それを優先し、IKを経由せず直接その姿勢へ移動する。無ければ
+        ``config.pregrasp_pose_torso_xyz``（torso座標、IKで解く）にフォール
+        バックする。休憩姿勢（腕を下げた状態）の手先Xが front-approach の align
+        前提（現在のXを維持）と噛み合わずワークスペース外/関節限界で弾かれる
+        問題への対処（各フィールドのコメント参照、2026-09-14）。解けない/書式
+        不正なら警告を出して休憩姿勢のまま続行する（起動そのものは止めない）。
+        """
+        q7_spec = self.config.pregrasp_pose_q7
+        if q7_spec:
+            try:
+                q_right_goal = [float(v) for v in q7_spec.split(",")]
+            except ValueError:
+                q_right_goal = []
+            if len(q_right_goal) != 7:
+                logger.warning(
+                    f"HarvestModule: pregrasp_pose_q7={q7_spec!r} の書式が不正 "
+                    "(期待形式: カンマ区切り7要素[rad]) — 準備姿勢への移動をスキップ"
+                )
+                return
+            with self._lock:
+                state = self._latest_state
+            if state is None:
+                logger.warning(
+                    "HarvestModule: motor_states 未受信のため準備姿勢への移動をスキップ"
+                )
+                return
+            q_left = list(state.position)[15:22]
+            arm14_goal = list(q_left) + q_right_goal
+            logger.info(f"HarvestModule: 準備姿勢(教示q7)へ移動開始 q_right={q_right_goal}")
+            self._move_arm_to_pose(ik_skill, arm14_goal)
+            return
+
+        spec = self.config.pregrasp_pose_torso_xyz
+        if not spec:
+            return
+        try:
+            xyz = [float(v) for v in spec.split(",")]
+        except ValueError:
+            xyz = []
+        if len(xyz) != 3:
+            logger.warning(
+                f"HarvestModule: pregrasp_pose_torso_xyz={spec!r} の書式が不正 "
+                '(期待形式 "x,y,z") — 準備姿勢への移動をスキップ'
+            )
+            return
+        with self._lock:
+            state = self._latest_state
+        if state is None:
+            logger.warning(
+                "HarvestModule: motor_states 未受信のため準備姿勢への移動をスキップ"
+            )
+            return
+        pose_result = ik_skill.solve(xyz, list(state.position))
+        if pose_result is None:
+            logger.warning(
+                f"HarvestModule: 準備姿勢 target_torso={xyz} へのIKが解けず "
+                "移動をスキップ（休憩姿勢のまま続行 — front方式の align が失敗 "
+                "する可能性が高い点に注意）"
+            )
+            return
+        logger.info(f"HarvestModule: 準備姿勢(IK)へ移動開始 target_torso={xyz}")
+        self._move_arm_to_pose(ik_skill, pose_result.arm14)
+
+    def _move_arm_to_pose(self, ik_skill: Any, arm14_goal: list[float]) -> None:
+        """14関節目標(左7+右7)へ、``return_to_rest.py`` と同じ多段補間・控えめ速度で移動する。"""
+        from dimos.msgs.sensor_msgs.JointState import JointState as _JointState3
+        from dimos.robot.unitree.g1.harvest.return_to_rest import make_return_to_rest_fn
+
+        def _send_arm14(q14: list[float]) -> None:
+            self.arm_target.publish(
+                _JointState3(
+                    name=list(ik_skill.joint_names),
+                    position=[float(x) for x in q14],
+                    velocity=[0.0] * len(q14),
+                    effort=[0.0] * len(q14),
+                )
+            )
+
+        def _get_measured29() -> list[float]:
+            with self._lock:
+                s = self._latest_state
+            return list(s.position) if s is not None else [0.0] * 29
+
+        move_fn = make_return_to_rest_fn(
+            send_arm=_send_arm14,
+            get_measured=_get_measured29,
+            rest_q_getter=lambda: arm14_goal,
+        )
+        ok = move_fn()
+        logger.info(f"HarvestModule: 準備姿勢への移動{'完了' if ok else '失敗'}")
 
     def _await_first_frames(self, timeout_s: float) -> None:
         """ヘッド（ACT 把持が有効な場合は右手首も）カメラフレームが届くまでブロックし、
