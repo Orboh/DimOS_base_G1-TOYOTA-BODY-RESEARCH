@@ -34,6 +34,23 @@ from dimos.hardware.sensors.camera.zed import compat as zed_compat
 # 状態のまま残り、後続の sim 系テストまで巻き添えで落ちる（2026-09-15 CIで発覚）。
 # test_zed.py と同じ HAS_ZED_SDK パターンでこのテストだけスキップする。
 
+try:
+    import unitree_sdk2py  # noqa: F401
+
+    HAS_UNITREE_SDK = True
+except ImportError:
+    HAS_UNITREE_SDK = False
+
+# honban.py はカメラソースに関わらず G1HighLevelDdsSdk（rt/api/loco 経由の実機
+# LocoClient、unitree_sdk2py をトップレベルimport）をモジュール冒頭で無条件に
+# importする。OKRA_CAMERA_SOURCE=sim にしてもこのimport自体は避けられないため、
+# unitree_sdk2py 未インストールのCI環境では sim 系テストも同様に落ちる
+# （2026-09-15 CIで発覚。honban.py docstring の「pyzed未インストールでも
+# importできる」という前提は、unitree_sdk2py については考慮されていなかった）。
+_REQUIRES_UNITREE_SDK = pytest.mark.skipif(
+    not HAS_UNITREE_SDK, reason="unitree_sdk2py not installed"
+)
+
 
 def _reload_honban():  # type: ignore[no-untyped-def]
     import dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_okra_honban as m
@@ -42,6 +59,7 @@ def _reload_honban():  # type: ignore[no-untyped-def]
 
 
 @pytest.mark.skipif(not zed_compat.HAS_ZED_SDK, reason="ZED SDK not installed")
+@_REQUIRES_UNITREE_SDK
 def test_default_camera_source_is_zed(monkeypatch: pytest.MonkeyPatch) -> None:
     """OKRA_CAMERA_SOURCE 未指定＝既定は実機 ZED（後方互換）。"""
     monkeypatch.delenv("OKRA_CAMERA_SOURCE", raising=False)
@@ -55,6 +73,7 @@ def test_default_camera_source_is_zed(monkeypatch: pytest.MonkeyPatch) -> None:
     assert atoms[0].module is ZEDCamera
 
 
+@_REQUIRES_UNITREE_SDK
 def test_sim_camera_source_uses_isaac_zmq_camera(monkeypatch: pytest.MonkeyPatch) -> None:
     """OKRA_CAMERA_SOURCE=sim は ZEDCamera(pyzed依存) を import せず、
     IsaacZmqDepthCamera（perception.DepthCamera 互換の sim カメラ）へ切り替わる。
@@ -74,6 +93,7 @@ def test_sim_camera_source_uses_isaac_zmq_camera(monkeypatch: pytest.MonkeyPatch
     assert {"color_image", "depth_image", "camera_info"} <= out_names
 
 
+@_REQUIRES_UNITREE_SDK
 def test_sim_camera_source_reads_zmq_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """OKRA_SIM_CAM_HOST/PORT/TOPIC が IsaacZmqDepthCamera の blueprint kwargs に渡ること。"""
     monkeypatch.setenv("OKRA_CAMERA_SOURCE", "sim")

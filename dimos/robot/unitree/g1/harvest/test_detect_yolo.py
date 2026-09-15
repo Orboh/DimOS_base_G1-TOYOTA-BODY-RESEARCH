@@ -86,7 +86,7 @@ def test_low_confidence_dropped() -> None:
     assert _detector(dets, min_confidence=0.5).detect() == []
 
 
-# --- track_id=-1 の疑似ID化（2026-09-15） -----------------------------------
+# track_id=-1 の疑似ID化（2026-09-15）。
 # track_id=-1 は ultralytics がそのフレームで一件もトラックを確立できなかった
 # 時の共通フォールバック値で、同一フレーム内の複数の異なる実に同じ -1 が振られ
 # うる。excluded_ids は文字列IDの一致でしか判定しないため、-1 のままだと
@@ -205,7 +205,7 @@ class _FakeSkills:
         pass
 
 
-# --- 3D化できずに捨てた件数の可視化（2026-09-14） ------------------------------
+# 3D化できずに捨てた件数の可視化（2026-09-14）。
 # 「本当にオクラが無い」と「camera_info/深度がまだ来ていない」は、どちらも detect() が
 # [] を返すため区別できなかった（音声も既定ログも同一）。last_dropped がその区別を担う。
 
@@ -278,7 +278,7 @@ def test_factory_exposes_detector_for_dropped_count() -> None:
     assert skills.last_detect_dropped() == 1
 
 
-# --- conf しきい値の一元化（2026-09-15） ---------------------------------
+# conf しきい値の一元化（2026-09-15）。
 # make_yolo_detect_okra(conf=...) は Yolo2DDetector 側の推論しきい値と
 # YoloOkraDetector.min_confidence の両方に同じ値を流す一元窓口。ここでは
 # detector を注入して後者への伝播だけを確認する（Yolo2DDetector 自体への

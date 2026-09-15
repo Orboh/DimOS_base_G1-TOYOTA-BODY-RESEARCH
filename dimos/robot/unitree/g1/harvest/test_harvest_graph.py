@@ -306,7 +306,7 @@ def test_advance_left_waits_only_on_its_one_announcement() -> None:
     assert mock_sleep.call_count == 2
 
 
-# --- 「オクラが無い」と「カメラ準備中」を音声で区別する（2026-09-14） --------------
+# 「オクラが無い」と「カメラ準備中」を音声で区別する（2026-09-14）。
 # 実機では音声だけが判断材料になる場面があるため、count==0 の理由を読み分けられる
 # ことをグラフ経由で担保する。
 

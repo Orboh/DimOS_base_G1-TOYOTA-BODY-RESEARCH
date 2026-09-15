@@ -51,7 +51,7 @@ def test_zed_import_and_calibration_access() -> None:
     print("✓ ZED import and calibration access test passed!")
 
 
-# --- _capture_loop の異常系ログ（2026-09-15） --------------------------------
+# _capture_loop の異常系ログ（2026-09-15）。
 # grab() が例外を投げるとループが無言で終了し、以降フレーム配信が完全に止まる
 # サイレント故障だった（実機LIVEで「1個収穫後にviewerの映像が止まった」原因調査
 # で発覚）。stop() 経由（_running=False）の正常終了とは区別してログすることを

@@ -25,7 +25,6 @@
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from typing import Any
 
@@ -38,8 +37,9 @@ from dimos.robot.unitree.g1.harvest.graph_editor.codegen import (
     generate_stategraph_code,
 )
 from dimos.robot.unitree.g1.harvest.graph_editor.introspect import build_graph_json
+from dimos.utils.logging_config import setup_logger
 
-logger = logging.getLogger(__name__)
+logger = setup_logger()
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -74,7 +74,7 @@ def create_app() -> FastAPI:
         """現行の harvest グラフ構造（12ノード・固定エッジ・条件分岐）を返す。"""
         try:
             return build_graph_json()
-        except Exception as exc:  # noqa: BLE001 - 起動時の環境不整合を診断できるようにする
+        except Exception as exc:
             logger.exception("harvest グラフの読み込みに失敗しました")
             raise HTTPException(
                 status_code=500, detail=f"グラフの読み込みに失敗しました: {exc}"
@@ -87,7 +87,7 @@ def create_app() -> FastAPI:
             code = generate_stategraph_code(payload.nodes, payload.edges)
         except GraphCodegenError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except Exception as exc:  # noqa: BLE001 - 想定外の入力でもエラー内容を返す
+        except Exception as exc:
             logger.exception("コード生成に失敗しました")
             raise HTTPException(
                 status_code=400, detail=f"コード生成に失敗しました: {exc}"
