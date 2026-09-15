@@ -255,12 +255,12 @@ class HarvestModuleConfig(ModuleConfig):
     basket_drop_q7: str = ""
     basket_retreat_q7: str = ""
     # LIVE + use_basket_deposit: 籠投入時にオクラをリリースする開き角度[rad]
-    # （make_basket_deposit_fn の q_open 参照）。既定 3.7 = basket_deposit_bridge.py
-    # 由来の実機実績値。qが大きいほど開く方向（cut_close_q コメント参照）なので、
-    # 3.7 は起動時の休憩姿勢(≈3.7)と同程度に開いた状態 — 2026-09-14 ユーザー確認
-    # により、リリース角度としてはこのままで十分（フルの開き上限blade_max_q=5.2
-    # まで開く必要はない）。
-    basket_open_q: float = 3.7
+    # （make_basket_deposit_fn の q_open 参照）。qが大きいほど開く方向
+    # （cut_close_q コメント参照）。
+    # 2026-09-14時点では3.7（起動時の休憩姿勢と同程度）で十分と判断していたが、
+    # 2026-09-15 ユーザー要望により「100%全開」＝グリッパの安全上限
+    # blade_max_q=5.2（機械限界5.4手前、過電流フォルト回避）まで開くよう変更。
+    basket_open_q: float = 5.2
     # ZED→torso のハンドアイ外部パラメータ（重心3D を IK の torso フレームへ変換）。
     # 空 = 未校正（Step 4 で配線）。形式は [x,y,z, qx,qy,qz,qw]（torso<-camera）。
     cam_to_torso_xyzquat: str = ""

@@ -159,9 +159,11 @@ _CUT_SETTLE_S = float(os.getenv("OKRA_CUT_SETTLE_S", "2.5"))
 # までの暫定値 — 装着後は再度実測して見直すこと。
 _CUT_CLOSE_Q = float(os.getenv("OKRA_CUT_CLOSE_Q", "1.6"))
 _BLADE_MAX_Q = float(os.getenv("OKRA_BLADE_MAX_Q", "5.2"))
-# [rad] 籠投入時にオクラをリリースする開き角度。既定3.7のままで十分
-# （2026-09-14 ユーザー確認 — blade_max_q=5.2まで開く必要はない）。
-_BASKET_OPEN_Q = float(os.getenv("OKRA_BASKET_OPEN_Q", "3.7"))
+# [rad] 籠投入時にオクラをリリースする開き角度。2026-09-14時点では3.7で十分と
+# 判断していたが、2026-09-15 ユーザー要望により「100%全開」＝グリッパの安全上限
+# blade_max_q=5.2（機械限界5.4手前、過電流フォルト回避）まで開くよう変更。
+# 切断側(cut_close_q)は変更なし。
+_BASKET_OPEN_Q = float(os.getenv("OKRA_BASKET_OPEN_Q", "5.2"))
 # YOLO検出の信頼度しきい値。ultralytics推論自体のconf（Yolo2DDetector、検出結果に
 # 出てくるかどうか自体を左右する一段目）と、検出後の二段目フィルタ
 # YoloOkraDetector.min_confidenceの両方に同じ値が反映される（real_skills.
