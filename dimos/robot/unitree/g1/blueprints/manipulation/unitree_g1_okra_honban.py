@@ -141,14 +141,16 @@ _IK_STREAM_LEGS = os.getenv("OKRA_IK_STREAM_LEGS", "1").strip() == "1"
 _IK_STREAM_STEP_M = float(os.getenv("OKRA_IK_STREAM_STEP_M", "0.035"))
 _IK_STREAM_CADENCE_S = float(os.getenv("OKRA_IK_STREAM_CADENCE_S", "0.18"))
 _CUT_SETTLE_S = float(os.getenv("OKRA_CUT_SETTLE_S", "2.5"))
-# [rad] 切断時のグリッパ閉じ位置。既定0.0=全閉方向。2026-09-14 実機確認
-# （oda/gripper_move_probe.py / gripper_close_probe.py）: Dex1-1はqが小さい
-# ほど閉じる・大きいほど開く（公式dex1_1_serviceのキャリブレーション=手で
-# 固く閉じてq=0を記録、と一致）。honbanはアタッチメント無しの素のDex1-1
-# 構成のため、切断+把持は全閉方向へのフルストロークでよいと判断（旧既定
-# 4.4は逆方向＝開く側の値だったため修正、harvest_module.py の cut_close_q
-# コメント参照）。
-_CUT_CLOSE_Q = float(os.getenv("OKRA_CUT_CLOSE_Q", "0.0"))
+# [rad] 切断時のグリッパ閉じ位置。Dex1-1はqが小さいほど閉じる・大きいほど
+# 開く（2026-09-14 実機確認、oda/gripper_move_probe.py / gripper_close_probe.py。
+# 公式dex1_1_serviceのキャリブレーション=手で固く閉じてq=0を記録、と一致。
+# 旧既定4.4は逆方向＝開く側の値だったため修正、harvest_module.py の
+# cut_close_q コメント参照）。
+# 既定1.6 — 2026-09-15 実機実験で確定（oda/gripper_range_probe.py）。
+# 完全に閉じ切る(q=0.0)と新鮮なオクラの実まで切断してしまうため、刃の間に
+# 約1.5cmの隙間を残す値として1.6を採用。カッターアタッチメントが装着される
+# までの暫定値 — 装着後は再度実測して見直すこと。
+_CUT_CLOSE_Q = float(os.getenv("OKRA_CUT_CLOSE_Q", "1.6"))
 _BLADE_MAX_Q = float(os.getenv("OKRA_BLADE_MAX_Q", "5.2"))
 # [rad] 籠投入時にオクラをリリースする開き角度。既定3.7のままで十分
 # （2026-09-14 ユーザー確認 — blade_max_q=5.2まで開く必要はない）。
