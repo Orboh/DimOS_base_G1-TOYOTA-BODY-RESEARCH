@@ -53,6 +53,9 @@ push レグ中の手先 Y/Z が完全一定であることで数値・映像の�
   - ZED-M カメラが USB3 で接続済み
   - Ollama + qwen3-vl:2b（任意。VLM を使いたい場合のみ OKRA_VLM_MODEL を設定。既定は未使用）
   - OKRA_YOLO_MODEL（既定 "okra11n-seg.pt"、data/models_yolo/ 配下）
+  - OKRA_YOLO_CONF（既定 "0.5"。YOLO検出の信頼度しきい値。これ未満は「オクラ検出
+    なし」扱いになる。2026-09-15までは0.5が2箇所に別々にハードコードされていた
+    ものを、ここから一元的に変更できるようにした）
   - OKRA_TARGET（既定 "okra"）
 """
 
@@ -155,6 +158,12 @@ _BLADE_MAX_Q = float(os.getenv("OKRA_BLADE_MAX_Q", "5.2"))
 # [rad] 籠投入時にオクラをリリースする開き角度。既定3.7のままで十分
 # （2026-09-14 ユーザー確認 — blade_max_q=5.2まで開く必要はない）。
 _BASKET_OPEN_Q = float(os.getenv("OKRA_BASKET_OPEN_Q", "3.7"))
+# YOLO検出の信頼度しきい値。ultralytics推論自体のconf（Yolo2DDetector、検出結果に
+# 出てくるかどうか自体を左右する一段目）と、検出後の二段目フィルタ
+# YoloOkraDetector.min_confidenceの両方に同じ値が反映される（real_skills.
+# build_live_harvest_skills / detect_yolo.make_yolo_detect_okra 参照）。
+# 2026-09-15までは0.5が2箇所に別々にハードコードされていた。
+_YOLO_CONF = float(os.getenv("OKRA_YOLO_CONF", "0.5"))
 _VOICE_LEAD_S = float(os.getenv("OKRA_VOICE_LEAD_S", "2.0"))
 # §5 sweep（HarvestConfig パススルー、既定は未指定=HarvestConfigのデフォルトのまま
 # 後方互換）。sim検証で広い探索範囲(例: 10m先まで)を試す時だけ上書きする
@@ -240,6 +249,7 @@ _MODULES = [
         network_interface=_NIC,
         vlm_model=os.getenv("OKRA_VLM_MODEL", ""),
         yolo_model=os.getenv("OKRA_YOLO_MODEL", "okra11n-seg.pt"),
+        yolo_conf=_YOLO_CONF,
         target_classes=os.getenv("OKRA_TARGET", "okra"),
         cam_to_torso_xyzquat=_CAM_TO_TORSO,
         use_ik_grasp_sequence=True,
@@ -306,7 +316,7 @@ if _USE_BASE_MOVE:
         _MODULES.append(G1HighLevelDdsSdk.blueprint(network_interface=_NIC))
 
 _approach_note = (
-    f"camera_source={_CAMERA_SOURCE} "
+    f"camera_source={_CAMERA_SOURCE} yolo_conf={_YOLO_CONF} "
     f"approach_front_m={_IK_APPROACH_FRONT_M} standoff_m={_STANDOFF_M} "
     f"max_reach_pos_err_m={_MAX_REACH_POS_ERR_M} "
     f"front_align_margin_m={_FRONT_ALIGN_MARGIN_M} "

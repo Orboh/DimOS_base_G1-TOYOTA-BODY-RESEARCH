@@ -196,6 +196,7 @@ def build_live_harvest_skills(
     detect_fn: Callable[[], list[Okra]] | None = None,
     next_station_fn: Callable[[], bool] | None = None,
     yolo_model: str = "yolo11n.pt",
+    yolo_conf: float = 0.5,
     base_speed: float = _BASE_SPEED,
 ) -> tuple[DimosHarvestSkills, Any]:
     """Assemble a :class:`DimosHarvestSkills` for the LIVE robot (first cut).
@@ -233,12 +234,14 @@ def build_live_harvest_skills(
             target_classes=target_classes or {"banana"},
             pixel_to_base=pixel_to_base,
             depth_getter=depth_getter,
+            min_confidence=yolo_conf,
         ).detect
     else:
         detect_fn = make_yolo_detect_okra(
             frame_getter,
             target_classes=target_classes,
             model_name=yolo_model,
+            conf=yolo_conf,
             pixel_to_base=pixel_to_base,
             depth_getter=depth_getter,
         )

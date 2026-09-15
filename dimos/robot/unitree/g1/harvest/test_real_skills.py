@@ -153,6 +153,47 @@ def test_build_live_harvest_skills_drives_graph() -> None:
     assert grasp is not None
 
 
+class _StubYoloLowConf:
+    """_StubYolo と同じだが confidence を落として渡す（yolo_conf のフィルタ確認用）。"""
+
+    def __init__(self):
+        self._seen = False
+
+    def process_image(self, _frame):
+        if self._seen:
+            return []
+        self._seen = True
+        return [_FakeDet("okra", (300, 220, 340, 260), confidence=0.3, track_id=7)]
+
+
+def test_build_live_harvest_skills_yolo_conf_filters_detector_branch() -> None:
+    """detector= 直渡し経路でも yolo_conf が min_confidence として効く（2026-09-15）。"""
+    cfg = HarvestConfig()
+    skills, _ = build_live_harvest_skills(
+        frame_getter=lambda: object(),
+        target_classes={"okra"},
+        detector=_StubYoloLowConf(),
+        pixel_to_base=lambda u, v, det: {"x": 0.30, "y": 0.45, "z": 0.80},
+        yolo_conf=0.5,  # 既定と同じ値を明示 -> confidence=0.3 は弾かれる
+    )
+    final = build_harvest_graph(skills, cfg).invoke(initial_state(), {"recursion_limit": 400})
+    assert final["picks"] == 0
+
+
+def test_build_live_harvest_skills_yolo_conf_override_lets_it_through() -> None:
+    """yolo_conf を下げれば同じ検出が通る。"""
+    cfg = HarvestConfig()
+    skills, _ = build_live_harvest_skills(
+        frame_getter=lambda: object(),
+        target_classes={"okra"},
+        detector=_StubYoloLowConf(),
+        pixel_to_base=lambda u, v, det: {"x": 0.30, "y": 0.45, "z": 0.80},
+        yolo_conf=0.1,
+    )
+    final = build_harvest_graph(skills, cfg).invoke(initial_state(), {"recursion_limit": 400})
+    assert final["picks"] == 1
+
+
 def test_live_blueprint_imports_and_builds() -> None:
     from dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_okra_harvest_live import (
         unitree_g1_okra_harvest_live as bp,

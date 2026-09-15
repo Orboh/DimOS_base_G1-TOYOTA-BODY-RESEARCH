@@ -310,6 +310,7 @@ def make_yolo_detect_okra(
     *,
     model_name: str = "yolo11n.pt",
     detector: Any = None,
+    conf: float = 0.5,
     **kwargs: Any,
 ) -> Callable[[], list[Okra]]:
     """Build a ``detect_fn`` (the ``detect_okra`` injectable) backed by YOLO.
@@ -320,11 +321,21 @@ def make_yolo_detect_okra(
 
     The DimOS ``Yolo2DDetector`` (ultralytics) is imported lazily so this module
     stays importable without that dependency.
+
+    Args:
+        conf: YOLO 検出の信頼度しきい値。ultralytics 推論そのものの ``conf``
+            （検出結果に出てくるかどうかを左右する一段目、``Yolo2DDetector``）と、
+            検出後の二段目フィルタ ``YoloOkraDetector.min_confidence`` の両方に
+            同じ値を反映する（2026-09-15までは 0.5 が両者に別々にハードコード
+            されていた）。``kwargs`` で ``min_confidence`` を明示すればそちらが
+            優先される。``detector`` を自前で注入した場合、その detector 側の
+            conf 設定はここでは変更されない（呼び出し側の責任）。
     """
     if detector is None:
         from dimos.perception.detection.detectors.yolo import Yolo2DDetector
 
-        detector = Yolo2DDetector(model_name=model_name)
+        detector = Yolo2DDetector(model_name=model_name, conf=conf)
+    kwargs.setdefault("min_confidence", conf)
     yolo = YoloOkraDetector(
         detector=detector,
         frame_getter=frame_getter,

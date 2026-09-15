@@ -234,6 +234,40 @@ def test_factory_exposes_detector_for_dropped_count() -> None:
     assert skills.last_detect_dropped() == 1
 
 
+# --- conf しきい値の一元化（2026-09-15） ---------------------------------
+# make_yolo_detect_okra(conf=...) は Yolo2DDetector 側の推論しきい値と
+# YoloOkraDetector.min_confidence の両方に同じ値を流す一元窓口。ここでは
+# detector を注入して後者への伝播だけを確認する（Yolo2DDetector 自体への
+# 伝播は dimos.perception 側の責務・実重み不要のユニット範囲外）。
+
+
+def test_make_yolo_detect_okra_conf_filters_low_confidence() -> None:
+    """既定 conf=0.5 未満の検出は min_confidence として弾かれる。"""
+    from dimos.robot.unitree.g1.harvest.detect_yolo import make_yolo_detect_okra
+
+    detect_fn = make_yolo_detect_okra(
+        frame_getter=lambda: _Frame(),
+        target_classes={"okra"},
+        detector=_StubDetector([_Det("okra", (300, 220, 340, 260), confidence=0.3, track_id=1)]),
+        pixel_to_base=lambda u, v, d: {"x": 0.30, "y": 0.45, "z": 0.80},
+    )
+    assert detect_fn() == []
+
+
+def test_make_yolo_detect_okra_conf_override_lets_it_through() -> None:
+    """conf を明示的に下げれば、既定なら弾かれる検出も通る。"""
+    from dimos.robot.unitree.g1.harvest.detect_yolo import make_yolo_detect_okra
+
+    detect_fn = make_yolo_detect_okra(
+        frame_getter=lambda: _Frame(),
+        target_classes={"okra"},
+        detector=_StubDetector([_Det("okra", (300, 220, 340, 260), confidence=0.3, track_id=1)]),
+        pixel_to_base=lambda u, v, d: {"x": 0.30, "y": 0.45, "z": 0.80},
+        conf=0.1,
+    )
+    assert len(detect_fn()) == 1
+
+
 def test_last_detect_dropped_is_zero_without_detector_attribute() -> None:
     """検出器をぶら下げない detect_fn（VLM経路など）でも壊れない。"""
     from dimos.robot.unitree.g1.harvest.real_skills import DimosHarvestSkills

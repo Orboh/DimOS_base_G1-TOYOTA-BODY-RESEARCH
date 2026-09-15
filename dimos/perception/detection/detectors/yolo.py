@@ -30,11 +30,15 @@ class Yolo2DDetector(Detector):
         model_path: str = "models_yolo",
         model_name: str = "yolo11n.pt",
         device: str | None = None,
+        conf: float = 0.5,
+        iou: float = 0.6,
     ) -> None:
         self.model = YOLO(
             get_data(model_path) / model_name,
             task="detect",
         )
+        self.conf = conf
+        self.iou = iou
 
         if device:
             self.device = device
@@ -60,8 +64,8 @@ class Yolo2DDetector(Detector):
         results = self.model.track(
             source=image.to_opencv(),
             device=self.device,
-            conf=0.5,
-            iou=0.6,
+            conf=self.conf,
+            iou=self.iou,
             persist=True,
             verbose=False,
         )

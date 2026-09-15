@@ -71,6 +71,11 @@ class HarvestModuleConfig(ModuleConfig):
     # HuggingFace Kota0612/okra-seg-detector（[[SS-01-オクラ検出]]）。ローカルパス or
     # ultralytics が解決できる名前を渡す。seg モデルならマスク重心+depth median で3D化。
     yolo_model: str = "yolo11n.pt"
+    # YOLO 検出の信頼度しきい値（この値未満は「オクラを検出した」とみなさない）。
+    # ultralytics 推論自体の conf と、検出後の二段目フィルタ min_confidence の
+    # 両方に同じ値が反映される（real_skills.build_live_harvest_skills 参照）。
+    # 2026-09-15までは 0.5 が2箇所に別々にハードコードされていた。
+    yolo_conf: float = 0.5
     recursion_limit: int = 400  # LangGraph ステップ上限（ループでノードを再訪するため多め）
     # LIVE: G1 スピーカーで日本語音声再生（pyopenjtalk + PlayStream）。
     # False = コンソールにログ出力（ロボットなし / 音声依存なし）。
@@ -885,6 +890,7 @@ class HarvestModule(Module):
                 depth_getter=depth_getter,
                 pixel_to_base=pixel_to_base,
                 yolo_model=self.config.yolo_model,
+                yolo_conf=self.config.yolo_conf,
                 base_speed=self.config.base_speed,
             )
             gripper_live_note = f"gripper_live={self.config.gripper_live}"
