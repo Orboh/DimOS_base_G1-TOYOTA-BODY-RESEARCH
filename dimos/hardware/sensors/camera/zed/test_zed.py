@@ -13,10 +13,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from dimos.hardware.sensors.camera.zed import compat as zed
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
+
+# camera.py は `import pyzed.sl as sl` をトップレベルで行うため、SDK 未インストール
+# 環境ではこの import 自体が失敗する。既存パターン(HAS_ZED_SDK)に合わせ、対象
+# テストにだけ skipif を付けて遅延 import する。
 
 
 @pytest.mark.skipif(not zed.HAS_ZED_SDK, reason="ZED SDK not installed")
@@ -42,3 +49,39 @@ def test_zed_import_and_calibration_access() -> None:
     assert camera_info_snake is camera_info_pascal
 
     print("✓ ZED import and calibration access test passed!")
+
+
+# --- _capture_loop の異常系ログ（2026-09-15） --------------------------------
+# grab() が例外を投げるとループが無言で終了し、以降フレーム配信が完全に止まる
+# サイレント故障だった（実機LIVEで「1個収穫後にviewerの映像が止まった」原因調査
+# で発覚）。stop() 経由（_running=False）の正常終了とは区別してログすることを
+# 確認する。ZEDCamera 自体は Module の重い依存を持つため、_capture_loop が
+# 使う属性だけを持つ軽量なフェイクに直接バインドして呼び出す。
+
+
+def _fake_zed_camera(*, running: bool) -> SimpleNamespace:
+    zed_mock = MagicMock()
+    zed_mock.grab.side_effect = RuntimeError("usb disconnect (simulated)")
+    return SimpleNamespace(_running=running, _zed=zed_mock, _depth_on=False, _runtime_params=None)
+
+
+@pytest.mark.skipif(not zed.HAS_ZED_SDK, reason="ZED SDK not installed")
+def test_capture_loop_logs_when_grab_raises_while_running() -> None:
+    """running中にgrab()が例外を投げるのは異常系 -> ログに残す。"""
+    from dimos.hardware.sensors.camera.zed.camera import ZEDCamera
+
+    fake = _fake_zed_camera(running=True)
+    with patch("dimos.hardware.sensors.camera.zed.camera.logger") as mock_logger:
+        ZEDCamera._capture_loop(fake)
+    mock_logger.exception.assert_called_once()
+
+
+@pytest.mark.skipif(not zed.HAS_ZED_SDK, reason="ZED SDK not installed")
+def test_capture_loop_silent_when_grab_raises_after_stop() -> None:
+    """stop()済み(_running=False)後の例外は正常系 -> ログしない。"""
+    from dimos.hardware.sensors.camera.zed.camera import ZEDCamera
+
+    fake = _fake_zed_camera(running=False)
+    with patch("dimos.hardware.sensors.camera.zed.camera.logger") as mock_logger:
+        ZEDCamera._capture_loop(fake)
+    mock_logger.exception.assert_not_called()

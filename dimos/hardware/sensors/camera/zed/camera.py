@@ -41,7 +41,10 @@ from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.spec import perception
+from dimos.utils.logging_config import setup_logger
 from dimos.utils.reactive import backpressure
+
+logger = setup_logger()
 
 
 def default_base_transform() -> Transform:
@@ -294,6 +297,7 @@ class ZEDCamera(DepthCameraHardware, Module, perception.DepthCamera):
         self._tracking_enabled = True
 
     def _capture_loop(self) -> None:
+        consecutive_grab_failures = 0
         while self._running and self._zed is not None:
             # Snapshot the runtime depth toggle and apply it to this grab. When
             # off, grab skips depth compute entirely (the source of the speedup).
@@ -304,13 +308,36 @@ class ZEDCamera(DepthCameraHardware, Module, perception.DepthCamera):
             try:
                 err = self._zed.grab(self._runtime_params)
             except Exception:
+                # self._running が True のまま例外に来るのは stop() 経由ではない
+                # （stop() は先に _running=False にしてから zed.close() する）—
+                # USB切断/ZED SDK内部クラッシュ等の異常系。従来はここで無言に
+                # break していたため、キャプチャループが静かに死んでも外からは
+                # 「配信中」に見え、実際はフレームが二度と更新されないサイレント
+                # 故障になっていた（2026-09-15 実機LIVEで「1個収穫後にviewerの
+                # 映像が止まった」事象の原因調査で発覚）。
+                if self._running:
+                    logger.exception(
+                        "ZEDCamera._capture_loop: grab() で例外発生、キャプチャ"
+                        "ループを終了する（以降フレーム配信が完全に止まる）"
+                    )
                 break
 
             if err != sl.ERROR_CODE.SUCCESS:
                 if not self._running:
                     break
+                consecutive_grab_failures += 1
+                # grab失敗も従来は無限リトライが無言で続くだけだった。カメラが
+                # フリーズしたまま延々とリトライしているだけなのか判別できる
+                # よう、一定回数ごとに警告する（頻度を抑えてログを溢れさせない）。
+                if consecutive_grab_failures % 1000 == 0:
+                    logger.warning(
+                        f"ZEDCamera._capture_loop: grab() が "
+                        f"{consecutive_grab_failures} 回連続で失敗中"
+                        f"（直近のエラー: {err}）。カメラがフリーズしている可能性"
+                    )
                 time.sleep(0.001)
                 continue
+            consecutive_grab_failures = 0
 
             ts = time.time()
 
