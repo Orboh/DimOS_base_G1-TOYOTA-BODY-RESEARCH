@@ -934,13 +934,16 @@ def main() -> None:
         if cam_mode == "torso" and torso_path is not None:
             # torso フレームでの取付: 位置 + 視線方向。
             # 既定値は unitree_g1_okra_honban.py の OKRA_CAM_TO_TORSO 既定値
-            # ("0.1090,0.0300,0.2480,-0.49475,0.49475,-0.50520,0.50520" = 実機胸ZED
-            # 実測値、未校正扱いの暫定値) を、本関数と同じ変換式で逆算して合わせたもの。
+            # ("0.1110,0.0250,0.2585,-0.49475,0.49475,-0.50520,0.50520" = 実機胸ZED、
+            # 平行移動は 2026-09-15 の CAD 実測値) を、本関数と同じ変換式で逆算して
+            # 合わせたもの。**honban.py 側を変えたらここも必ず同じ値にすること** —
             # ここが実機とズレると、pixel→3D→torso 変換が食い違い検出座標が
             # IKワークスペース外と誤判定され続ける（2026-09-12 検証で発覚: 旧既定値
             # [0.08,0,0.20]・下向き19.3°は実機実測と位置最大5cm・視線角度約20.5°不一致だった）。
-            lpos = _vec("SIM_CAM_LOCAL_POS", [0.1090, 0.0300, 0.2480])  # [m] torso_link相対 x,y,z
-            fwd = _vec("SIM_CAM_LOCAL_FWD", [0.9998, 0.0, 0.0209])  # 正規化前。ほぼ水平（上向き約1.2°）
+            lpos = _vec("SIM_CAM_LOCAL_POS", [0.1110, 0.0250, 0.2585])  # [m] torso_link相対 x,y,z
+            fwd = _vec(
+                "SIM_CAM_LOCAL_FWD", [0.9998, 0.0, 0.0209]
+            )  # 正規化前。ほぼ水平（上向き約1.2°）
             # SIM_CAM_LOOK_WORLD="x,y,z" 指定時: torso の向きに関係なく「ワールドのその点」を
             # 見るよう、胸カメラの torso-local 前方ベクトルを逆算する（机のオクラ確実捕捉用）。
             _lookw = os.getenv("SIM_CAM_LOOK_WORLD", "")
@@ -1058,7 +1061,12 @@ def main() -> None:
                     for _k in [(0, 0), (1, 0), (1, 1), (0, 1)]:  # 原点→遠方4隅（錐台の稜線）
                         _fov_pts.append(Gf.Vec3f(*_origin))
                         _fov_pts.append(Gf.Vec3f(*_far_corner[_k]))
-                    for _a, _b in [((0, 0), (1, 0)), ((1, 0), (1, 1)), ((1, 1), (0, 1)), ((0, 1), (0, 0))]:
+                    for _a, _b in [
+                        ((0, 0), (1, 0)),
+                        ((1, 0), (1, 1)),
+                        ((1, 1), (0, 1)),
+                        ((0, 1), (0, 0)),
+                    ]:
                         _fov_pts.append(Gf.Vec3f(*_far_corner[_a]))  # 遠方面の4辺
                         _fov_pts.append(Gf.Vec3f(*_far_corner[_b]))
                     _fov_curve = UsdGeom.BasisCurves.Define(stage, f"{torso_path}/fov_viz")
@@ -1101,10 +1109,14 @@ def main() -> None:
                     # だった（既定解像度での実測）。AABB(ws_x/y/z)自体は
                     # ik_approach.py 側の事前フィルタとして変更していない
                     # （このグリッド計算も同じ ws_x/y/z の中で solve() するだけ）。
-                    _rx0, _rx1 = (float(v) for v in os.getenv("SIM_REACH_X", "0.05,0.65").split(","))
+                    _rx0, _rx1 = (
+                        float(v) for v in os.getenv("SIM_REACH_X", "0.05,0.65").split(",")
+                    )
                     # 既定 -0.61 (旧-0.75): ik_approach.py の ws_y 既定と同期
                     # （2026-09-12 ユーザー指摘・実測に基づく変更、数値ドリフト防止）。
-                    _ry0, _ry1 = (float(v) for v in os.getenv("SIM_REACH_Y", "-0.61,0.20").split(","))
+                    _ry0, _ry1 = (
+                        float(v) for v in os.getenv("SIM_REACH_Y", "-0.61,0.20").split(",")
+                    )
                     # z既定 0.0〜0.5: 胸カメラの実垂直視野角(HD720実機HFOV=82°相当,
                     # vfov≈52°)で実際にカバーされる高さに合わせた可視化専用の範囲
                     # （ik_approach.py 本体の ws_z=[-0.35,0.85] とは別、後者は変更なし）。
@@ -1132,10 +1144,14 @@ def main() -> None:
                                     is not None
                                 ):
                                     _reach_pts.append(Gf.Vec3f(float(_xg), float(_yg), float(_zg)))
-                    _reach_points_prim = UsdGeom.Points.Define(stage, f"{torso_path}/reach_viz_points")
+                    _reach_points_prim = UsdGeom.Points.Define(
+                        stage, f"{torso_path}/reach_viz_points"
+                    )
                     _reach_points_prim.CreatePointsAttr().Set(_reach_pts)
                     _reach_points_prim.CreateWidthsAttr().Set([0.02] * len(_reach_pts))
-                    _reach_points_prim.CreateDisplayColorAttr().Set([Gf.Vec3f(1.0, 0.4, 0.85)])  # ピンク
+                    _reach_points_prim.CreateDisplayColorAttr().Set(
+                        [Gf.Vec3f(1.0, 0.4, 0.85)]
+                    )  # ピンク
                     # purpose=guide（詳細は fov_viz 側のコメント参照）。この点群は
                     # torso相対 z=[0,0.5] 付近＝カメラ(torso相対z≈0.25m)のすぐ近傍にも
                     # 点が存在するため、色マスクで隠す方式は「カメラに極端に近い点が
@@ -1506,9 +1522,7 @@ def main() -> None:
                             .ExtractTranslation()
                         )
                         _dd = (
-                            (_hw[0] - _ow[0]) ** 2
-                            + (_hw[1] - _ow[1]) ** 2
-                            + (_hw[2] - _ow[2]) ** 2
+                            (_hw[0] - _ow[0]) ** 2 + (_hw[1] - _ow[1]) ** 2 + (_hw[2] - _ow[2]) ** 2
                         )
                         if _dd < _bd:
                             _best, _bd = _i, _dd

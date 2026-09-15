@@ -26,7 +26,7 @@ CAD からは以下の2つを読み取って与える:
 使い方（--right/--down/--forward は torso 座標での単位ベクトル）:
 
     python cam_to_torso_from_cad.py \
-        --xyz 0.1090 0.0300 0.2480 \
+        --xyz 0.1110 0.0250 0.2585 \
         --right 0 -1 0 --down 0 0 -1 --forward 1 0 0
 
 正しく取り付いていれば forward≈+X(前), right≈-Y(右), down≈-Z(下) になり、
@@ -39,7 +39,9 @@ import argparse
 
 import numpy as np
 
-CURRENT = "0.1090,0.0300,0.2480,-0.49475,0.49475,-0.50520,0.50520"
+# 比較の基準＝現行の本番既定値（unitree_g1_okra_honban.py の OKRA_CAM_TO_TORSO）。
+# 本番側を変えたらここも更新すること（でないと差分が古い値との比較になる）。
+CURRENT = "0.1110,0.0250,0.2585,-0.49475,0.49475,-0.50520,0.50520"
 
 
 def rot_to_quat(R: np.ndarray) -> np.ndarray:
