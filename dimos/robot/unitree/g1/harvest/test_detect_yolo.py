@@ -86,6 +86,50 @@ def test_low_confidence_dropped() -> None:
     assert _detector(dets, min_confidence=0.5).detect() == []
 
 
+# --- track_id=-1 の疑似ID化（2026-09-15） -----------------------------------
+# track_id=-1 は ultralytics がそのフレームで一件もトラックを確立できなかった
+# 時の共通フォールバック値で、同一フレーム内の複数の異なる実に同じ -1 が振られ
+# うる。excluded_ids は文字列IDの一致でしか判定しないため、-1 のままだと
+# 「1個収穫→除外」の後、別の実がまた -1 になると誤って同一個体とみなされ二度と
+# 狙われなくなる（実機LIVEで okra_-1 の重複を確認）。位置を1cm丸めた疑似IDに
+# 置き換えて回避する。
+
+
+def test_track_id_minus1_uses_distinct_position_ids() -> None:
+    """track_id=-1 でも、位置が離れていれば別の疑似IDになる。"""
+    dets = [
+        _Det("okra", (100, 100, 140, 140), track_id=-1),
+        _Det("okra", (400, 100, 440, 140), track_id=-1),
+    ]
+    positions = {
+        (100, 100, 140, 140): {"x": 0.10, "y": 0.40, "z": 0.20},
+        (400, 100, 440, 140): {"x": 0.50, "y": 0.40, "z": 0.20},
+    }
+    okra = _detector(dets, pixel_to_base=lambda u, v, det: positions[det.bbox]).detect()
+    assert len(okra) == 2
+    assert okra[0].id == "okra_pos_0.1_0.4_0.2"
+    assert okra[1].id == "okra_pos_0.5_0.4_0.2"
+    assert okra[0].id != okra[1].id
+
+
+def test_track_id_minus1_small_jitter_maps_to_same_id() -> None:
+    """実測2mm相当のブレは1cm丸めで吸収され、同じ疑似IDになる。"""
+    dets = [_Det("okra", (300, 220, 340, 260), track_id=-1)]
+    id_a = _detector(
+        dets, pixel_to_base=lambda u, v, det: {"x": 0.301, "y": 0.402, "z": 0.199}
+    ).detect()[0].id
+    id_b = _detector(
+        dets, pixel_to_base=lambda u, v, det: {"x": 0.299, "y": 0.398, "z": 0.201}
+    ).detect()[0].id
+    assert id_a == id_b == "okra_pos_0.3_0.4_0.2"
+
+
+def test_track_id_present_keeps_track_based_id() -> None:
+    """track_id が確立していれば従来通りそのままIDに使う（回帰）。"""
+    dets = [_Det("okra", (300, 220, 340, 260), track_id=7)]
+    assert _detector(dets).detect()[0].id == "okra_7"
+
+
 def test_image_region_sign_from_pixel() -> None:
     # A box on the right half of the image -> +x (region R); left half -> -x (L).
     right = _detector([_Det("okra", (500, 220, 540, 260), track_id=1)]).detect()[0]

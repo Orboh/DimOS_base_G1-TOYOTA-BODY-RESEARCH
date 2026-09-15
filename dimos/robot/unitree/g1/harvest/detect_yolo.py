@@ -263,7 +263,22 @@ class YoloOkraDetector:
                 continue
             ripeness = float(self._ripeness_fn(det)) if self._ripeness_fn else 1.0
             track = getattr(det, "track_id", None)
-            okra_id = f"okra_{track}" if track is not None else f"okra_{name}_{idx}"
+            if track is not None and track != -1:
+                okra_id = f"okra_{track}"
+            elif track == -1:
+                # track_id=-1 は ultralytics がそのフレームで一件もトラックを
+                # 確立できなかった時の共通フォールバック値（Detection2DBBox/Seg.
+                # from_ultralytics_result 参照）で、同一フレーム内の複数の異なる
+                # 実に同じ -1 が振られうる。excluded_ids は文字列IDの一致でしか
+                # 判定しないため、track_id だけに頼ると「1個収穫→除外」の後、
+                # 別の実がまた -1 になると誤って同一個体とみなされ、二度と
+                # 狙われなくなる（2026-09-15 実機LIVEで okra_-1 の重複を確認）。
+                # 3D位置推定誤差は実測2mm程度と小さいため、1cm丸めの位置を疑似
+                # IDとして使う（距離しきい値によるあいまい判定はせず、丸め値の
+                # 完全一致のみで同一個体を判定する）。
+                okra_id = f"okra_pos_{round(pos['x'], 2)}_{round(pos['y'], 2)}_{round(pos['z'], 2)}"
+            else:
+                okra_id = f"okra_{name}_{idx}"
             out.append(
                 Okra(
                     id=okra_id,
