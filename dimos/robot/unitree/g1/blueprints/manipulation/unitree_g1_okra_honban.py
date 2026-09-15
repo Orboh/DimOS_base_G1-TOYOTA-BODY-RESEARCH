@@ -53,9 +53,13 @@ push レグ中の手先 Y/Z が完全一定であることで数値・映像の�
   - ZED-M カメラが USB3 で接続済み
   - Ollama + qwen3-vl:2b（任意。VLM を使いたい場合のみ OKRA_VLM_MODEL を設定。既定は未使用）
   - OKRA_YOLO_MODEL（既定 "okra11n-seg.pt"、data/models_yolo/ 配下）
-  - OKRA_YOLO_CONF（既定 "0.5"。YOLO検出の信頼度しきい値。これ未満は「オクラ検出
+  - OKRA_YOLO_CONF（既定 "0.25"。YOLO検出の信頼度しきい値。これ未満は「オクラ検出
     なし」扱いになる。2026-09-15までは0.5が2箇所に別々にハードコードされていた
-    ものを、ここから一元的に変更できるようにした）
+    ものを、ここから一元的に変更できるようにした。scripts/zed_rerun_stream_local.py
+    （ローカルZEDビューア）の既定confと同じ0.25にそろえてある — 実機LIVEで
+    「YOLOはviewerに映っているのに収穫プログラムは見当たりませんと言う」現象が
+    報告され、confidenceの差(旧既定0.5 vs viewerの0.25)が疑われたため合わせた
+    （2026-09-15 ユーザー要望。原因の確定は次回実機検証待ち））
   - OKRA_TARGET（既定 "okra"）
 """
 
@@ -162,8 +166,12 @@ _BASKET_OPEN_Q = float(os.getenv("OKRA_BASKET_OPEN_Q", "3.7"))
 # 出てくるかどうか自体を左右する一段目）と、検出後の二段目フィルタ
 # YoloOkraDetector.min_confidenceの両方に同じ値が反映される（real_skills.
 # build_live_harvest_skills / detect_yolo.make_yolo_detect_okra 参照）。
-# 2026-09-15までは0.5が2箇所に別々にハードコードされていた。
-_YOLO_CONF = float(os.getenv("OKRA_YOLO_CONF", "0.5"))
+# 2026-09-15までは0.5が2箇所に別々にハードコードされていた。既定は
+# scripts/zed_rerun_stream_local.py（ローカルZEDビューア）と同じ0.25 — 収穫
+# プログラムだけ0.5のままだと、viewerに映っているのに収穫プログラムは
+# 「オクラは見当たりません」と言う食い違いが起きうるため揃えた
+# （2026-09-15 ユーザー要望）。
+_YOLO_CONF = float(os.getenv("OKRA_YOLO_CONF", "0.25"))
 _VOICE_LEAD_S = float(os.getenv("OKRA_VOICE_LEAD_S", "2.0"))
 # §5 sweep（HarvestConfig パススルー、既定は未指定=HarvestConfigのデフォルトのまま
 # 後方互換）。sim検証で広い探索範囲(例: 10m先まで)を試す時だけ上書きする
