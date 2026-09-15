@@ -196,9 +196,19 @@ _BASKET_ENTRY_Q7 = os.getenv("OKRA_BASKET_ENTRY_Q7", "")
 _BASKET_DROP_Q7 = os.getenv("OKRA_BASKET_DROP_Q7", "")
 _BASKET_RETREAT_Q7 = os.getenv("OKRA_BASKET_RETREAT_Q7", "")
 
+# 胸ZEDのハンドアイ変換 "x,y,z,qx,qy,qz,qw"（torso <- REP-103光学フレーム）。
+# 平行移動は 2026-09-15 に CAD（ZEDM-mount-G1 + torso_link_rev_1_0.STL）から読み直した
+# 実測値: torso_link 原点 → **ZED左目の光学中心** が 深さ 111.0mm / 左 25.0mm /
+# 高さ 258.5mm。URDF の torso_link は visual origin が xyz="0 0 0" なので、この STL の
+# 原点がそのまま torso_link 原点＝CAD の基準になる。
+# 旧値 (0.1090, 0.0300, 0.2480) との差は 11.8mm（高さ +10.5 / 左 -5.0 / 深さ +2.0）で、
+# IK の許容残差 3mm の約4倍。旧値は右肩関節の高さ(Z=0.2478)と 0.2mm 一致しており、
+# 肩の高さを流用した概算だったと見られる。
+# 回転は未測定のため据え置き（軸の付け替え120度 + 取付傾き1.2度ぶん）。ここを詰めるなら
+# 1度のズレが 0.45m 先で 7.9mm に効く（docs/sim-setup/cam_to_torso_from_cad.py で換算可）。
 _CAM_TO_TORSO = os.getenv(
     "OKRA_CAM_TO_TORSO",
-    "0.1090,0.0300,0.2480,-0.49475,0.49475,-0.50520,0.50520",
+    "0.1110,0.0250,0.2585,-0.49475,0.49475,-0.50520,0.50520",
 )
 
 # カメラ入力の切替: 既定 "zed"（実機・pyzed必須）/ "sim"（Isaac Sim sim_dds_bridge.py の

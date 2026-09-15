@@ -49,7 +49,8 @@ import PIL.Image
 
 SCENE = Path(__file__).resolve().parent / "g1_okra_scene.xml"
 URDF = Path(__file__).resolve().parents[2] / "dimos/robot/unitree/g1/g1.urdf"
-DEFAULT_CAM = "0.1090,0.0300,0.2480,-0.49475,0.49475,-0.50520,0.50520"
+# 現行の本番既定値（unitree_g1_okra_honban.py の OKRA_CAM_TO_TORSO）と揃える。
+DEFAULT_CAM = "0.1110,0.0250,0.2585,-0.49475,0.49475,-0.50520,0.50520"
 
 # Unitree 公式メッシュ一式を展開した場所（URDF が参照する *.STL が直下にあるもの）。
 MESHDIR_CANDIDATES = (
