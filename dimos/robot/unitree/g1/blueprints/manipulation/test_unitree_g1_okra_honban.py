@@ -26,6 +26,14 @@ import importlib
 
 import pytest
 
+from dimos.hardware.sensors.camera.zed import compat as zed_compat
+
+# honban.py の既定("zed")分岐は camera.py の実物 ZEDCamera を直接importする
+# （pyzed をトップレベルimportするクラス）。SDK 未インストール環境（CI等）では
+# ここで ImportError が起き、importlib.reload() が失敗してモジュールが壊れた
+# 状態のまま残り、後続の sim 系テストまで巻き添えで落ちる（2026-09-15 CIで発覚）。
+# test_zed.py と同じ HAS_ZED_SDK パターンでこのテストだけスキップする。
+
 
 def _reload_honban():  # type: ignore[no-untyped-def]
     import dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_okra_honban as m
@@ -33,6 +41,7 @@ def _reload_honban():  # type: ignore[no-untyped-def]
     return importlib.reload(m)
 
 
+@pytest.mark.skipif(not zed_compat.HAS_ZED_SDK, reason="ZED SDK not installed")
 def test_default_camera_source_is_zed(monkeypatch: pytest.MonkeyPatch) -> None:
     """OKRA_CAMERA_SOURCE 未指定＝既定は実機 ZED（後方互換）。"""
     monkeypatch.delenv("OKRA_CAMERA_SOURCE", raising=False)
