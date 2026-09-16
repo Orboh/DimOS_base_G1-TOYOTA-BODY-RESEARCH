@@ -58,6 +58,7 @@ all_blueprints = {
     "unitree-g1-left-shoulder-pitch-kp160-nudge": "dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_left_shoulder_pitch_kp160_nudge:unitree_g1_left_shoulder_pitch_kp160_nudge",
     "unitree-g1-left-shoulder-pitch-nudge": "dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_left_shoulder_pitch_nudge:unitree_g1_left_shoulder_pitch_nudge",
     "unitree-g1-mid360-fastlio": "dimos.robot.unitree.g1.blueprints.navigation.unitree_g1_mid360_fastlio:unitree_g1_mid360_fastlio",
+    "unitree-g1-model-no-kensho": "dimos.robot.unitree.g1.blueprints.manipulation.unitree_g1_model_no_kensho:unitree_g1_model_no_kensho",
     "unitree-g1-nav-dual-cam": "dimos.robot.unitree.g1.blueprints.navigation.unitree_g1_nav_dual_cam:unitree_g1_nav_dual_cam",
     "unitree-g1-nav-isaac": "dimos.robot.unitree.g1.blueprints.navigation.unitree_g1_nav_isaac:unitree_g1_nav_isaac",
     "unitree-g1-nav-laptop": "dimos.robot.unitree.g1.blueprints.navigation.unitree_g1_nav_laptop:unitree_g1_nav_laptop",
