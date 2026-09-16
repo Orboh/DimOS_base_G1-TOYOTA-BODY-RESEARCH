@@ -1113,6 +1113,27 @@
       </geometry>
     </collision>
   </link>
+  <!-- GoPro（+マウント）の質量近似（2026-09-16追加）。このファイルの命名 "550g"
+       は right_dex1_base_link(288.4g)+finger_link_1(130.8g)+finger_link_2(130.8g)
+       = 550.0g ちょうどで、GoProの質量は元々一切含まれていない。実機で手が常に
+       下方向へドリフトする一因として追加する。
+       質量: 250g（2026-09-16、180g実測値から見積もりを更新）。
+       取付位置: Dex1-1hand_UMI/scripts_data_processing/06_generate_dataset_plan.py
+       (mode='dex1') の cam_to_center_height=0.06m を流用した概算値 — GoPro本体の
+       正確な取付トランスフォームは未計測。重力トルクは主に質量×水平距離で
+       決まるため、位置は数cm単位の近似で許容する想定（要再計測での精緻化）。 -->
+  <joint name="right_gopro_joint" type="fixed">
+    <origin xyz="0.02 0 0.06" rpy="0 0 0"/>
+    <parent link="right_dex1_base_link"/>
+    <child link="right_gopro_link"/>
+  </joint>
+  <link name="right_gopro_link">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.25"/>
+      <inertia ixx="7.5e-05" ixy="0" ixz="0" iyy="7.5e-05" iyz="0" izz="7.5e-05"/>
+    </inertial>
+  </link>
   <link name="right_dex1_finger_link_1">
     <inertial>
       <origin xyz="0.073453 -0.011173 0.0086355" rpy="0 0 0"/>
