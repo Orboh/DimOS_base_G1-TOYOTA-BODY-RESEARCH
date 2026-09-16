@@ -54,12 +54,23 @@ Enterトリガー（人間による手動終了）: モデル推論ループは�
 Enterを押すとLCM経由で ``/g1/model_cut_trigger`` へ1回publish）でも終了できる。
 人間が「もう十分近い」と判断した瞬間の姿勢のまま③切断可否→④切断へ進む。
 
-前提条件（honban 版と同じ）:
-  - ZED SDK + pyzed が実行ホストにインストール済み／ZED-M カメラが USB3 で接続済み
+前提条件:
+  - GoProがUSB(Media Mod経由のHDMIキャプチャ)で接続済み・umi_policy_server.py
+    が別プロセス（umi conda環境）で起動済み（oda/umi_diffusion/RUN.md参照）
   - OKRA_YOLO_MODEL・OKRA_YOLO_CONF・OKRA_TARGET は honban 版と同じ既定値
+    （ただし既定の model_grasp_auto_start=True 構成ではYOLO検出自体を使わない）
   - OKRA_MODEL_SERVER_ADDR（既定 "tcp://127.0.0.1:5599"）: UMI形式ZMQ推論サーバー
     のアドレス。モデルごとに別々に起動したサーバーへ向け先を変える。
   - OKRA_MODEL_NAME（既定 "diffusion"）: ログ・音声アナウンス用のラベルのみ
+
+ZED-M・Dex1-1は既定で不要（2026-09-16変更）: model_grasp_auto_start構成では
+YOLO検出（ZED深度）も切断（Dex1グリッパー）も使わずにモデルの接近動作だけを
+検証できるため、既定で両方とも未接続でも起動できるようにしてある。
+  - OKRA_CAMERA_SOURCE（既定 "none"）: "none"=ZEDCameraモジュール自体を
+    起動しない（honban版の既定"zed"とはここが異なる）。実機ZEDを使うなら
+    "zed"、Isaac Simなら"sim"を明示する。
+  - OKRA_USE_GRIPPER（既定 "0"）: "1"にするとG1GripperConnectionを起動し、
+    Dex1-1で③切断可否④切断⑤籠投入まで通しで試せる（要Dex1-1接続）。
 """
 
 from __future__ import annotations
@@ -176,9 +187,14 @@ _MODEL_TRACE_PATH = os.getenv("UMI_TRACE_PATH", "auto")
 # （Enterトリガー）を含むため、収束オンリーの構成よりはるかに長めに取る。
 _MODEL_GRASP_WAIT_S = float(os.getenv("OKRA_MODEL_GRASP_WAIT_S", "300.0"))
 
-# カメラ入力の切替（honban 版と同じ）。
-_CAMERA_SOURCE = os.getenv("OKRA_CAMERA_SOURCE", "zed").strip().lower()
-if _CAMERA_SOURCE == "sim":
+# カメラ入力の切替。honban版の"zed"/"sim"に加え"none"を追加（2026-09-16）:
+# model_grasp_auto_start構成ではYOLO検出(ZED深度)を一切使わないため、ZED-Mを
+# 物理接続しなくても検証できるようにする。ZEDCamera自体をモジュールとして
+# 起動しない(=繋がっていなくても ModuleCoordinator.build() がクラッシュしない)。
+_CAMERA_SOURCE = os.getenv("OKRA_CAMERA_SOURCE", "none").strip().lower()
+if _CAMERA_SOURCE == "none":
+    _camera_module = None
+elif _CAMERA_SOURCE == "sim":
     from dimos.simulation.engines.isaac_zmq_camera import IsaacZmqDepthCamera
 
     _camera_module = IsaacZmqDepthCamera.blueprint(
@@ -191,11 +207,22 @@ else:
 
     _camera_module = ZEDCamera.blueprint(depth_mode=os.getenv("ZED_DEPTH_MODE", "NEURAL"))
 
-_MODULES = [
-    _camera_module,
+# Dex1-1グリッパーの要否。既定OFF(2026-09-16変更): model_grasp_auto_start構成は
+# ①切断可否③④⑤も試すなら要るが、まずは②モデル推論(接近動作)だけを検証したい
+# 場合、Dex1を物理接続しなくてもよいようにする。G1GripperConnection自体を
+# モジュールとして起動しない(=繋がっていなくてもクラッシュしない)。
+# 切断/籠投入まで通しで試す場合は OKRA_USE_GRIPPER=1 にすること
+# （gripper_target/right_gripper_stateの購読・publish先が無いだけで、
+# HarvestModule自体はグリッパー未接続のまま続行できる）。
+_USE_GRIPPER = os.getenv("OKRA_USE_GRIPPER", "0").strip() == "1"
+
+_MODULES: list = []
+if _camera_module is not None:
+    _MODULES.append(_camera_module)
+_MODULES.append(
     HarvestModule.blueprint(
         use_dummy=False,
-        use_zed_depth=True,
+        use_zed_depth=(_camera_module is not None),
         use_g1_speaker=True,
         network_interface=_NIC,
         vlm_model=os.getenv("OKRA_VLM_MODEL", ""),
@@ -227,7 +254,9 @@ _MODULES = [
         voice_lead_s=_VOICE_LEAD_S,
         advance_step=_ADVANCE_STEP,
         max_empty_advances=_MAX_EMPTY_ADVANCES,
-    ),
+    )
+)
+_MODULES.append(
     G1ArmSdkConnection.blueprint(
         network_interface=_NIC,
         arm_velocity_limit=_ARM_VEL_LIMIT,
@@ -242,15 +271,20 @@ _MODULES = [
         stiff_gravity_ramp_s=_GRAVITY_RAMP_S,
         urdf_path=_GRAVITY_URDF,
         log_track_err_every_n=int(os.getenv("OKRA_ARM_LOG_EVERY_N", "2500")),
-    ),
-    G1GripperConnection.blueprint(
-        network_interface=_NIC,
-        dex1_topic_prefix=_DEX1_PREFIX,
-        kp=_GRIP_KP,
-        kd=_GRIP_KD,
-    ),
-    # ②のモデル推論本体。HarvestModule(ModelGraspAdapter)からreach_doneで開始を
-    # 通知され、収束またはcut_trigger（人間のEnter）でadjust_doneを返す。
+    )
+)
+if _USE_GRIPPER:
+    _MODULES.append(
+        G1GripperConnection.blueprint(
+            network_interface=_NIC,
+            dex1_topic_prefix=_DEX1_PREFIX,
+            kp=_GRIP_KP,
+            kd=_GRIP_KD,
+        )
+    )
+# ②のモデル推論本体。HarvestModule(ModelGraspAdapter)からreach_doneで開始を
+# 通知され、収束またはcut_trigger（人間のEnter）でadjust_doneを返す。
+_MODULES.append(
     UmiDiffusionBridge.blueprint(
         server_addr=_MODEL_SERVER_ADDR,
         control_hz=_MODEL_CONTROL_HZ,
@@ -270,8 +304,8 @@ _MODULES = [
         log_joints=_MODEL_LOG_JOINTS,
         log_chunk_max=_MODEL_LOG_CHUNK_MAX,
         trace_path=_MODEL_TRACE_PATH,
-    ),
-]
+    )
+)
 if _USE_BASE_MOVE:
     if _MOVE_SOURCE == "sim":
         from dimos.simulation.engines.sim_cmd_vel_bridge import SimCmdVelBridge
@@ -285,7 +319,7 @@ if _USE_BASE_MOVE:
         _MODULES.append(G1HighLevelDdsSdk.blueprint(network_interface=_NIC))
 
 _approach_note = (
-    f"camera_source={_CAMERA_SOURCE} yolo_conf={_YOLO_CONF} "
+    f"camera_source={_CAMERA_SOURCE} use_gripper={_USE_GRIPPER} yolo_conf={_YOLO_CONF} "
     f"model_auto_start={_MODEL_AUTO_START} "
     f"model={_MODEL_NAME}@{_MODEL_SERVER_ADDR} ee_frame={_MODEL_EE_FRAME} "
     f"control_hz={_MODEL_CONTROL_HZ} converge={_MODEL_CONVERGE_EPS_M}m "
