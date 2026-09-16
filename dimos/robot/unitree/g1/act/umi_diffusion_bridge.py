@@ -291,6 +291,11 @@ class UmiDiffusionBridge(Module):
     motor_states: In[JointState]  # full 29-DOF measured state (FK + IK warm-start)
     arm_target: Out[JointState]  # 14 arm joint targets (left 7 held, right 7 from IK)
     adjust_done: Out[Bool]  # fired once adjustment converges -> user's gripper program
+    # 人間が「今の位置でいい」と判断した合図（model_no_kensho, 2026-09-16 追加）。
+    # 収束(converge)を待たず、このtickでループを打ち切ってadjust_doneを出す —
+    # モデルの座標変換ミスなど収束しない/暴走する構成でも、その場で安全に止めて
+    # 切断シーケンスへ引き継げるようにするための手動オーバーライド。
+    cut_trigger: In[Bool]
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -318,6 +323,11 @@ class UmiDiffusionBridge(Module):
         self._client = _PolicyClient(self.config.server_addr, self.config.predict_timeout_ms)
         self._busy = threading.Event()  # an adjustment episode is running
         self._stop_event = threading.Event()
+        # cut_trigger 用。_stop_event（モジュール全体のシャットダウン）とは別に持つ:
+        # こちらは「このエピソードだけ打ち切ってadjust_doneを出す」ためのもので、
+        # stop()（モジュール終了）とは意味が異なる。_on_reach_doneで毎エピソード
+        # clearする。
+        self._manual_trigger_event = threading.Event()
         self._worker: Thread | None = None
         self._count = 0
         # Resolved in start(): __init__ runs before the per-run log dir is published.
@@ -333,6 +343,7 @@ class UmiDiffusionBridge(Module):
         super().start()
         self.register_disposable(Disposable(self.reach_done.subscribe(self._on_reach_done)))
         self.register_disposable(Disposable(self.motor_states.subscribe(self._on_state)))
+        self.register_disposable(Disposable(self.cut_trigger.subscribe(self._on_cut_trigger)))
         self._trace_path = self._resolve_trace_path()
         c = self.config
         logger.warning(
@@ -372,6 +383,12 @@ class UmiDiffusionBridge(Module):
         with self._lock:
             self._latest_state = state
             self._state_recv_t = time.time()
+
+    def _on_cut_trigger(self, msg: Bool) -> None:
+        """人間が「今の位置でいい」と合図した（cut_trigger）。エピソード実行中の
+        場合のみ意味を持つ（次tickでループを打ち切りadjust_doneを出す）。"""
+        if getattr(msg, "data", False):
+            self._manual_trigger_event.set()
 
     def _read_arm_q(self) -> tuple[np.ndarray, np.ndarray] | None:
         """Return (q_left7, q_right7) from the latest fresh motor_states, or None."""
@@ -502,6 +519,7 @@ class UmiDiffusionBridge(Module):
         if self._busy.is_set():
             logger.info("UmiDiffusionBridge: reach_done while an adjustment is running; ignoring.")
             return
+        self._manual_trigger_event.clear()  # 前回エピソードの合図を持ち越さない
         self._busy.set()
         self._worker = Thread(target=self._run_adjustment, daemon=True, name="umi-diffusion-adjust")
         self._worker.start()
@@ -574,6 +592,7 @@ class UmiDiffusionBridge(Module):
                 "end:" + reason,
                 {
                     "converged": "微調整が完了しました",
+                    "manual_trigger": "合図を受け取りました。今の位置で切断します",
                     "max_duration": "時間切れで微調整を終了します",
                     "server_misses": "推論サーバーが応答しません。中止します",
                     "camera_dead": "手首カメラの映像が使えません。中止します",
@@ -657,7 +676,7 @@ class UmiDiffusionBridge(Module):
         next_tick = time.perf_counter()
 
         try:
-            while not self._stop_event.is_set():
+            while not self._stop_event.is_set() and not self._manual_trigger_event.is_set():
                 # Safety ceiling FIRST, once per iteration: every other exit below sits
                 # behind a `continue`, so a waypoint that every tick fails a gate (or a
                 # workspace box that rejects the whole chunk) used to spin here forever
@@ -966,6 +985,16 @@ class UmiDiffusionBridge(Module):
         except Exception:
             _end("exception")  # summary first, then _run_adjustment logs the traceback
             raise
+        if self._manual_trigger_event.is_set() and not self._stop_event.is_set():
+            # 人間が「今の位置でいい」と合図した（cut_trigger）。収束を待たず、
+            # 現在の実測位置のまま切断シーケンスへ引き継ぐ（adjust_done）。
+            logger.info(
+                f"UmiDiffusionBridge[{ep}]: manual cut trigger received; firing adjust_done "
+                "(current pose handed off as-is)."
+            )
+            self.adjust_done.publish(Bool(data=True))
+            _end("manual_trigger")
+            return
         _end("stopped")
 
     def _sleep_tick(self, period: float, next_tick: float) -> None:

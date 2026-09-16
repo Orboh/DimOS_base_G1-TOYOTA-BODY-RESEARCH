@@ -49,6 +49,7 @@ from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.JointState import JointState
+from dimos.msgs.std_msgs.Bool import Bool
 from dimos.robot.unitree.g1.harvest.announce import CallableAnnouncer
 from dimos.robot.unitree.g1.harvest.blackboard import HarvestConfig, initial_state
 from dimos.robot.unitree.g1.harvest.dummy_skills import DummyHarvestSkills
@@ -127,6 +128,17 @@ class HarvestModuleConfig(ModuleConfig):
     # IK 到達後そのまま切断可否チェック→グリッパを閉じる（ACT無し、スクリプト式）。
     # False（既定）なら use_act_grasp のみで従来どおり ACT 単独（後方互換）。
     use_ik_grasp_sequence: bool = False
+    # LIVE + use_ik_grasp_sequence: use_act_grasp の代わりに、①IK粗アプローチを
+    # 丸ごとスキップし、教示済みの準備姿勢から直接 Diffusion/ACT/Flow matching
+    # （UMI形式の推論サーバー、UmiDiffusionBridge経由）に委ねる構成
+    # （model_no_kensho, 2026-09-16 追加）。use_act_grasp と同時に True にしない
+    # こと（use_act_grasp が優先され、こちらは無視される）。
+    use_model_grasp: bool = False
+    # LIVE + use_model_grasp: モデル推論ループの開始(reach_done)後、収束または
+    # Enterトリガー(cut_trigger, 人間が「今の位置でいい」と合図)による終了
+    # (adjust_done) を待つ最大秒数。人間の判断待ちなので長めに取る。
+    model_grasp_wait_s: float = 300.0
+    model_grasp_note: str = "model"
     # LIVE + use_ik_grasp_sequence: 最初の把持ループ開始前にこの秒数だけ待つ。
     # 0（既定）= 待たない（後方互換）。
     # ⚠️ 2026-09-08 実機LIVEで判明: クリック駆動版(IkReachBridge)は人間が実際にクリック
@@ -305,6 +317,12 @@ class HarvestModule(Module):
     right_gripper_state: In[JointState]
     arm_target: Out[JointState]
     gripper_target: Out[JointState]
+    # モデル把持（LIVE + use_model_grasp）-> UmiDiffusionBridge（またはUMI形式互換
+    # の推論サーバーに繋がるブリッジ）との連携。①IKなしで開始する合図(reach_done)
+    # を送り、収束またはEnterトリガーでの手動終了(adjust_done)を待つ
+    # （model_grasp_adapter.py 参照、2026-09-16 model_no_kensho 用に追加）。
+    reach_done: Out[Bool]
+    adjust_done: In[Bool]
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -631,6 +649,24 @@ class HarvestModule(Module):
                         max_steps=self.config.grasp_max_steps,
                         right_arm_only_7d=self.config.act_right_arm_only_7d,
                     )
+                elif self.config.use_model_grasp:
+                    # ①IKなしで、教示済みの準備姿勢から直接モデル(UMI形式の
+                    # Diffusion/ACT/Flow matching)に委ねる（model_no_kensho用）。
+                    # 実体（UmiDiffusionBridge等）は別モジュールなので、
+                    # reach_done/adjust_done ストリーム越しに同期させる
+                    # （model_grasp_adapter.py 参照）。
+                    from dimos.robot.unitree.g1.harvest.model_grasp_adapter import (
+                        ModelGraspAdapter,
+                    )
+
+                    act_module = ModelGraspAdapter(
+                        fire_reach_done=lambda: self.reach_done.publish(Bool(data=True)),
+                        wait_timeout_s=self.config.model_grasp_wait_s,
+                        model_name=self.config.model_grasp_note,
+                    )
+                    self.register_disposable(
+                        Disposable(self.adjust_done.subscribe(act_module.on_adjust_done))
+                    )
 
                 ik_skill = IkApproachSkill(
                     standoff_m=self.config.ik_approach_standoff_m,
@@ -825,8 +861,10 @@ class HarvestModule(Module):
                     )
 
                 # 切断可否ゲート: verify_fn（moondream）を流用。未配線なら None=常許可。
+                # use_model_grasp: ①IKを丸ごとスキップ（ik_solve=None）— 教示済みの
+                # 準備姿勢から直接②のモデル推論(act_module=ModelGraspAdapter)に委ねる。
                 grasp_override = GraspSequence(
-                    ik_solve=_ik_solve,
+                    ik_solve=(None if self.config.use_model_grasp else _ik_solve),
                     publish_arm=self.arm_target.publish,
                     act_module=act_module,
                     cut_ok_fn=verify_fn,
@@ -839,9 +877,12 @@ class HarvestModule(Module):
                     post_reach_verify_fn=_verify_reach,
                     announcer=voice,
                 )
-                grasp_note = (
-                    "grasp=IK->ACT->cut(seq)" if act_module is not None else "grasp=IK->cut(no-ACT)"
-                )
+                if self.config.use_model_grasp:
+                    grasp_note = f"grasp=model({self.config.model_grasp_note})->cut(no-IK)"
+                elif act_module is not None:
+                    grasp_note = "grasp=IK->ACT->cut(seq)"
+                else:
+                    grasp_note = "grasp=IK->cut(no-ACT)"
                 if place_basket_fn is not None:
                     grasp_note += "->basket(F-07)"
                 if post_grasp_verify_fn is None:

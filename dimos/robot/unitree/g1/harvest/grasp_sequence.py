@@ -72,10 +72,14 @@ class GraspSequence:
     Args:
         ik_solve: ``() -> IkApproachResult | list[IkApproachResult] | None``。torso
             重心3Dを IK で解き、14関節目標と待機時間を返す同期スキル呼び出し（呼び出し側が
-            現在の対象オクラに束ねて渡す）。None なら「届かない/解けない」→ エピソード失敗。
-            単一の結果と、複数waypoint（``IkApproachSkill.solve_legs`` の
-            LIFT→TRANSIT→DESCEND 段階的アプローチ）のリストの両方を受け付ける — リストなら
-            各レグを順に publish_arm→待機し、レグ間も ``stop()`` で中断できる。
+            現在の対象オクラに束ねて渡す）。単一の結果と、複数waypoint
+            （``IkApproachSkill.solve_legs`` の LIFT→TRANSIT→DESCEND 段階的アプローチ）の
+            リストの両方を受け付ける — リストなら各レグを順に publish_arm→待機し、
+            レグ間も ``stop()`` で中断できる。呼び出し結果が None なら「届かない/解けない」
+            → エピソード失敗。
+            ``ik_solve`` 自体を None にすると①IK区間を丸ごとスキップする（2026-09-16
+            model_no_kensho 用に追加 — IKで対象へ寄せず、教示済みの準備姿勢から直接
+            ②のモデル推論に委ねる構成のため）。
         publish_arm: 14関節 JointState を arm_target へ publish。
         act_module: ``run_episode()`` を持つ ACT（``ActGraspModule`` 互換）。閉じずに
             切断点まで寄せる（``grasp_duration`` ~4s 相当）。None ならスキップ（IK のみ）。
@@ -111,7 +115,7 @@ class GraspSequence:
     def __init__(
         self,
         *,
-        ik_solve: Callable[[Okra], Any | None],
+        ik_solve: Callable[[Okra], Any | None] | None,
         publish_arm: Callable[[Any], None] | None = None,
         act_module: Any = None,
         cut_ok_fn: Callable[[], bool] | None = None,
@@ -176,47 +180,52 @@ class GraspSequence:
         okra_id = getattr(okra, "id", "?")
 
         # ① IK 粗アプローチ ----------------------------------------------------
-        if self._stop.is_set():
-            return False
-        sol = self._ik_solve(okra) if okra is not None else None
-        if sol is None:
-            logger.info(f"[grasp-seq] {okra_id}: IK unreachable/unsolved -> episode fail")
-            # select() の grasping()（「オクラを収穫します」）で予告した後、実際の IK 解
-            # が失敗しても従来ここは無音だった（2026-09-08 実機LIVEで、手が動かず何も
-            # 発話されない現象として発覚）。何が起きたか操作者に必ず伝える。
-            self._announcer.say(announce.reach_fail())
-            self.episodes.append((okra_id, "ik", False))
-            return False
-        # 単一結果 / 複数waypoint（LIFT→TRANSIT→DESCEND）のリスト、両方を受け付ける。
-        legs = sol if isinstance(sol, list) else [sol]
-        for i, leg in enumerate(legs):
+        # ik_solve=None は①を丸ごとスキップする構成（model_no_kensho: 教示済みの
+        # 準備姿勢から直接②のモデル推論に委ねる。ik_solve docstring参照）。
+        if self._ik_solve is not None:
             if self._stop.is_set():
                 return False
-            arm14, joint_names, wait_s = leg.arm14, leg.joint_names, leg.wait_s
-            if self._publish_arm is not None:
-                from dimos.msgs.sensor_msgs.JointState import JointState
-
-                self._publish_arm(
-                    JointState(
-                        name=list(joint_names),
-                        position=[float(x) for x in arm14],
-                        velocity=[0.0] * len(arm14),
-                        effort=[0.0] * len(arm14),
-                    )
-                )
-            logger.info(
-                f"[grasp-seq] {okra_id}: IK leg {i + 1}/{len(legs)} -> "
-                f"waiting {wait_s:.2f}s for arm to settle"
-            )
-            # open-loop 整定待ち（中断可能、レグ間でも中断チェックが効く）
-            if self._stop.wait(wait_s):
+            sol = self._ik_solve(okra) if okra is not None else None
+            if sol is None:
+                logger.info(f"[grasp-seq] {okra_id}: IK unreachable/unsolved -> episode fail")
+                # select() の grasping()（「オクラを収穫します」）で予告した後、実際の IK 解
+                # が失敗しても従来ここは無音だった（2026-09-08 実機LIVEで、手が動かず何も
+                # 発話されない現象として発覚）。何が起きたか操作者に必ず伝える。
+                self._announcer.say(announce.reach_fail())
+                self.episodes.append((okra_id, "ik", False))
                 return False
+            # 単一結果 / 複数waypoint（LIFT→TRANSIT→DESCEND）のリスト、両方を受け付ける。
+            legs = sol if isinstance(sol, list) else [sol]
+            for i, leg in enumerate(legs):
+                if self._stop.is_set():
+                    return False
+                arm14, joint_names, wait_s = leg.arm14, leg.joint_names, leg.wait_s
+                if self._publish_arm is not None:
+                    from dimos.msgs.sensor_msgs.JointState import JointState
 
-        # 到達確認（任意）: 実測角度からFKを計算し目標座標との残差をログするなど。
-        # IK到達そのものは検証しない（何もしなくてもエピソードは続行する） —
-        # あくまで観測・原因分析用のフック。
-        if self._post_reach_verify_fn is not None:
-            self._post_reach_verify_fn()
+                    self._publish_arm(
+                        JointState(
+                            name=list(joint_names),
+                            position=[float(x) for x in arm14],
+                            velocity=[0.0] * len(arm14),
+                            effort=[0.0] * len(arm14),
+                        )
+                    )
+                logger.info(
+                    f"[grasp-seq] {okra_id}: IK leg {i + 1}/{len(legs)} -> "
+                    f"waiting {wait_s:.2f}s for arm to settle"
+                )
+                # open-loop 整定待ち（中断可能、レグ間でも中断チェックが効く）
+                if self._stop.wait(wait_s):
+                    return False
+
+            # 到達確認（任意）: 実測角度からFKを計算し目標座標との残差をログするなど。
+            # IK到達そのものは検証しない（何もしなくてもエピソードは続行する） —
+            # あくまで観測・原因分析用のフック。
+            if self._post_reach_verify_fn is not None:
+                self._post_reach_verify_fn()
+        else:
+            logger.info(f"[grasp-seq] {okra_id}: ①IKスキップ（ik_solve=None）-> ②へ直接進む")
 
         # ② ACT 微調整（切断点まで、閉じない） --------------------------------
         if self._act is not None:

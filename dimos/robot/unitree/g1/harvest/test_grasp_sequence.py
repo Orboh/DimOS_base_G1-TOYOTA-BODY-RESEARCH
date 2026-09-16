@@ -137,6 +137,50 @@ def test_cut_gate_blocks_cut() -> None:
     assert seq.episodes[-1] == ("okra_2", "cut_gate", False)
 
 
+# ik_solve=None（①IKスキップ、model_no_kensho用、2026-09-16）。
+
+
+def test_ik_solve_none_skips_to_act() -> None:
+    """ik_solve=None -> ①をスキップし arm_pub は0件のまま②(act)から始まる。"""
+    act = _FakeAct()
+    arm_pub: list = []
+    grip_pub: list = []
+    seq = GraspSequence(
+        ik_solve=None,
+        publish_arm=lambda js: arm_pub.append(js),
+        act_module=act,
+        cut_ok_fn=lambda: True,
+        publish_gripper=lambda js: grip_pub.append(js),
+    )
+    ok = seq.run_episode(Okra(id="okra_4"), force=0.3)
+    assert ok is True
+    assert arm_pub == []  # ①IKは一切publishしていない
+    assert act.ran == 1  # ②はそのまま実行された
+    assert grip_pub[0].position[0] == 4.4
+    assert seq.episodes[-1] == ("okra_4", "cut", True)
+
+
+def test_ik_solve_none_still_stoppable_mid_act() -> None:
+    """ik_solve=None でも、②で stop() されれば従来通り中断される。"""
+
+    class _StoppableAct:
+        def run_episode(self, okra=None, force=None) -> bool:
+            return True
+
+        def stop(self) -> None:
+            pass
+
+    grip_pub: list = []
+    seq = GraspSequence(
+        ik_solve=None,
+        act_module=_StoppableAct(),
+        publish_gripper=lambda js: grip_pub.append(js),
+    )
+    seq.stop()  # エピソード開始前に停止要求
+    assert seq.run_episode(Okra(id="okra_5")) is False
+    assert grip_pub == []
+
+
 def test_blade_safety_clamp() -> None:
     """A cut command above the blade limit is clamped to 5.2 rad."""
     grip_pub: list = []
