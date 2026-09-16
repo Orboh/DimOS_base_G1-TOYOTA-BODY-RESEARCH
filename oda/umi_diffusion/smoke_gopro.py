@@ -17,17 +17,26 @@
 beside a real training frame so you can eyeball the visual-domain match.
 
 Ground truth (extracted by inspect_dataset_frames.py from the training replay buffer):
-the policy trained on RAW GoPro FISHEYE images (barrel distortion, NOT rectified),
+the okra ckpt trained on RAW GoPro FISHEYE images (barrel distortion, NOT rectified),
 resized to 224x224 RGB, with draw_predefined_mask(mirror=False, gripper=True, finger=False)
-painting ~21% of the frame black. So the DEFAULTS here (no --fisheye, no --no-mirror)
-already match training — only add flags if the overlay says otherwise.
+painting ~21% of the frame black. So the DEFAULTS here (no --fisheye, no --no-mirror,
+--gripper-mask) matched THAT ckpt's training — only add flags if the overlay says
+otherwise.
+
+NOT universal across ckpts: the fiducial-cube ckpts (RoboHarvest-collected) were
+verified via inspect_dataset_frames.py to have black-pixels=0.0% — NO mask drawn at
+all. Pass --no-gripper-mask when comparing against one of those training frames, or
+this script paints a mask the ckpt never saw during training.
 
 Run (umi env):
   conda run -n umi python oda/umi_diffusion/smoke_gopro.py      # --cam-device defaults to the by-id Elgato path
+  conda run -n umi python oda/umi_diffusion/smoke_gopro.py --no-gripper-mask \
+    --train-frame oda/umi_diffusion/train_frame_00000.png   # fiducial-cube ckpts
 Writes gopro_vs_train.png = [ live preprocessed | training frame ].  Compare:
   * fisheye curvature (straight office/plant edges should bow the SAME way),
-  * the black mask region should sit over the ACTUAL gripper in the live frame
-    (if not, the GoPro mount differs from data-collection -> visual-domain shift),
+  * the black mask region (if --gripper-mask) should sit over the ACTUAL gripper in
+    the live frame (if not, the GoPro mount differs from data-collection -> visual-
+    domain shift),
   * overall brightness / colour / RGB-vs-BGR (skin/plant should look natural).
 """
 
@@ -50,16 +59,21 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 GOPRO_DEV = "/dev/v4l/by-id/usb-Elgato_Elgato_HD60_X_A00XB3442072PE-video-index0"
 
 
-def preprocess(bgr, fisheye_converter, no_mirror, out_res=(224, 224)):
-    """Identical to umi_policy_server.build_preproc / umi_env.py tf(). Returns RGB uint8."""
+def preprocess(bgr, fisheye_converter, no_mirror, out_res=(224, 224), gripper_mask=True):
+    """Identical to umi_policy_server.build_preproc / umi_env.py tf(). Returns RGB uint8.
+
+    gripper_mask=False for ckpts whose training data has NO mask painted (verified via
+    inspect_dataset_frames.py black-pixels%) — e.g. the fiducial-cube (RoboHarvest) ckpts.
+    """
     if fisheye_converter is None:
         tf = get_image_transform(
             input_res=(bgr.shape[1], bgr.shape[0]), output_res=out_res, bgr_to_rgb=True
         )
         img = np.ascontiguousarray(tf(bgr))
-        img = draw_predefined_mask(
-            img, color=(0, 0, 0), mirror=no_mirror, gripper=True, finger=False, use_aa=True
-        )
+        if gripper_mask:
+            img = draw_predefined_mask(
+                img, color=(0, 0, 0), mirror=no_mirror, gripper=True, finger=False, use_aa=True
+            )
     else:
         img = fisheye_converter.forward(bgr)[..., ::-1]
     return img.astype(np.uint8)
@@ -83,9 +97,24 @@ def preprocess(bgr, fisheye_converter, no_mirror, out_res=(224, 224)):
 )
 @click.option("--sim-fov", default=None, type=float)
 @click.option("--no-mirror", is_flag=True, default=False)
+@click.option(
+    "--gripper-mask/--no-gripper-mask",
+    default=True,
+    help="draw the UMI gripper mask (stock UMI datasets). fiducial-cube/RoboHarvest ckpts "
+    "were trained WITHOUT it (verified black-pixels=0.0%) -> pass --no-gripper-mask",
+)
 @click.option("--out", default=os.path.join(HERE, "gopro_vs_train.png"))
 def main(
-    cam_device, cap_w, cap_h, train_frame, fisheye, camera_intrinsics, sim_fov, no_mirror, out
+    cam_device,
+    cap_w,
+    cap_h,
+    train_frame,
+    fisheye,
+    camera_intrinsics,
+    sim_fov,
+    no_mirror,
+    gripper_mask,
+    out,
 ):
     fisheye_converter = None
     if fisheye:
@@ -113,9 +142,10 @@ def main(
         sys.exit(1)
     print(f"captured raw frame: {bgr.shape} from {cam_device}")
 
-    live_rgb = preprocess(bgr, fisheye_converter, no_mirror)  # (224,224,3) RGB
+    live_rgb = preprocess(bgr, fisheye_converter, no_mirror, gripper_mask=gripper_mask)  # (224,224,3) RGB
     black = (live_rgb.sum(-1) == 0).mean() * 100
-    print(f"live preprocessed: 224x224 RGB, black-pixels={black:.1f}% (training frames were ~21%)")
+    expect = "~21%" if gripper_mask else "~0% (--no-gripper-mask)"
+    print(f"live preprocessed: 224x224 RGB, black-pixels={black:.1f}% (training frames were {expect})")
 
     train_bgr = cv2.imread(train_frame)  # saved BGR by inspect_dataset_frames
     if train_bgr is None:

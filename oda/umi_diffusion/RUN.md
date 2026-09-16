@@ -101,6 +101,19 @@ conda run -n umi --no-capture-output python oda/umi_diffusion/umi_policy_server.
 #     --cam-device / --ckpt はいずれも既定値でよい（既定 = by-id Elgatoパス、~/umi/epoch=0110-*.ckpt）
 conda run -n umi --no-capture-output python oda/umi_diffusion/umi_policy_server.py
 
+# ⚠️ Fiducial Cube系モデル（diffusion-policy-dex1-1-fiducial-cube-20260902 /
+# flow-matching-dex1-1-fiducial-cube-20260902 / act-dex1-1-fiducial-cube-20260902。
+# いずれも同じ Kota0612/dex1-1-umi-fiducial-cube-20260902 由来）は上のデフォルトckpt
+# とは別物で、**必ず --no-gripper-mask を付けること**（2026-09-16判明）。
+# 根拠: これらのデータ生成に使う Dex1-1hand_UMI/scripts_data_processing/
+# 07_generate_replay_buffer.py がimportする draw_predefined_mask
+# （data_processing/utils/cv_utils.py 版）は関数冒頭が `return img` のスタブで、
+# 以降のマスク描画コードは到達しない ＝ 学習フレームはマスク無しの生映像。
+# build_preproc の既定 gripper_mask=True のまま推論すると、学習時に無かった
+# 黒塗り（下22%）を推論時だけ加えることになり、観測分布が学習と食い違う。
+conda run -n umi --no-capture-output python oda/umi_diffusion/umi_policy_server.py \
+  --ckpt <fiducial-cube系ckptのパス> --no-gripper-mask
+
 # (2) DimOSアプリ（別ターミナル, リポジトリroot = DimOS_oda/ で実行）
 #     `dimos` は .venv 内の実行ファイル。素の `dimos` は conda (base) の PATH に無く
 #     `dimos: command not found` になるので、.venv/bin/dimos を直接叩く（activate不要:
