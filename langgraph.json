@@ -1,0 +1,6 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "harvest": "./dimos/robot/unitree/g1/harvest/studio_graph.py:graph"
+  }
+}

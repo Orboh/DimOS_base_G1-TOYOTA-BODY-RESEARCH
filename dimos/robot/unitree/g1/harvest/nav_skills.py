@@ -119,7 +119,7 @@ def make_search_forward(
     move_cmd: Callable[[float, float, float, float], Any],
     *,
     step_m: float = 0.30,
-    speed: float = 0.5,
+    speed: float = 0.8,  # real_skills.py の _BASE_SPEED と揃える
     max_advances: int = 3,
 ) -> Callable[[], bool]:
     """Build a ``go_to_next_station()`` that WALKS FORWARD to keep searching.

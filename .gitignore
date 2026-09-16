@@ -121,9 +121,18 @@ oda/ZED_M_Depth_check/**/*.pt
 
 # ik_up.sh が起動のたびに生成する一時設定(リスト値は -o で渡せないため)
 oda/ik_reach_cfg.json
+# zed_up.sh / head_up.sh が起動のたびに生成する一時設定と実行ログの置き場
+oda/zed_run_out/
+oda/head_run_out/
 
 # --- Runtime debug captures (never commit these; see chore/prune-non-okra) ---
 seat_finder_debug/
 *_debug/
 *_detected.jpg
 *_input.jpg
+
+# --- LangGraph Studio (`langgraph dev`) local persistence cache ---
+.langgraph_api/
+
+# --- UMI diffusion policy checkpoints (multi-GB .ckpt; never commit) ---
+/Diffusion model/

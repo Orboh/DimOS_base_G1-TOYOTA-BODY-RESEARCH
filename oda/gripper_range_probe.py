@@ -13,24 +13,32 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""カッター装着グリッパの開閉範囲キャリブレーション補助ツール。
+"""Dex1 グリッパの開閉範囲キャリブレーション補助ツール（DDS直叩き版）。
 
 目的: q(モーター指令値)と実際の刃の開き幅[mm]の対応表を作り、
   - 適切な開き位置(茎が入る+余裕、開きすぎない)
-  - 切断位置(閉じ切り)
+  - 切断位置(閉じ切り、あるいは意図的に隙間を残す位置)
 を決める。対話式: 指定した q へ動かす → 実測した刃の開きをメモ → 次へ。
 
-前提:
-  - アプリ(unitree-g1-okra-ik-only-grasp-zed 等、G1GripperConnection入り)が起動中
-    であること(このツールは正規の /g1/gripper_target 経由で動かすため)。
-  - G1電源投入は「刃を完全に閉じた状態で」行っておくこと(ゼロ点が全閉になる)。
-  - 刃の間に指を入れない。測るときはノギス/定規を刃に軽く当てる。
+2026-09-15 全面改修: 旧版は G1GripperConnection（アプリ経由の /g1/gripper_target）
+前提だったため、キャリブレーションのためだけにアプリ全体を起動する必要があり
+煩雑だった。oda/gripper_move_probe.py / gripper_close_probe.py と同じ、
+unitree_sdk2py を直接使う単体スクリプトに書き換えた（他のアプリを起動せず
+単独で安全に使える）。対話中も位置を保持できるよう、バックグラウンドスレッドで
+継続的に目標qをpublishし続ける。
 
-Run:
-    cd ~/Toyota-auto-body-PoC/DimOS_oda
-    CYCLONEDDS_HOME=~/cyclonedds-noshm LD_LIBRARY_PATH=~/cyclonedds-noshm/lib \
-    LCM_DEFAULT_URL='udpm://239.255.76.67:7667?ttl=1' \
-    .venv/bin/python oda/gripper_range_probe.py
+前提:
+  - G1電源投入は「刃を完全に閉じた状態で」行っておくこと(ゼロ点が全閉になる。
+    Orboh/dex1_1_service の README §3 Calibration 参照)。
+  - Dex1-1 は q が小さいほど閉じる・大きいほど開く（2026-09-14 実機確認、
+    oda/gripper_move_probe.py / gripper_close_probe.py 参照）。
+  - 刃の間に指を入れない。測るときはノギス/定規を刃に軽く当てる。
+  - honban等のアプリは起動していない状態で単独実行すること（同時起動すると
+    DDS上でコマンドが競合する）。
+
+実行(あなたのターミナルで。念のため e-stop を手元に):
+  ROBOT_INTERFACE=<有線NIC名> OKRA_DEX1_PREFIX=rt/dex1/right \
+  .venv/bin/python oda/gripper_range_probe.py
 
 操作: q値を入力してEnter(例 0.5 → その位置へ)。実測値を聞かれたらmmで入力
 (スキップは空Enter)。'q' で終了し、対応表を表示+ファイル保存。
@@ -38,17 +46,23 @@ Run:
 
 from __future__ import annotations
 
+import os
 import sys
+import threading
 import time
 
-from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelSubscriber
-from unitree_sdk2py.idl.unitree_go.msg.dds_ import MotorStates_
+from unitree_sdk2py.core.channel import (
+    ChannelFactoryInitialize,
+    ChannelPublisher,
+    ChannelSubscriber,
+)
+from unitree_sdk2py.idl.default import unitree_go_msg_dds__MotorCmd_
+from unitree_sdk2py.idl.unitree_go.msg.dds_ import MotorCmds_, MotorStates_
 
-from dimos.core.transport import LCMTransport
-from dimos.msgs.sensor_msgs.JointState import JointState
-
-NIC = "enp46s0"
-DEX1_STATE_TOPIC = "rt/dex1/left/state"  # この機体の配線都合(右手だが左サービス)
+NIC = os.getenv("ROBOT_INTERFACE", "enp46s0")
+PREFIX = os.getenv("OKRA_DEX1_PREFIX", "rt/dex1/right")
+KP = float(os.getenv("GRIPPER_PROBE_KP", "20.0"))  # gripper_move_probe.py と同じ、農場実績値
+SETTLE_S = 1.5  # 目標変更後、実測を読むまでの整定待ち [s]
 
 
 def main() -> None:
@@ -59,52 +73,71 @@ def main() -> None:
         s = m.states[0]
         latest.update(q=s.q, tau=s.tau_est, mode=s.mode)
 
-    sub = ChannelSubscriber(DEX1_STATE_TOPIC, MotorStates_)
+    sub = ChannelSubscriber(f"{PREFIX}/state", MotorStates_)
     sub.Init(cb, 10)
-    time.sleep(1.0)
+    t0 = time.time()
+    while "q" not in latest and time.time() - t0 < 5:
+        time.sleep(0.05)
     if "q" not in latest:
-        print(f"ERROR: {DEX1_STATE_TOPIC} を受信できない(G1電源/ハンド接続を確認)")
-        sys.exit(1)
-    if latest.get("mode") == 0:
-        print("ERROR: グリッパのモーターが無効状態(mode=0)。")
-        print("  → G1電源OFF → ハンドのコネクタ挿し直し → 刃を閉じて電源ON")
+        print(f"ERROR: {PREFIX}/state を受信できない(G1電源/ハンド接続を確認)")
         sys.exit(1)
 
-    pub = LCMTransport("/g1/gripper_target", JointState)
+    pub = ChannelPublisher(f"{PREFIX}/cmd", MotorCmds_)
+    pub.Init()
+    cmd = MotorCmds_()
+    cmd.cmds = [unitree_go_msg_dds__MotorCmd_()]
+    cmd.cmds[0].dq = 0.0
+    cmd.cmds[0].tau = 0.0
+    cmd.cmds[0].kp = KP
+    cmd.cmds[0].kd = 0.05
+
+    # 対話中も位置を保持するため、目標qを継続的にpublishし続けるスレッドを立てる
+    # （DDS直叩きでは、publishを止めるとモーターが指令を見失う可能性があるため）。
+    current_target = [float(latest["q"])]  # 初期値=現在位置（動かない）
+    stop_event = threading.Event()
+
+    def _publish_loop() -> None:
+        while not stop_event.is_set():
+            cmd.cmds[0].q = float(current_target[0])
+            pub.Write(cmd)
+            time.sleep(0.02)
+
+    pub_thread = threading.Thread(target=_publish_loop, daemon=True)
+    pub_thread.start()
+
     rows: list[tuple[float, float, float, str]] = []
     print(f"開始。現在 q={latest['q']:.3f} tau={latest['tau']:.2f} mode={latest['mode']}")
     print("q値を入力してEnter(例 1.5)。'q'+Enterで終了。")
 
-    while True:
-        try:
-            s = input("\n目標q > ").strip()
-        except (EOFError, KeyboardInterrupt):
-            break
-        if s.lower() == "q":
-            break
-        try:
-            target = float(s)
-        except ValueError:
-            print("  数値か 'q' を入力")
-            continue
-        for _ in range(3):
-            pub.publish(
-                JointState(
-                    name=["g1/right_gripper"],
-                    position=[target],
-                    velocity=[0.0],
-                    effort=[0.0],
-                )
+    try:
+        while True:
+            try:
+                s = input("\n目標q > ").strip()
+            except (EOFError, KeyboardInterrupt):
+                break
+            if s.lower() == "q":
+                break
+            try:
+                target = float(s)
+            except ValueError:
+                print("  数値か 'q' を入力")
+                continue
+            current_target[0] = target
+            time.sleep(SETTLE_S)
+            q, tau = latest["q"], latest["tau"]
+            print(
+                f"  実測 q={q:.3f} tau={tau:.2f}"
+                + ("  ← 突き当たり/噛み合い(目標に届いていない)" if abs(q - target) > 0.15 else "")
             )
-            time.sleep(0.2)
-        time.sleep(1.5)  # 整定待ち
-        q, tau = latest["q"], latest["tau"]
-        print(
-            f"  実測 q={q:.3f} tau={tau:.2f}"
-            + ("  ← 突き当たり/噛み合い(目標に届いていない)" if abs(q - target) > 0.15 else "")
-        )
-        gap = input("  刃の開き実測[mm](空Enterでスキップ) > ").strip()
-        rows.append((target, q, tau, gap or "-"))
+            gap = input("  刃の開き実測[mm](空Enterでスキップ) > ").strip()
+            rows.append((target, q, tau, gap or "-"))
+    finally:
+        # 送信を止める前に、そっと元の位置へ戻す指令(急に離すと脱力するだけなので安全)
+        current_target[0] = float(latest["q"]) if not rows else rows[0][1]
+        time.sleep(0.5)
+        stop_event.set()
+        pub_thread.join(timeout=1.0)
+        pub.Close()
 
     print("\n==== q↔開き幅 対応表 ====")
     print(f"{'目標q':>8} {'実測q':>8} {'tau':>7}  開き[mm]")

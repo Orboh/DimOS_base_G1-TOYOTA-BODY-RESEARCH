@@ -281,7 +281,10 @@ def main() -> None:
 
         n_okra = int(os.getenv("SIM_OKRA", "10"))
         table_h = float(os.getenv("SIM_TABLE_H", "0.72"))
-        okra_paths = sim_scene.build_table_okra(stage, table_h=table_h, n_okra=n_okra)
+        table_cx = float(os.getenv("SIM_TABLE_CX", str(sim_scene.TABLE_CX)))
+        okra_paths = sim_scene.build_table_okra(
+            stage, table_h=table_h, table_cx=table_cx, n_okra=n_okra
+        )
         for _p in Usd.PrimRange(g1):
             nm = _p.GetName()
             if nm == "right_hand_base_link" and hand_path is None:
@@ -292,7 +295,11 @@ def main() -> None:
             f"[bridge] 机+オクラ {len(okra_paths)}本 配置（A配置, 天板{table_h}m）hand={hand_path} basket={basket_path}",
             flush=True,
         )
+    # SIM_STANDING_OKRA=1（立ち姿勢収穫用・机なし・torso相対）は torso_link の実 world
+    # 変換が必要で、それは world.reset() 前は articulation の姿勢が未確定で不正確
+    # （lift 等が反映されない）ため、reset 後（下の「立ち姿勢オクラ配置」ブロック）で行う。
 
+    if os.getenv("SIM_TABLE", "0") == "1":
         # 摩擦把持: okra↔指の接触μを実行時に底上げ。okra.usd は物理マテリアル未割当＝PhysX 既定 μ≈0.5
         # で、弱く握ると滑り・強く握ると剛体オクラを弾き出す（μが低いと保持と非弾き出しが両立しない）。
         # 接触μは両面の平均なので、オクラ・右手ともに高μ材を bind する。SIM_GRIP_FRICTION で調整。
@@ -399,6 +406,143 @@ def main() -> None:
             pass
         for _ in range(20):
             world.step(render=not headless)
+
+    # 立ち姿勢収穫用オクラ配置（机なし・torso相対）: build_table_okra（机上ピックM2/M3用、
+    # 机高さ0.72m）は胸カメラ(torso相対z=0.248m・ほぼ水平)の視野角(垂直約58.7°)に対して
+    # 低すぎ、既定配置ではカメラに何も映らないことが判明（2026-09-12）。torso_link の実
+    # world 変換（articulation の姿勢が確定する world.reset()＋初期step後でないと、lift 等が
+    # 反映されず不正確な値になる — 同日発覚）を使い、torso 相対座標（IK reach box と同じ
+    # 標準ROS torso frame）でオクラを直立配置する（正本 sim_scene.build_standing_okra）。
+    if not walk_mode and os.getenv("SIM_STANDING_OKRA", "0") == "1":
+        import sim_scene  # 同ディレクトリ（docs/sim-setup）
+
+        n_okra = int(os.getenv("SIM_OKRA", "3"))
+        _torso_p = None
+        for _p in Usd.PrimRange(g1):
+            if _p.GetName() == "torso_link":
+                _torso_p = _p.GetPath().pathString
+                break
+        if _torso_p is None:
+            print("[bridge] ERROR: torso_link not found; SIM_STANDING_OKRA 不成立", flush=True)
+        else:
+            _torso_w = UsdGeom.XformCache(Usd.TimeCode.Default()).GetLocalToWorldTransform(
+                stage.GetPrimAtPath(_torso_p)
+            )
+            # 高さバラつき検証用（既定 0,0=無効）: 既定高さ(STANDING_Z_OFF)から
+            # [jitter_min, jitter_max) の一様乱数を加える。例 "-0.05,0.15" で
+            # -5cm〜+15cm ばらつかせる（2026-09-12 要望）。SIM_STANDING_OKRA_SEED
+            # を指定すると再現可能な配置になる。
+            _zj_min, _zj_max = (
+                float(v) for v in os.getenv("SIM_STANDING_OKRA_Z_JITTER", "0,0").split(",")
+            )
+            _zj_seed_s = os.getenv("SIM_STANDING_OKRA_SEED", "")
+            _zj_seed = int(_zj_seed_s) if _zj_seed_s.strip() else None
+            # 横(y)配置範囲: 既定は sim_scene.STANDING_LAT_MIN/MAX（reach内・右寄せ）。
+            # reach box外まで並べて relative_move(REPOSITION) の横移動検証をしたい
+            # 場合は SIM_STANDING_OKRA_LAT="lat_min,lat_max" で上書きする（例:
+            # reach y範囲[-0.75,0.20]の外側 "-0.95,-0.05" まで広げる）。
+            _lat_s = os.getenv("SIM_STANDING_OKRA_LAT", "")
+            _lat_kwargs = {}
+            if _lat_s.strip():
+                _lat_min, _lat_max = (float(v) for v in _lat_s.split(","))
+                _lat_kwargs = {"lat_min": _lat_min, "lat_max": _lat_max}
+            # 奥行き(x)バラつき（既定 -0.15,0.15 = STANDING_X_OFF=0.40 を中心に
+            # 0.25〜0.55m の範囲。reach box x=[0.05,0.65] 内）。2026-09-12
+            # GUIスクリーンショットで指摘: 横(y)幅が0.20mしかない既定配置で本数
+            # だけ増やすと、全本同一奥行きの「壁」になり胸カメラ(最短視認距離が
+            # 近い)にはロボット自身の胴体・頭に重なるほど密集して見えた。奥行きに
+            # もばらつきを与えて畑の株らしく前後に散らす。SIM_STANDING_OKRA_X_JITTER=0,0
+            # で従来どおり無効化できる。
+            _xj_min, _xj_max = (
+                float(v) for v in os.getenv("SIM_STANDING_OKRA_X_JITTER", "-0.15,0.15").split(",")
+            )
+            okra_paths = sim_scene.build_standing_okra(
+                stage,
+                _torso_w,
+                n_okra=n_okra,
+                z_jitter=(_zj_min, _zj_max),
+                x_jitter=(_xj_min, _xj_max),
+                seed=_zj_seed,
+                **_lat_kwargs,
+            )
+            # 左側探索用の追加オクラ（SIM_STANDING_OKRA_LEFT_N>0 で有効、既定OFF）:
+            # advance_left（graph.py の左sweepノード、G1から見て左＝y正方向）で
+            # 辿り着く想定の範囲へ追加配置する。既存(右側)とは index_offset で
+            # prim パスを分離。2026-09-12 要望: 右に既存グループ＋左に10本・
+            # 0.3〜10m の範囲で高さをばらつかせて配置し、移動を含めた検証をしたい。
+            _left_n = int(os.getenv("SIM_STANDING_OKRA_LEFT_N", "0"))
+            if _left_n > 0:
+                _left_y0, _left_y1 = (
+                    float(v) for v in os.getenv("SIM_STANDING_OKRA_LEFT_Y", "0.3,10.0").split(",")
+                )
+                _left_zj_min, _left_zj_max = (
+                    float(v)
+                    for v in os.getenv(
+                        "SIM_STANDING_OKRA_LEFT_Z_JITTER", f"{_zj_min},{_zj_max}"
+                    ).split(",")
+                )
+                _left_seed_s = os.getenv("SIM_STANDING_OKRA_LEFT_SEED", _zj_seed_s)
+                _left_seed = int(_left_seed_s) if _left_seed_s.strip() else None
+                # 左側は元々 y 方向に0.3〜10mと広く散らばるため既定は奥行きジッタ無し
+                # （右側グループと違って同一奥行きでも視覚的に密集しない）。必要なら
+                # SIM_STANDING_OKRA_X_JITTER が右側と共通で効く。
+                _left_paths = sim_scene.build_standing_okra(
+                    stage,
+                    _torso_w,
+                    n_okra=_left_n,
+                    z_jitter=(_left_zj_min, _left_zj_max),
+                    x_jitter=(_xj_min, _xj_max),
+                    seed=_left_seed,
+                    lat_min=_left_y0,
+                    lat_max=_left_y1,
+                    index_offset=n_okra,
+                )
+                okra_paths = okra_paths + _left_paths
+                print(
+                    f"[bridge] 左側探索用オクラ {len(_left_paths)}本 追加配置 "
+                    f"y=[{_left_y0},{_left_y1}]（advance_leftで発見想定）",
+                    flush=True,
+                )
+        for _p in Usd.PrimRange(g1):
+            nm = _p.GetName()
+            if nm == "right_hand_base_link" and hand_path is None:
+                hand_path = _p.GetPath().pathString
+            elif "basket" in nm.lower() and basket_path is None:
+                basket_path = _p.GetPath().pathString
+        print(
+            f"[bridge] 立ち姿勢オクラ {len(okra_paths)}本 配置（机なし・torso相対）"
+            f"hand={hand_path} basket={basket_path}",
+            flush=True,
+        )
+
+    # 左手ダミーハンド化: 左手首の籠(basket_physics)の視覚メッシュを非表示にし、
+    # 目立たない小さなキューブに差し替える（SIM_BASKET_DUMMY=1、既定OFF）。
+    # 2026-09-12 要望: 本番設計は「腹部固定かご・右腕IKのみ」（basket_deposit_bridge.py
+    # 参照）で左手は本来関与しないが、今回の検証用USD(g1bag.usd)は左手首に
+    # リアルな籠メッシュが付いており、(1)torsoカメラ視野の大半を占有し
+    # (2)YOLOに「オクラ」として誤検出される、という2つの副作用があった
+    # （2026-09-12 GUIデモで実際に確認）。投入先の世界アンカー機能(basket_pos の
+    # 取得元)はプリム自体を維持するのでそのまま働く。
+    if basket_path is not None and os.getenv("SIM_BASKET_DUMMY", "0") == "1":
+        try:
+            _bp_prim = stage.GetPrimAtPath(basket_path)
+            _n_hidden = 0
+            for _pp in Usd.PrimRange(_bp_prim):
+                if _pp.IsA(UsdGeom.Gprim) and _pp.GetPath() != _bp_prim.GetPath():
+                    UsdGeom.Imageable(_pp).MakeInvisible()
+                    _n_hidden += 1
+            # 位置確認用の小さい半透明グレーのキューブ（把持/投入先の目視確認用マーカー）
+            _dummy = UsdGeom.Cube.Define(stage, f"{basket_path}/dummy_marker")
+            _dummy.CreateSizeAttr(0.06)
+            _dummy.CreateDisplayColorAttr().Set([Gf.Vec3f(0.5, 0.5, 0.5)])
+            _dummy.CreateDisplayOpacityAttr().Set([0.4])
+            print(
+                f"[bridge] 左手ダミーハンド化(SIM_BASKET_DUMMY=1): {basket_path} 内 "
+                f"{_n_hidden}個のGprimを非表示 + 目印キューブ追加",
+                flush=True,
+            )
+        except Exception as _e:
+            print(f"[bridge] basket dummy warn: {_e}", flush=True)
 
     # 籠の世界位置（F-07: 離したオクラをここへ world アンカーで固定＝投入）。左腕は rest 保持なので ~固定。
     basket_pos = None
@@ -688,12 +832,24 @@ def main() -> None:
     reader = DataReader(dp, t_cmd)
     writer = DataWriter(dp, t_state)
     # M3 机上ピック: グリッパ指令 rt/dex1/right/cmd（MotorCmds_, cmds[0].q）を購読
-    from unitree_sdk2py.idl.unitree_go.msg.dds_ import MotorCmds_
+    from unitree_sdk2py.idl.default import unitree_go_msg_dds__MotorState_ as make_motorstate
+    from unitree_sdk2py.idl.unitree_go.msg.dds_ import MotorCmds_, MotorStates_
 
     t_grip = Topic(dp, "rt/dex1/right/cmd", MotorCmds_)
     grip_reader = DataReader(dp, t_grip)
+    # rt/dex1/right/state を publish（G1GripperConnection.start() が起動時に必須で
+    # 最大10s待つため — 実機は Dex1 自身が状態を返すが、sim にはセンサーが無い。
+    # 実指位置は追跡しない(kinematic把持)ため、直近の cmd(grip_q) をそのままエコー
+    # バックする近似で足りる＝「何か状態が来ている」という起動ガード通過が目的。
+    # 2026-09-12 発覚: これが無いと honban.py の G1GripperConnection が
+    # "No rt/dex1/right/state received" でクラッシュしフルパイプラインが起動しない。
+    t_grip_state = Topic(dp, "rt/dex1/right/state", MotorStates_)
+    grip_state_writer = DataWriter(dp, t_grip_state)
+    grip_state_msg = MotorStates_()
+    grip_state_msg.states = [make_motorstate()]
     print(
-        f"[bridge] DDS up: domain={domain_id} sub=rt/arm_sdk,rt/dex1/right/cmd pub=rt/lowstate",
+        f"[bridge] DDS up: domain={domain_id} sub=rt/arm_sdk,rt/dex1/right/cmd "
+        "pub=rt/lowstate,rt/dex1/right/state",
         flush=True,
     )
 
@@ -755,7 +911,12 @@ def main() -> None:
         cam_w = int(os.getenv("SIM_CAM_W", "640"))
         cam_h = int(os.getenv("SIM_CAM_H", "360"))
         cam_port = int(os.getenv("SIM_CAM_PORT", "5555"))
-        hfov = math.radians(float(os.getenv("SIM_CAM_HFOV", "90")))  # 水平画角
+        # 既定82°: 実機ZED-Mini公式仕様のHD720時の水平FOV（honban.py の ZEDCameraConfig
+        # 既定解像度もHD720）。旧既定90°は出典コメントの無い仮値で、実機実測(82°)より
+        # 8°広く、simでの「見える/見えない」判定が実機より甘くなっていた
+        # （2026-09-12 発覚、出典: https://support.stereolabs.com/hc/en-us/articles/
+        # 360007395634 — 解像度別HFOV: HD2K=73° HD1080=66° HD720=82° WVGA=85°）。
+        hfov = math.radians(float(os.getenv("SIM_CAM_HFOV", "82")))  # 水平画角
         cam_mode = os.getenv("SIM_CAM_MODE", "torso")  # torso=リンク追従 / fixed=固定look-at
 
         # torso_link prim を探索（実 ZED 取付基準）
@@ -771,9 +932,18 @@ def main() -> None:
                     break
 
         if cam_mode == "torso" and torso_path is not None:
-            # torso フレームでの取付: 位置 + 前方やや下向き（実 ZED 相当）
-            lpos = _vec("SIM_CAM_LOCAL_POS", [0.08, 0.0, 0.20])
-            fwd = _vec("SIM_CAM_LOCAL_FWD", [1.0, 0.0, -0.35])
+            # torso フレームでの取付: 位置 + 視線方向。
+            # 既定値は unitree_g1_okra_honban.py の OKRA_CAM_TO_TORSO 既定値
+            # ("0.1110,0.0250,0.2585,-0.49475,0.49475,-0.50520,0.50520" = 実機胸ZED、
+            # 平行移動は 2026-09-15 の CAD 実測値) を、本関数と同じ変換式で逆算して
+            # 合わせたもの。**honban.py 側を変えたらここも必ず同じ値にすること** —
+            # ここが実機とズレると、pixel→3D→torso 変換が食い違い検出座標が
+            # IKワークスペース外と誤判定され続ける（2026-09-12 検証で発覚: 旧既定値
+            # [0.08,0,0.20]・下向き19.3°は実機実測と位置最大5cm・視線角度約20.5°不一致だった）。
+            lpos = _vec("SIM_CAM_LOCAL_POS", [0.1110, 0.0250, 0.2585])  # [m] torso_link相対 x,y,z
+            fwd = _vec(
+                "SIM_CAM_LOCAL_FWD", [0.9998, 0.0, 0.0209]
+            )  # 正規化前。ほぼ水平（上向き約1.2°）
             # SIM_CAM_LOOK_WORLD="x,y,z" 指定時: torso の向きに関係なく「ワールドのその点」を
             # 見るよう、胸カメラの torso-local 前方ベクトルを逆算する（机のオクラ確実捕捉用）。
             _lookw = os.getenv("SIM_CAM_LOOK_WORLD", "")
@@ -863,6 +1033,139 @@ def main() -> None:
                 f"[bridge] camera attached to {torso_path} (link-following). cam_to_torso={cam_to_torso_str}",
                 flush=True,
             )
+
+            # 画角(FOV)・IK到達範囲(reach box)の可視化: torso_link の子として torso
+            # 追従するワイヤーフレームを描画（build_table_okra 等と同じ BasisCurves 手法）。
+            # 赤=カメラ画角の錐台(frustum)、ピンク=IK到達範囲(ik_approach.py の
+            # ws_x/ws_y/ws_z 既定値。honban.py 側で override している場合は
+            # SIM_REACH_X/Y/Z で合わせること — 数値ドリフト防止）。
+            # 2026-09-12: 「どこまで見えて・どこまで届くか」を一目で確認したい、という
+            # ユーザー要望で追加。
+            if os.getenv("SIM_SHOW_FOV", "0") == "1":
+                try:
+                    _fov_dist = float(os.getenv("SIM_SHOW_FOV_DIST", "0.8"))  # 錐台を描く距離[m]
+                    _vfov = 2.0 * math.atan(math.tan(hfov / 2.0) * (cam_h / cam_w))
+                    _hh = math.tan(hfov / 2.0) * _fov_dist
+                    _vh = math.tan(_vfov / 2.0) * _fov_dist
+                    # torso-local: カメラ原点(lpos)から fwd*_fov_dist 先を中心に、
+                    # camX(右)/camY(上, USDカメラのY-up)方向へ広げた矩形（遠方面）。
+                    _center = np.asarray(lpos) + fwd * _fov_dist
+                    _far_corner = {
+                        (0, 0): _center - camX * _hh - camY * _vh,
+                        (1, 0): _center + camX * _hh - camY * _vh,
+                        (1, 1): _center + camX * _hh + camY * _vh,
+                        (0, 1): _center - camX * _hh + camY * _vh,
+                    }
+                    _origin = np.asarray(lpos, dtype=float)
+                    _fov_pts: list[Gf.Vec3f] = []
+                    for _k in [(0, 0), (1, 0), (1, 1), (0, 1)]:  # 原点→遠方4隅（錐台の稜線）
+                        _fov_pts.append(Gf.Vec3f(*_origin))
+                        _fov_pts.append(Gf.Vec3f(*_far_corner[_k]))
+                    for _a, _b in [
+                        ((0, 0), (1, 0)),
+                        ((1, 0), (1, 1)),
+                        ((1, 1), (0, 1)),
+                        ((0, 1), (0, 0)),
+                    ]:
+                        _fov_pts.append(Gf.Vec3f(*_far_corner[_a]))  # 遠方面の4辺
+                        _fov_pts.append(Gf.Vec3f(*_far_corner[_b]))
+                    _fov_curve = UsdGeom.BasisCurves.Define(stage, f"{torso_path}/fov_viz")
+                    _fov_curve.CreateTypeAttr().Set(UsdGeom.Tokens.linear)
+                    _fov_curve.CreateCurveVertexCountsAttr().Set([2] * (len(_fov_pts) // 2))
+                    _fov_curve.CreatePointsAttr().Set(_fov_pts)
+                    _fov_curve.CreateWidthsAttr().Set([0.006] * len(_fov_pts))
+                    _fov_curve.SetWidthsInterpolation(UsdGeom.Tokens.vertex)
+                    _fov_curve.CreateDisplayColorAttr().Set([Gf.Vec3f(1.0, 0.15, 0.15)])  # 赤
+                    # purpose=guide: YOLO用render product(cam.get_rgba())からは既定で
+                    # 除外される。GUIビューポートの実体が /G1/torso_link/chest_cam を
+                    # 直接映す設定（下のset_active_camera）のため、guide化するとGUIから
+                    # も一緒に消える（2026-09-12 ユーザー指摘で判明）。色マスクでの
+                    # YOLO除外も試したが、reach_viz_points はカメラ視点のすぐ近傍
+                    # （torso相対z=0.25m前後）にも点が存在し、カメラに極端に近い点は
+                    # 巨大に・白飛び気味に描画されて画面全体を覆ってしまい
+                    # （2026-09-12 実測: ego_view全体がピンクで埋まりYOLOが0検出に
+                    # なることを確認）、色距離マスクでは実用にならなかった。guide化
+                    # による「GUIでも見えなくなる」という代償を受け入れ、YOLO入力の
+                    # クリーンさを優先する。
+                    _fov_curve.CreatePurposeAttr().Set(UsdGeom.Tokens.guide)
+                    print(
+                        f"[bridge] FOV viz ON(赤): dist={_fov_dist}m hfov={math.degrees(hfov):.0f}deg "
+                        f"vfov={math.degrees(_vfov):.0f}deg -> {torso_path}/fov_viz",
+                        flush=True,
+                    )
+                except Exception as _e:
+                    print(f"[bridge] FOV viz warn: {_e}", flush=True)
+
+            if os.getenv("SIM_SHOW_REACH", "0") == "1":
+                try:
+                    # ★単純な直方体(AABB)ワイヤーフレームではなく、実際に
+                    # IkApproachSkill.solve()（ik_approach.py — grasp_sequence が
+                    # 使うのと同じIKソルバー本体）を格子点ごとに解いて、本当に
+                    # 収束する点だけを点群で描く。2026-09-12 ユーザー指摘: 「G1から
+                    # 見て右側(y負方向の遠い側)はAABB上はreach box内でも、実際には
+                    # 腕の関節可動域でIKが解けないのでは」— 実際に計算すると、
+                    # reach y下限(-0.75, 最も右)は到達率0%、y中央(-0.23付近)が
+                    # 最大約53%で、AABB全体のうち実到達可能なのは全格子点の約4割
+                    # だった（既定解像度での実測）。AABB(ws_x/y/z)自体は
+                    # ik_approach.py 側の事前フィルタとして変更していない
+                    # （このグリッド計算も同じ ws_x/y/z の中で solve() するだけ）。
+                    _rx0, _rx1 = (
+                        float(v) for v in os.getenv("SIM_REACH_X", "0.05,0.65").split(",")
+                    )
+                    # 既定 -0.61 (旧-0.75): ik_approach.py の ws_y 既定と同期
+                    # （2026-09-12 ユーザー指摘・実測に基づく変更、数値ドリフト防止）。
+                    _ry0, _ry1 = (
+                        float(v) for v in os.getenv("SIM_REACH_Y", "-0.61,0.20").split(",")
+                    )
+                    # z既定 0.0〜0.5: 胸カメラの実垂直視野角(HD720実機HFOV=82°相当,
+                    # vfov≈52°)で実際にカバーされる高さに合わせた可視化専用の範囲
+                    # （ik_approach.py 本体の ws_z=[-0.35,0.85] とは別、後者は変更なし）。
+                    _rz0, _rz1 = (float(v) for v in os.getenv("SIM_REACH_Z", "0.0,0.5").split(","))
+                    _n_x = int(os.getenv("SIM_REACH_GRID_NX", "9"))
+                    _n_y = int(os.getenv("SIM_REACH_GRID_NY", "13"))
+                    _n_z = int(os.getenv("SIM_REACH_GRID_NZ", "9"))
+
+                    if REPO not in sys.path:
+                        sys.path.insert(0, REPO)
+                    from dimos.robot.unitree.g1.harvest.ik_approach import IkApproachSkill
+
+                    _reach_skill = IkApproachSkill()  # 既定 ws_x/y/z（grasp_sequence と同一設定）
+                    _rest_q29 = [0.0] * 29  # 起動時 rest 姿勢（warm-start）
+                    _t_grid0 = time.time()
+                    _reach_pts: list[Gf.Vec3f] = []
+                    _n_total = _n_x * _n_y * _n_z
+                    for _xg in np.linspace(_rx0, _rx1, _n_x):
+                        for _yg in np.linspace(_ry0, _ry1, _n_y):
+                            for _zg in np.linspace(_rz0, _rz1, _n_z):
+                                if (
+                                    _reach_skill.solve(
+                                        [float(_xg), float(_yg), float(_zg)], _rest_q29
+                                    )
+                                    is not None
+                                ):
+                                    _reach_pts.append(Gf.Vec3f(float(_xg), float(_yg), float(_zg)))
+                    _reach_points_prim = UsdGeom.Points.Define(
+                        stage, f"{torso_path}/reach_viz_points"
+                    )
+                    _reach_points_prim.CreatePointsAttr().Set(_reach_pts)
+                    _reach_points_prim.CreateWidthsAttr().Set([0.02] * len(_reach_pts))
+                    _reach_points_prim.CreateDisplayColorAttr().Set(
+                        [Gf.Vec3f(1.0, 0.4, 0.85)]
+                    )  # ピンク
+                    # purpose=guide（詳細は fov_viz 側のコメント参照）。この点群は
+                    # torso相対 z=[0,0.5] 付近＝カメラ(torso相対z≈0.25m)のすぐ近傍にも
+                    # 点が存在するため、色マスクで隠す方式は「カメラに極端に近い点が
+                    # 白飛びして画面全体を覆う」形で破綻した（2026-09-12実測）。
+                    # guide化してレンダリングそのものから除外する。
+                    _reach_points_prim.CreatePurposeAttr().Set(UsdGeom.Tokens.guide)
+                    print(
+                        f"[bridge] reach viz ON(ピンク・IK実計算): {len(_reach_pts)}/{_n_total}点"
+                        f"({100 * len(_reach_pts) / max(1, _n_total):.0f}%) "
+                        f"{time.time() - _t_grid0:.1f}s -> {torso_path}/reach_viz_points",
+                        flush=True,
+                    )
+                except Exception as _e:
+                    print(f"[bridge] reach-box viz warn: {_e}", flush=True)
         else:
             # フォールバック: 固定 look-at
             eye = _vec("SIM_CAM_EYE", [1.6, -0.5, 1.3])
@@ -965,11 +1268,25 @@ def main() -> None:
     grasped_kin: dict[int, Gf.Matrix4d] = {}  # {okra idx: rel = okraW * handW^-1}（追従用）
     basket_count = 0  # F-07: 籠に投入済みの本数（積み重ねオフセット用）
     placed_at: dict[int, int] = {}  # F-07 物理落下: {okra idx: 投入した step}（着籠判定用）
+    # ★placed_at は「着籠判定待ちの一時フラグ」であり、判定完了(约1.5s後)で
+    # pop されて消える。判定後もそのオクラは(籠に入った/床に落ちたのどちらでも)
+    # 既に世界のどこかに投げ捨てられたまま=収穫対象としては二度と有効ではないが、
+    # pop された瞬間から nearest 探索の除外対象から外れてしまい、同じオクラを
+    # 何度も掴み直す不具合があった（2026-09-12 GUIデモ実測: Okra_1 を2回GRASP、
+    # 2回目は座標が(8.48,-4.2,-69.4)等の異常値に発散＝既に床下に落ちている物体を
+    # 再度「持っている」ことにしたキネマ追従オフセットが破綻したため）。恒久的な
+    # 除外には collected_set を使う（一度入ったら二度と pop しない）。
+    collected_set: set[int] = set()
     grasp_target = int(os.getenv("SIM_GRASP_OKRA", "1"))  # 既定 /Okra_1（単発時）
-    grasp_close = float(os.getenv("SIM_GRASP_CLOSE", "2.0"))  # cmds[0].q がこれ以上で閉じ=把持
+    # 既定 4.0（旧2.0）: harvest本番フローの実際の値は「切断時 cut_close_q=4.4」で閉じ、
+    # 「籠投入後 BASKET_OPEN_Q=3.7」で開く（basket_deposit_bridge.py 参照）。旧既定2.0だと
+    # 3.7 も「まだ閉じている(把持中)」の範囲に入ってしまい、投入後もマグネットが外れず
+    # ずっと付いたままになるバグがあった（2026-09-12 GUIデモで発覚）。3.7 < 4.0 <= 4.4 の
+    # 間に閾値を置き、両者を正しく区別する。
+    grasp_close = float(os.getenv("SIM_GRASP_CLOSE", "4.0"))  # cmds[0].q がこれ以上で閉じ=把持
     grip_open_q = float(
         os.getenv("SIM_GRIP_OPEN", "5.0")
-    )  # これ以上=開き(リリース)。close=4.4/open=5.2 を区別
+    )  # これ以上=開き(リリース)。cut_close_q=4.4 / BASKET_OPEN_Q=3.7 を区別
     grasp_target_file = os.getenv(
         "SIM_GRASP_TARGET_FILE", "/tmp/sim_grasp_target.txt"
     )  # graph がここに次の対象を書く
@@ -1105,13 +1422,29 @@ def main() -> None:
                             walk_arm_tgt[ii] = float(lc.motor_cmd[ci].q)
                 else:
                     q_full = np.asarray(robot.get_joint_positions(), dtype=float)
-                    tgt = q_full.copy()
-                    for ci in ARM_CANON_IDX:
-                        ii = canon_to_isaac.get(ci)
-                        if ii is not None:
-                            tgt[ii] = float(lc.motor_cmd[ci].q)
-                    robot.apply_action(ArticulationAction(joint_positions=tgt))
-                    last_q_target = tgt
+                    # ★get_joint_positions() が稀に 0次元/空配列を返すタイミングが
+                    # ある（2026-09-12発覚: SIM_BASE_MOVE の set_world_pose 直後など
+                    # articulation の内部キャッシュが一時的に無効化されるタイミング
+                    # 依存と見られる）。ここで検知せず q_full.copy() に進むと
+                    # "IndexError: too many indices for array" でメインループごと
+                    # クラッシュし、以降 arm_sdk/base_move が一切反映されなくなる
+                    # （フリーズしたように見えるだけで実際は死んでいた）。異常値の
+                    # step は腕反映をスキップし、次stepで再試行する。
+                    if q_full.ndim == 0 or q_full.size == 0:
+                        if step % 250 == 0:
+                            print(
+                                f"[bridge] get_joint_positions() 異常値(shape={q_full.shape})"
+                                " のため本stepの腕反映をスキップ",
+                                flush=True,
+                            )
+                    else:
+                        tgt = q_full.copy()
+                        for ci in ARM_CANON_IDX:
+                            ii = canon_to_isaac.get(ci)
+                            if ii is not None:
+                                tgt[ii] = float(lc.motor_cmd[ci].q)
+                        robot.apply_action(ArticulationAction(joint_positions=tgt))
+                        last_q_target = tgt
             elif walk_mode and weight <= 0.01 and walk_arm_tgt:
                 walk_arm_tgt.clear()  # weight=0 ＝腕を policy に返す（default 姿勢へ）
 
@@ -1125,6 +1458,15 @@ def main() -> None:
                 grip_q = float(gsm[-1].cmds[0].q)
             except Exception:
                 pass
+        # rt/dex1/right/state エコーバック（毎ステップ）。G1GripperConnection の
+        # 起動待ち・以後の状態表示がこれを見るため、cmd 未受信でも初期値(q=0)で
+        # 起動直後から出し続ける（初回 cmd 到達を待つと起動ガードで詰まるため）。
+        try:
+            grip_state_msg.states[0].q = grip_q
+            grip_state_writer.write(grip_state_msg)
+        except Exception as e:
+            if step % 250 == 0:
+                print(f"[bridge] grip state write err: {e}", flush=True)
         # 1c) 摩擦把持: grip_q を Dex1 指 prismatic の位置目標へ写像し毎ステップ駆動（磁石なし）。
         #     frac=0(開)..1(閉)。閉じ側 limit は SIM_GRIP_SIGN で選ぶ。okra は指↔莢の摩擦だけで保持。
         #     歩行モードでは直接 apply せず walk_grip_tgt に記憶（walk tick で policy 出力に上書き）。
@@ -1150,33 +1492,56 @@ def main() -> None:
         #  (b) 既定: graph が書くファイル優先、無ければ env（GT index ループ用）。
         gt_idx = grasp_target
         if os.getenv("SIM_GRASP_NEAREST", "0") == "1" and grip_q >= grasp_close and hand_path:
-            try:
-                _hw = (
-                    UsdGeom.XformCache(Usd.TimeCode.Default())
-                    .GetLocalToWorldTransform(stage.GetPrimAtPath(hand_path))
-                    .ExtractTranslation()
-                )
-                _best, _bd = None, 1e9
-                for _i, _op in enumerate(okra_paths):
-                    if _i in grasped_set:
-                        continue
-                    _ow = (
+            # ★1グリップサイクルにつき1本のみ: grasped_set が既に非空（＝何かを把持中）なら
+            # 新規対象を探さない。探し続けると、グリッパーが閉じたまま連続ステップが経過する
+            # だけで「2番目に近いオクラ」まで拾ってしまい、一度の把持で複数本が同時にくっつく
+            # （2026-09-12 GUIデモで実際に発覚: 隣接オクラが一気にくっついた）。
+            if grasped_set:
+                gt_idx = -1
+            else:
+                try:
+                    _hw = (
                         UsdGeom.XformCache(Usd.TimeCode.Default())
-                        .GetLocalToWorldTransform(stage.GetPrimAtPath(_op))
+                        .GetLocalToWorldTransform(stage.GetPrimAtPath(hand_path))
                         .ExtractTranslation()
                     )
-                    _dd = (_hw[0] - _ow[0]) ** 2 + (_hw[1] - _ow[1]) ** 2 + (_hw[2] - _ow[2]) ** 2
-                    if _dd < _bd:
-                        _best, _bd = _i, _dd
-                if (
-                    _best is not None
-                    and _bd <= float(os.getenv("SIM_GRASP_NEAREST_MAX", "0.20")) ** 2
-                ):
-                    gt_idx = _best
-                else:
-                    gt_idx = -1  # 近傍に未把持オクラ無し→把持しない
-            except Exception:
-                pass
+                    _best, _bd = None, 1e9
+                    for _i, _op in enumerate(okra_paths):
+                        # ★grasped_set(今持っている)だけでなく placed_at(投入済み)も除外。
+                        # 投入済みオクラは BasketAnchor_{idx} で籠の近くの世界座標に固定
+                        # されるだけで okra_paths からは消えないため、placed_at を見ずに
+                        # grasped_set だけ見ていると、次に手を伸ばした先(籠の近く)に
+                        # 「最寄りの未把持」として再度選ばれ、同じオクラを無限に繰り返し
+                        # 収穫してしまうバグがあった（2026-09-12 発覚: GRASP /Okra_2 が
+                        # 連続2回選ばれ、advance_left に到達せず picks=2 で終了していた）。
+                        if _i in grasped_set or _i in placed_at or _i in collected_set:
+                            continue
+                        _ow = (
+                            UsdGeom.XformCache(Usd.TimeCode.Default())
+                            .GetLocalToWorldTransform(stage.GetPrimAtPath(_op))
+                            .ExtractTranslation()
+                        )
+                        _dd = (
+                            (_hw[0] - _ow[0]) ** 2 + (_hw[1] - _ow[1]) ** 2 + (_hw[2] - _ow[2]) ** 2
+                        )
+                        if _dd < _bd:
+                            _best, _bd = _i, _dd
+                    # ★0.08mへの縮小は誤り（2026-09-12 デバッグで実測して撤回）: hand_path
+                    # (right_hand_base_link)はグリッパー先端そのものではなく手首側のリンクで、
+                    # 実到達後の hand_path<->オクラ距離は約0.16〜0.28m（先端オフセット
+                    # gripper_offset_xyz≈0.1845m 相当）ある。0.08mだと絶対に届かず把持が
+                    # 一切発火しなくなる（「1本だけ掴む」の対策は下の grasped_set チェックで
+                    # 足りており、距離を無理に縮める必要はなかった）。0.30mに戻し、実測レンジ
+                    # を安全にカバーしつつ、複数本の同時把持は上のサイクル制御で防ぐ。
+                    if (
+                        _best is not None
+                        and _bd <= float(os.getenv("SIM_GRASP_NEAREST_MAX", "0.30")) ** 2
+                    ):
+                        gt_idx = _best
+                    else:
+                        gt_idx = -1  # 近傍に未把持オクラ無し→把持しない
+                except Exception:
+                    pass
         else:
             try:
                 with open(grasp_target_file) as _f:
@@ -1187,11 +1552,15 @@ def main() -> None:
         # 掴み、持ち上げの引張でオクラの破断 FixedJoint(SIM_OKRA_BREAK_N) が切れて収穫＝物理のみ。
         if grasp_friction:
             gt_idx = -1  # 以降の磁石ブロックを不活性化（grasped_set は空のまま）
-        # 閉じ かつ 未把持の対象 → world アンカー除去＋手リンクへ FixedJoint（複数可, ユニーク joint）
+        # 閉じ かつ 未把持・未投入の対象 → world アンカー除去＋手リンクへ FixedJoint
+        # （複数可, ユニーク joint）。placed_at も見るのは上の nearest 探索と同じ理由
+        # （投入済みオクラの再把持を防ぐ）。
         if (
             grasp_close <= grip_q < grip_open_q
             and hand_path
             and gt_idx not in grasped_set
+            and gt_idx not in placed_at
+            and gt_idx not in collected_set
             and 0 <= gt_idx < len(okra_paths)
         ):
             okp = okra_paths[gt_idx]
@@ -1252,6 +1621,12 @@ def main() -> None:
                     )
                 elif basket_pos is not None:
                     # 籠内で少しずつ位置をずらして積む（world アンカー）
+                    # ★placed_at に記録（重力ON分岐と同様）: これが無いと、投入済み
+                    # オクラが「未把持」のまま okra_paths に残り続け、次にグリップが
+                    # 閉じた瞬間、手を伸ばした先(籠のすぐ近く)にある投入済みオクラが
+                    # 「最寄りの未把持」として再選択され、同じ1本を無限に繰り返し
+                    # 収穫してしまっていた（2026-09-12発覚）。
+                    placed_at[_idx] = step
                     bx = basket_pos[0] + 0.02 * (basket_count % 3 - 1)
                     by = basket_pos[1] + 0.02 * ((basket_count // 3) % 3 - 1)
                     bz = basket_pos[2] + 0.05 + 0.015 * basket_count
@@ -1424,6 +1799,7 @@ def main() -> None:
                 _done.append(_idx)
             for _idx in _done:
                 placed_at.pop(_idx, None)
+                collected_set.add(_idx)  # 判定完了後も恒久的に除外（再把持防止）
 
         # 3) lowstate 発行
         if step % pub_every == 0:
@@ -1455,6 +1831,11 @@ def main() -> None:
             try:
                 rgba = cam.get_rgba()
                 if rgba is not None and getattr(rgba, "size", 0) > 0:
+                    # FOV赤線・reach box ピンク点は purpose=guide 化して render product
+                    # (このget_rgba()自体)から既定で除外済み（fov_viz/reach_viz_points
+                    # 定義箇所のコメント参照）。色マスク方式も試したが、reach_viz_points
+                    # がカメラのすぐ近傍にも点を持つため極端に巨大・白飛びして描画され
+                    # 画面全体を覆う破綻を起こした（2026-09-12実測）ため撤回。
                     bgr = cv2.cvtColor(
                         np.asarray(rgba)[:, :, :3].astype("uint8"), cv2.COLOR_RGB2BGR
                     )
@@ -1493,6 +1874,13 @@ def main() -> None:
         # 4) ログ（測定値: 右肩pitch/右肘が指令に追従しているか）。間隔は SIM_LOG_EVERY[s] で調整。
         if time.time() - last_log > float(os.getenv("SIM_LOG_EVERY", "2.0")):
             qm = np.asarray(robot.get_joint_positions(), dtype=float)
+            # ★1369行目付近と同根: get_joint_positions() が 0次元/空を返す一瞬
+            # （Physics Simulation View 未生成）があり、ここは pub_every 経由の
+            # lowstate 側ガード（1758行目付近）が必ずしも同じ step で走らない
+            # ため独立にガードする（2026-09-12 IndexError クラッシュ対策）。
+            if qm.ndim == 0 or qm.size == 0:
+                last_log = time.time()
+                continue
             mq22 = qm[ii22] if ii22 is not None else float("nan")
             mq25 = qm[ii25] if ii25 is not None else float("nan")
             _fr = ""

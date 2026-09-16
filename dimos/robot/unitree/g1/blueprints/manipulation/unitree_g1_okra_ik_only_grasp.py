@@ -183,6 +183,14 @@ _GRIP_KD = float(os.getenv("OKRA_GRIP_KD", "0.05"))
 # close the gripper; either alone leaves it dry-run (fail-safe, explicit opt-in only).
 _GRIP_LIVE = os.getenv("OKRA_NOACT_GRIP_LIVE", "").strip() == "1"
 
+# No physical Dex1 attached (e.g. hand removed for a reach-only accuracy run): skip
+# the gripper modules entirely. Without this, G1GripperConnection fail-safe-refuses
+# to start (no rt/dex1/*/state) and tears the whole app down. Reach-only:
+# IkReachBridge still fires reach_done, it just has no consumer. Same knob and same
+# semantics as unitree_g1_okra_ik_only_grasp_zed.py (added 2026-09-08 so the head-
+# D435i control run can be launched under EXACTLY the chest-ZED run's conditions).
+_NO_GRIPPER = os.getenv("OKRA_NO_GRIPPER", "").strip() == "1"
+
 
 def _camera_info_overlay(ci):  # type: ignore[no-untyped-def]
     """RerunBridge visual_override: log the camera Pinhole at the COLOR IMAGE
@@ -213,8 +221,13 @@ def _pointcloud_rgb_overlay(pc):  # type: ignore[no-untyped-def]
 
 
 _HANDOFF_MSG = (
-    f"NO ACT -- scripted gripper close_q={_CLOSE_Q:.3f} (OKRA_NOACT_CLOSE_Q, UNTUNED) "
-    f"on reach_done, debounce={_DEBOUNCE_S}s | target Z offset = {_TARGET_Z_OFFSET:+.3f} m "
+    (
+        "REACH-ONLY (OKRA_NO_GRIPPER=1): no Dex1 attached, gripper modules skipped "
+        if _NO_GRIPPER
+        else f"NO ACT -- scripted gripper close_q={_CLOSE_Q:.3f} (OKRA_NOACT_CLOSE_Q, UNTUNED) "
+        f"on reach_done, debounce={_DEBOUNCE_S}s "
+    )
+    + f"| target Z offset = {_TARGET_Z_OFFSET:+.3f} m "
     f"| standoff = {_STANDOFF_M:.3f} m (0.0 = reach the clicked centroid itself, no ACT to close the gap) "
     f"| cut point = {_CUT_BELOW_CENTROID_M:.3f} m below the clicked centroid (OKRA_CUT_BELOW_CENTROID_M) "
     f"| kp_arm={_KP_ARM:.1f} kd_arm={_KD_ARM:.1f} (proven default 80.0/3.0, OKRA_NOACT_KP_ARM/KD_ARM)"
@@ -238,7 +251,7 @@ else:
         f"NIC={_NIC!r}. {_HANDOFF_MSG}."
     )
 
-unitree_g1_okra_ik_only_grasp = autoconnect(
+_MODULES = [
     # Pin 'rerun' so RerunWebSocketServer (the clicked_point producer) is present.
     vis_module(
         "rerun",
@@ -269,23 +282,6 @@ unitree_g1_okra_ik_only_grasp = autoconnect(
         fixed_orientation_xyzw=_FIXED_ORI,
         gripper_offset_xyz=_TIP_OFFSET,  # bare Dex1 default; override for the cutter
     ),
-    GripperGraspOnReach.blueprint(
-        close_q=_CLOSE_Q,
-        debounce_s=_DEBOUNCE_S,
-        # Independent of arm liveness: needs IK_REACH_LIVE=1 AND OKRA_NOACT_GRIP_LIVE=1
-        # to actually close (see _GRIP_LIVE above) -- lets the first LIVE runs verify the
-        # reach alone before trusting the untuned close_q on a real grasp.
-        dry_run=not (_LIVE and _GRIP_LIVE),
-        open_q=_OPEN_Q,  # standardize the opening on every click (None = off)
-        # Same confirm gate as IkReachBridge (identical params): the jaw opens only
-        # on the confirming click, so lone/phantom clicks move nothing at all.
-        confirm_click=_CONFIRM_CLICK,
-        confirm_min_gap_s=_CONFIRM_MIN_GAP_S,
-        confirm_window_s=_CONFIRM_WINDOW_S,
-        # Same frame filter as the bridge, so a rejected click (wrong entity, e.g.
-        # the click marker) can never desync the two confirm gates.
-        expected_click_frame="/world/camera/pointcloud",
-    ),
     G1ArmSdkConnection.blueprint(
         network_interface=_NIC,
         arm_velocity_limit=_ARM_VEL_LIMIT,
@@ -296,14 +292,36 @@ unitree_g1_okra_ik_only_grasp = autoconnect(
         # ramp weight->0 (hand the arm back to the onboard controller), then 'q' quits.
         enable_disconnect=True,
     ),
-    G1GripperConnection.blueprint(
-        network_interface=_NIC,
-        dex1_topic_prefix=_DEX1_PREFIX,
-        kp=_GRIP_KP,
-        kd=_GRIP_KD,
-        # No hold_target_q override: the gripper must obey our gripper_target.
-    ),
-).transports(
+]
+if not _NO_GRIPPER:
+    _MODULES += [
+        GripperGraspOnReach.blueprint(
+            close_q=_CLOSE_Q,
+            debounce_s=_DEBOUNCE_S,
+            # Independent of arm liveness: needs IK_REACH_LIVE=1 AND OKRA_NOACT_GRIP_LIVE=1
+            # to actually close (see _GRIP_LIVE above) -- lets the first LIVE runs verify the
+            # reach alone before trusting the untuned close_q on a real grasp.
+            dry_run=not (_LIVE and _GRIP_LIVE),
+            open_q=_OPEN_Q,  # standardize the opening on every click (None = off)
+            # Same confirm gate as IkReachBridge (identical params): the jaw opens only
+            # on the confirming click, so lone/phantom clicks move nothing at all.
+            confirm_click=_CONFIRM_CLICK,
+            confirm_min_gap_s=_CONFIRM_MIN_GAP_S,
+            confirm_window_s=_CONFIRM_WINDOW_S,
+            # Same frame filter as the bridge, so a rejected click (wrong entity, e.g.
+            # the click marker) can never desync the two confirm gates.
+            expected_click_frame="/world/camera/pointcloud",
+        ),
+        G1GripperConnection.blueprint(
+            network_interface=_NIC,
+            dex1_topic_prefix=_DEX1_PREFIX,
+            kp=_GRIP_KP,
+            kd=_GRIP_KD,
+            # No hold_target_q override: the gripper must obey our gripper_target.
+        ),
+    ]
+
+unitree_g1_okra_ik_only_grasp = autoconnect(*_MODULES).transports(
     {
         ("motor_states", JointState): LCMTransport("/g1/motor_states", JointState),
         ("arm_target", JointState): LCMTransport("/g1/arm_target", JointState),

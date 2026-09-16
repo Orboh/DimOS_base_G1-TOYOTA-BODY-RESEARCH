@@ -97,6 +97,14 @@ class GripperGraspOnReachConfig(ModuleConfig):
     # (observed 2026-07-22 reach #1: blade arrived closed). Empty = accept all
     # frames (legacy).
     expected_click_frame: str = ""
+    # Settle wait [s] after commanding the close, before firing grasp_done. No VLM,
+    # no force/current feedback -- purely a fixed open-loop timer (mirrors
+    # IkReachBridge's reach_done wait: this rig has no reliable "gripper arrived"
+    # signal, so time-based is the honest first cut). Tune from hardware: watch
+    # right_gripper_state settle onto close_q and pick a margin above that. Fires
+    # in BOTH dry_run and LIVE (so a downstream consumer, e.g. a basket-deposit
+    # bridge, can be wiring-tested without driving the real gripper).
+    grasp_settle_s: float = 1.5
 
 
 class GripperGraspOnReach(Module):
@@ -108,6 +116,7 @@ class GripperGraspOnReach(Module):
     clicked_point: In[PointStamped]  # new cycle trigger: ensure standard opening
     right_gripper_state: In[JointState]  # measured Dex1 q (from G1GripperConnection)
     gripper_target: Out[JointState]  # right Dex1 target q (position[0])
+    grasp_done: Out[Bool]  # fired grasp_settle_s after the close command -> e.g. BasketDepositBridge
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -119,6 +128,7 @@ class GripperGraspOnReach(Module):
             window_s=self.config.confirm_window_s,
             min_gap_s=self.config.confirm_min_gap_s,
         )
+        self._settle_timers: list[threading.Timer] = []
 
     @rpc
     def start(self) -> None:
@@ -139,6 +149,10 @@ class GripperGraspOnReach(Module):
 
     @rpc
     def stop(self) -> None:
+        with self._lock:
+            timers, self._settle_timers = self._settle_timers, []
+        for t in timers:
+            t.cancel()
         super().stop()
 
     def _on_gripper_state(self, msg: JointState) -> None:
@@ -206,19 +220,36 @@ class GripperGraspOnReach(Module):
                 f"GripperGraspOnReach: [DRY-RUN] would publish gripper_target "
                 f"q={self.config.close_q:.3f} (no ACT, no arm motion)."
             )
-            return
-        logger.info(
-            f"GripperGraspOnReach: reach_done -> closing gripper q={self.config.close_q:.3f} "
-            "(scripted, no ACT)."
-        )
-        self.gripper_target.publish(
-            JointState(
-                name=[_RIGHT_GRIPPER_JOINT],
-                position=[self.config.close_q],
-                velocity=[0.0],
-                effort=[0.0],
+        else:
+            logger.info(
+                f"GripperGraspOnReach: reach_done -> closing gripper q={self.config.close_q:.3f} "
+                "(scripted, no ACT)."
             )
+            self.gripper_target.publish(
+                JointState(
+                    name=[_RIGHT_GRIPPER_JOINT],
+                    position=[self.config.close_q],
+                    velocity=[0.0],
+                    effort=[0.0],
+                )
+            )
+        # No force/current feedback in this loop (SAFETY docstring): "closed" is a
+        # fixed open-loop wait, not a measured convergence. Fires in dry_run too, so
+        # a downstream consumer (e.g. BasketDepositBridge) stays wiring-testable.
+        settle_s = max(0.0, float(self.config.grasp_settle_s))
+        timer = threading.Timer(settle_s, self._fire_grasp_done)
+        timer.daemon = True
+        with self._lock:
+            self._settle_timers = [t for t in self._settle_timers if t.is_alive()]
+            self._settle_timers.append(timer)
+        timer.start()
+
+    def _fire_grasp_done(self) -> None:
+        logger.info(
+            f"GripperGraspOnReach: grasp settle wait ({self.config.grasp_settle_s:.2f}s) done "
+            "-> firing grasp_done."
         )
+        self.grasp_done.publish(Bool(data=True))
 
 
 __all__ = ["GripperGraspOnReach", "GripperGraspOnReachConfig"]

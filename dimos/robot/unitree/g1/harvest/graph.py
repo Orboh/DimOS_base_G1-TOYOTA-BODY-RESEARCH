@@ -61,6 +61,7 @@ background safety interrupt.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from langgraph.graph import END, START, StateGraph
@@ -76,6 +77,9 @@ from dimos.robot.unitree.g1.harvest.blackboard import (
 )
 from dimos.robot.unitree.g1.harvest.safety import NullSafetyGate, SafetyGate
 from dimos.robot.unitree.g1.harvest.skills import HarvestSkills
+from dimos.utils.logging_config import setup_logger
+
+logger = setup_logger()
 
 # Node names (also used as routing targets) — kept as constants to avoid typos.
 DETECT = "detect"
@@ -140,16 +144,40 @@ def build_harvest_graph(
             pending.pop(okra_id, None)
         return pending
 
+    def _wait_after_voice() -> None:
+        """§6 HMI: pause after speaking, before the action the phrase described.
+
+        The G1 speaker (``G1SpeakerAnnouncer.say``) enqueues audio and returns
+        immediately — the harvest loop does not block on playback. Without this
+        wait, a node that speaks and then immediately acts (moves the base,
+        drives the arm) can visibly move before, or while, the phrase is still
+        being synthesised, so the announcement no longer matches what the robot
+        is doing. ``cfg.voice_lead_s`` (default 0.0 — no wait) sets the delay.
+        """
+        if cfg.voice_lead_s > 0:
+            time.sleep(cfg.voice_lead_s)
+
     # Nodes
 
     def detect(state: HarvestState) -> HarvestState:
         """Phase 2: observe the current view; list every okra in it."""
         gate.checkpoint()  # §6: block here while a safety hazard is active
         okra = skills.detect_okra()
+        # 「見つけたが 3D 化できず捨てた」件数。空の検出の理由が「本当に無い」なのか
+        # 「camera_info/深度がまだ来ていない」なのかを区別する唯一の手掛かり
+        # （2026-09-14: 音声も既定ログも同一で、実機で切り分けできなかった）。
+        # 旧実装のスキル（この任意メソッドを持たない）とも動くよう getattr で読む。
+        _dropped_fn = getattr(skills, "last_detect_dropped", None)
+        dropped = int(_dropped_fn() or 0) if callable(_dropped_fn) else 0
         iterations = state.get("iterations", 0) + 1
         if iterations == 1:
             voice.say(announce.start())
-        voice.say(announce.detect_result(len(okra)))
+        voice.say(announce.detect_result(len(okra), dropped))
+        if not okra and dropped:
+            logger.warning(
+                f"detect: 有効な検出0件だが {dropped} 件を3D化できず破棄している。"
+                "オクラが無いのではなくカメラ情報待ちの可能性が高い（スイープ前に要確認）"
+            )
         # Remember every ripe, not-yet-excluded okra in the odometry frame, so we
         # can return for ones we pass. Refreshes the estimate on each sighting.
         offset = _offset(state)
@@ -167,7 +195,12 @@ def build_harvest_graph(
             okra_visible=okra,
             iterations=iterations,
             pending=pending,
-            log=[*state.get("log", []), f"detect: saw {len(okra)} okra (iter {iterations})"],
+            log=[
+                *state.get("log", []),
+                f"detect: saw {len(okra)} okra (iter {iterations}"
+                + (f", dropped {dropped}" if dropped else "")
+                + ")",
+            ],
         )
 
     def select(state: HarvestState) -> HarvestState:
@@ -256,14 +289,29 @@ def build_harvest_graph(
         )
 
     def grasp(state: HarvestState) -> HarvestState:
-        """Phase 5: reach + grasp the target (okra-ACT on the real robot)."""
+        """Phase 5: reach + grasp the target (okra-ACT on the real robot).
+
+        The "grasping now" phrase is spoken by SELECT (first attempt) or here
+        via ``regrasp()`` (retry); either way, wait for it (§6 HMI,
+        ``cfg.voice_lead_s``) before the arm actually moves.
+        """
         gate.checkpoint()  # §6: do not start a grasp while paused for safety
         target = find_okra(state, state.get("target_id"))
         attempts = state.get("grasp_attempts", 0) + 1
         if attempts > 1:
             voice.say(announce.regrasp())
+        _wait_after_voice()
         if target is not None:
             skills.grasp_okra(target, cfg.grasp_force)
+        else:
+            # target_id が立っているのに okra_visible に無い＝腕を一切動かさずに
+            # VERIFY へ抜ける。旧実装は無言だったため「手が動かない」としか観測
+            # できなかった（2026-09-14）。必ず痕跡を残す。
+            logger.warning(
+                f"grasp: target_id={state.get('target_id')!r} が okra_visible に見つからない "
+                f"(可視 {[o.id for o in state.get('okra_visible', [])]})。"
+                "腕を動かさずスキップする"
+            )
         return HarvestState(
             grasp_attempts=attempts,
             log=[
@@ -343,9 +391,9 @@ def build_harvest_graph(
         # Ridge safety: never command a forward move that would bring the target
         # closer than the standoff minimum.
         forward = min(forward, approach.pos_3d.get("y", 0.0) - cfg.standoff_min)
-        skills.relative_move(lateral, forward)
-        new_offset = _moved(state, lateral, forward)
-        # Announce the dominant direction of the move (depth wins ties).
+        # Announce the dominant direction of the move (depth wins ties) BEFORE
+        # actually moving (§6 HMI) — the direction only depends on the computed
+        # (lateral, forward), not on having moved yet.
         if abs(forward) >= abs(lateral) and abs(forward) > 1e-9:
             direction = "forward" if forward > 0 else "back"
         elif abs(lateral) > 1e-9:
@@ -353,6 +401,9 @@ def build_harvest_graph(
         else:
             direction = "forward"
         voice.say(announce.approaching(direction))
+        _wait_after_voice()
+        skills.relative_move(lateral, forward)
+        new_offset = _moved(state, lateral, forward)
         return HarvestState(
             reposition_attempts=attempts,
             robot_offset=new_offset,
@@ -370,10 +421,11 @@ def build_harvest_graph(
         moves in the -x (left) direction by ``advance_step``.
         """
         gate.checkpoint()  # §6
-        skills.relative_move(-cfg.advance_step, 0.0)
         empty = state.get("empty_advances", 0) + 1
         if empty == 1:  # announce once per dry spell, not every sweep step
             voice.say(announce.searching())
+            _wait_after_voice()
+        skills.relative_move(-cfg.advance_step, 0.0)
         return HarvestState(
             empty_advances=empty,
             reposition_attempts=0,
@@ -412,8 +464,9 @@ def build_harvest_graph(
         lateral = rel_x - cfg.reach.x_center
         forward = rel_y - cfg.reach.y_center
         forward = min(forward, rel_y - cfg.standoff_min)  # ridge safety
-        skills.relative_move(lateral, forward)
         voice.say(announce.revisiting())
+        _wait_after_voice()
+        skills.relative_move(lateral, forward)
         return HarvestState(
             revisit_attempts=attempts,
             robot_offset=_moved(state, lateral, forward),
@@ -431,8 +484,15 @@ def build_harvest_graph(
         If a new station is reached, reset the per-station memory (odometry,
         pending, exclusions, sweep counters) and resume detecting there. If the
         whole field is done, flag it so routing ends the run.
+
+        Two-part announcement (§6 HMI): "this station is done" is true either
+        way, so it is said BEFORE moving; "moving to the next one" is only true
+        once ``go_to_next_station()`` confirms one exists, so it is said after
+        (no move to announce if the field is done — ``finish`` covers that).
         """
         gate.checkpoint()  # §6
+        voice.say(announce.station_done())
+        _wait_after_voice()
         moved = skills.go_to_next_station()
         if not moved:
             return HarvestState(
@@ -459,8 +519,9 @@ def build_harvest_graph(
     def swap_basket(state: HarvestState) -> HarvestState:
         """§7: basket full — transport it and swap in an empty one, then resume."""
         gate.checkpoint()  # §6
-        skills.swap_basket()
         voice.say(announce.basket_swap())
+        _wait_after_voice()
+        skills.swap_basket()
         return HarvestState(
             basket_count=0,
             basket_full=False,
@@ -478,16 +539,32 @@ def build_harvest_graph(
     # Routers: the conditional edges
 
     def route_after_select(state: HarvestState) -> str:
+        # ★一時デバッグ計装（2026-09-12）: 「picks=1でadvance_leftが一度も
+        # 発火せずNEXT_STATIONへ直行する」という未解明の不具合を追うため、
+        # ルーティング判断に使う全フィールドを可視化する。原因判明後は削除する。
+        _dec_dbg = (
+            f"[route_after_select] iterations={state.get('iterations', 0)}/"
+            f"{cfg.max_harvest_iterations} target_id={state.get('target_id')!r} "
+            f"approach_id={state.get('approach_id')!r} "
+            f"empty_advances={state.get('empty_advances', 0)}/{cfg.max_empty_advances} "
+            f"pending={list(state.get('pending', {}).keys())}"
+        )
         if state.get("iterations", 0) >= cfg.max_harvest_iterations:
+            logger.info(f"{_dec_dbg} -> FINISH(iterations cap)")
             return FINISH
         if state.get("target_id"):
+            logger.info(f"{_dec_dbg} -> GRASP")
             return GRASP
         if state.get("approach_id"):
+            logger.info(f"{_dec_dbg} -> REPOSITION")
             return REPOSITION
         if state.get("empty_advances", 0) < cfg.max_empty_advances:
+            logger.info(f"{_dec_dbg} -> ADVANCE_LEFT")
             return ADVANCE_LEFT  # §5: sweep left (right→left harvest) to look for more
         if state.get("pending"):
+            logger.info(f"{_dec_dbg} -> REVISIT")
             return REVISIT  # §5: swept enough — go back for okra we passed
+        logger.info(f"{_dec_dbg} -> NEXT_STATION")
         return NEXT_STATION  # §Phase 1: station done → move to the next one
 
     def route_after_verify(state: HarvestState) -> str:

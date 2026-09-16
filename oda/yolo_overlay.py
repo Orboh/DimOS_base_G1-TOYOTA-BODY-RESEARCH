@@ -52,7 +52,13 @@ _HZ = float(os.getenv("OKRA_YOLO_HZ", "3.0"))
 
 def _annotate(model, bgr, conf):
     """1フレーム推論して注釈済みBGR画像と検出数を返す."""
-    r = model.predict(bgr, conf=conf, verbose=False)[0]
+    # 推論解像度。既定640に縮小するとZED(1280x720)ではオクラが小さすぎて検出0件になる
+    # (2026-09-07 実測: 同一フレームで 640->0件 / 960->conf0.57 / 1280->conf0.90 / 1920->conf0.76)。
+    # 既定は 960: 1280 は検出が最良だが VRAM 8GB のこのPCでは ZED深度+点群+ビューアと同時に
+    # 載らず、2026-09-07 18:04 に NVRM Out of memory でシステム全体が落ちた。
+    # 学習画像はRoboflowの640px近接切り出しで、被写体が画面の大部分を占めていたため。
+    imgsz = int(os.getenv("OKRA_YOLO_IMGSZ", "960"))
+    r = model.predict(bgr, conf=conf, imgsz=imgsz, verbose=False)[0]
     out = r.plot()  # masks+boxes+conf を描いたBGR
     n = len(r.boxes)
     import cv2

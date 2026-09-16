@@ -167,3 +167,64 @@ def test_no_cut_gate_allows_cut() -> None:
     )
     assert seq.run_episode(Okra(id="okra_5")) is True
     assert grip_pub[0].position[0] == 4.4
+
+
+def test_basket_deposit_then_return_to_rest_in_order() -> None:
+    """After a successful basket deposit, return_to_rest_fn runs once, last."""
+    events: list[str] = []
+    seq = GraspSequence(
+        ik_solve=lambda o: _ok_sol(),
+        publish_gripper=lambda js: events.append("cut"),
+        place_basket_fn=lambda: events.append("basket"),
+        return_to_rest_fn=lambda: (events.append("rest"), True)[1],
+    )
+    assert seq.run_episode(Okra(id="okra_6")) is True
+    assert events == ["cut", "basket", "rest"]
+
+
+def test_no_basket_deposit_skips_return_to_rest() -> None:
+    """place_basket_fn=None -> return_to_rest_fn is never called."""
+    calls: list[str] = []
+    seq = GraspSequence(
+        ik_solve=lambda o: _ok_sol(),
+        return_to_rest_fn=lambda: (calls.append("rest"), True)[1],
+    )
+    assert seq.run_episode(Okra(id="okra_7")) is True
+    assert calls == []
+
+
+def test_post_reach_verify_fn_runs_after_ik_before_act() -> None:
+    """post_reach_verify_fn (到達確認) runs once, after IK settles, before ACT."""
+    events: list[str] = []
+
+    class _TrackedAct(_FakeAct):
+        def run_episode(self, okra=None, force=None) -> bool:
+            events.append("act")
+            return super().run_episode(okra, force)
+
+    act = _TrackedAct()
+    seq = GraspSequence(
+        ik_solve=lambda o: (events.append("ik"), _ok_sol())[1],
+        act_module=act,
+        post_reach_verify_fn=lambda: events.append("verify"),
+    )
+    ok = seq.run_episode(Okra(id="okra_8"))
+    assert ok is True
+    assert events == ["ik", "verify", "act"]
+
+
+def test_post_reach_verify_fn_none_is_backward_compatible() -> None:
+    """post_reach_verify_fn=None (既定) -> 何も呼ばれず、従来通り成功する。"""
+    seq = GraspSequence(ik_solve=lambda o: _ok_sol())
+    assert seq.run_episode(Okra(id="okra_9")) is True
+
+
+def test_post_reach_verify_fn_skipped_when_ik_unreachable() -> None:
+    """IK unreachable -> post_reach_verify_fn は一度も呼ばれない。"""
+    calls: list[str] = []
+    seq = GraspSequence(
+        ik_solve=lambda o: None,
+        post_reach_verify_fn=lambda: calls.append("verify"),
+    )
+    assert seq.run_episode(Okra(id="okra_10")) is False
+    assert calls == []

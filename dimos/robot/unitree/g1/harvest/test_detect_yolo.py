@@ -86,6 +86,50 @@ def test_low_confidence_dropped() -> None:
     assert _detector(dets, min_confidence=0.5).detect() == []
 
 
+# track_id=-1 の疑似ID化（2026-09-15）。
+# track_id=-1 は ultralytics がそのフレームで一件もトラックを確立できなかった
+# 時の共通フォールバック値で、同一フレーム内の複数の異なる実に同じ -1 が振られ
+# うる。excluded_ids は文字列IDの一致でしか判定しないため、-1 のままだと
+# 「1個収穫→除外」の後、別の実がまた -1 になると誤って同一個体とみなされ二度と
+# 狙われなくなる（実機LIVEで okra_-1 の重複を確認）。位置を1cm丸めた疑似IDに
+# 置き換えて回避する。
+
+
+def test_track_id_minus1_uses_distinct_position_ids() -> None:
+    """track_id=-1 でも、位置が離れていれば別の疑似IDになる。"""
+    dets = [
+        _Det("okra", (100, 100, 140, 140), track_id=-1),
+        _Det("okra", (400, 100, 440, 140), track_id=-1),
+    ]
+    positions = {
+        (100, 100, 140, 140): {"x": 0.10, "y": 0.40, "z": 0.20},
+        (400, 100, 440, 140): {"x": 0.50, "y": 0.40, "z": 0.20},
+    }
+    okra = _detector(dets, pixel_to_base=lambda u, v, det: positions[det.bbox]).detect()
+    assert len(okra) == 2
+    assert okra[0].id == "okra_pos_0.1_0.4_0.2"
+    assert okra[1].id == "okra_pos_0.5_0.4_0.2"
+    assert okra[0].id != okra[1].id
+
+
+def test_track_id_minus1_small_jitter_maps_to_same_id() -> None:
+    """実測2mm相当のブレは1cm丸めで吸収され、同じ疑似IDになる。"""
+    dets = [_Det("okra", (300, 220, 340, 260), track_id=-1)]
+    id_a = _detector(
+        dets, pixel_to_base=lambda u, v, det: {"x": 0.301, "y": 0.402, "z": 0.199}
+    ).detect()[0].id
+    id_b = _detector(
+        dets, pixel_to_base=lambda u, v, det: {"x": 0.299, "y": 0.398, "z": 0.201}
+    ).detect()[0].id
+    assert id_a == id_b == "okra_pos_0.3_0.4_0.2"
+
+
+def test_track_id_present_keeps_track_based_id() -> None:
+    """track_id が確立していれば従来通りそのままIDに使う（回帰）。"""
+    dets = [_Det("okra", (300, 220, 340, 260), track_id=7)]
+    assert _detector(dets).detect()[0].id == "okra_7"
+
+
 def test_image_region_sign_from_pixel() -> None:
     # A box on the right half of the image -> +x (region R); left half -> -x (L).
     right = _detector([_Det("okra", (500, 220, 540, 260), track_id=1)]).detect()[0]
@@ -159,3 +203,126 @@ class _FakeSkills:
 
     def record_harvest(self, record):
         pass
+
+
+# 3D化できずに捨てた件数の可視化（2026-09-14）。
+# 「本当にオクラが無い」と「camera_info/深度がまだ来ていない」は、どちらも detect() が
+# [] を返すため区別できなかった（音声も既定ログも同一）。last_dropped がその区別を担う。
+
+
+def test_last_dropped_counts_undeprojectable_detections() -> None:
+    dets = [
+        _Det("okra", (300, 220, 340, 260), track_id=1),
+        _Det("okra", (100, 220, 140, 260), track_id=2),
+    ]
+    det = _detector(dets, pixel_to_base=lambda u, v, d: None)  # 3D化が常に失敗
+    assert det.detect() == []
+    assert det.last_dropped == 2
+
+
+def test_last_dropped_is_zero_when_all_deprojected() -> None:
+    det = _detector([_Det("okra", (300, 220, 340, 260), track_id=1)])
+    assert len(det.detect()) == 1
+    assert det.last_dropped == 0
+
+
+def test_last_dropped_resets_between_calls() -> None:
+    """前回の破棄件数が残ると「カメラ準備中」を誤って言い続ける。"""
+    dets = [_Det("okra", (300, 220, 340, 260), track_id=1)]
+    fail = {"on": True}
+    det = _detector(
+        dets, pixel_to_base=lambda u, v, d: None if fail["on"] else {"x": 0.0, "y": 0.45, "z": 0.0}
+    )
+    det.detect()
+    assert det.last_dropped == 1
+    fail["on"] = False
+    assert len(det.detect()) == 1
+    assert det.last_dropped == 0
+
+
+def test_class_filtered_detections_are_not_counted_as_dropped() -> None:
+    """対象クラス外/低信頼は「3D化できなかった」ではないので数えない。"""
+    dets = [
+        _Det("person", (10, 10, 50, 50), track_id=1),
+        _Det("okra", (300, 220, 340, 260), confidence=0.1, track_id=2),
+    ]
+    det = _detector(dets, min_confidence=0.5)
+    assert det.detect() == []
+    assert det.last_dropped == 0
+
+
+def test_factory_exposes_detector_for_dropped_count() -> None:
+    """``make_yolo_detect_okra`` の戻り値から破棄件数を辿れる（real_skills が使う）。"""
+    from dimos.robot.unitree.g1.harvest.detect_yolo import make_yolo_detect_okra
+    from dimos.robot.unitree.g1.harvest.real_skills import DimosHarvestSkills
+
+    detect_fn = make_yolo_detect_okra(
+        frame_getter=lambda: _Frame(),
+        target_classes={"okra"},
+        detector=_StubDetector([_Det("okra", (300, 220, 340, 260), track_id=1)]),
+        pixel_to_base=lambda u, v, d: None,
+    )
+    assert detect_fn() == []
+    assert detect_fn.detector.last_dropped == 1
+
+    skills = DimosHarvestSkills(
+        move_cmd=lambda *a, **k: None,
+        detect_fn=detect_fn,
+        grasp_fn=lambda *a, **k: None,
+        verify_fn=lambda: True,
+        next_station_fn=lambda: False,
+        swap_fn=lambda: None,
+        record_fn=lambda r: None,
+    )
+    assert skills.detect_okra() == []
+    assert skills.last_detect_dropped() == 1
+
+
+# conf しきい値の一元化（2026-09-15）。
+# make_yolo_detect_okra(conf=...) は Yolo2DDetector 側の推論しきい値と
+# YoloOkraDetector.min_confidence の両方に同じ値を流す一元窓口。ここでは
+# detector を注入して後者への伝播だけを確認する（Yolo2DDetector 自体への
+# 伝播は dimos.perception 側の責務・実重み不要のユニット範囲外）。
+
+
+def test_make_yolo_detect_okra_conf_filters_low_confidence() -> None:
+    """既定 conf=0.5 未満の検出は min_confidence として弾かれる。"""
+    from dimos.robot.unitree.g1.harvest.detect_yolo import make_yolo_detect_okra
+
+    detect_fn = make_yolo_detect_okra(
+        frame_getter=lambda: _Frame(),
+        target_classes={"okra"},
+        detector=_StubDetector([_Det("okra", (300, 220, 340, 260), confidence=0.3, track_id=1)]),
+        pixel_to_base=lambda u, v, d: {"x": 0.30, "y": 0.45, "z": 0.80},
+    )
+    assert detect_fn() == []
+
+
+def test_make_yolo_detect_okra_conf_override_lets_it_through() -> None:
+    """conf を明示的に下げれば、既定なら弾かれる検出も通る。"""
+    from dimos.robot.unitree.g1.harvest.detect_yolo import make_yolo_detect_okra
+
+    detect_fn = make_yolo_detect_okra(
+        frame_getter=lambda: _Frame(),
+        target_classes={"okra"},
+        detector=_StubDetector([_Det("okra", (300, 220, 340, 260), confidence=0.3, track_id=1)]),
+        pixel_to_base=lambda u, v, d: {"x": 0.30, "y": 0.45, "z": 0.80},
+        conf=0.1,
+    )
+    assert len(detect_fn()) == 1
+
+
+def test_last_detect_dropped_is_zero_without_detector_attribute() -> None:
+    """検出器をぶら下げない detect_fn（VLM経路など）でも壊れない。"""
+    from dimos.robot.unitree.g1.harvest.real_skills import DimosHarvestSkills
+
+    skills = DimosHarvestSkills(
+        move_cmd=lambda *a, **k: None,
+        detect_fn=lambda: [],
+        grasp_fn=lambda *a, **k: None,
+        verify_fn=lambda: True,
+        next_station_fn=lambda: False,
+        swap_fn=lambda: None,
+        record_fn=lambda r: None,
+    )
+    assert skills.last_detect_dropped() == 0

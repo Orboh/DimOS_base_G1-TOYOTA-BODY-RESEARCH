@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<!--
+  Copyright 2026 Dimensional Inc.
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  harvest グラフ・エディタ GUI（単一HTMLファイル、ビルドステップ無し）。
+
+  React / React Flow はブラウザ上で esm.sh 経由の ESM import として読み込む。
+  react / react-dom は import map で一箇所に固定し、reactflow 側は
+  `?external=react,react-dom` を付けて「自分ではバンドルせず import map の
+  react を使う」よう指示している。これをしないと esm.sh がそれぞれ別の
+  React インスタンスを配ってしまい、"Invalid hook call" で丸ごと壊れる。
+
+  スコープ: ここで編集できるのは「グラフの配線」だけ（ノードの追加/削除/
+  リネーム、エッジの追加/削除、条件分岐マッピングの編集）。ノードの中身
+  （Pythonロジック）やルーター関数の判定ロジック自体はこのGUIの対象外。
+-->
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Harvest Graph Editor</title>
+<script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@18",
+    "react-dom": "https://esm.sh/react-dom@18",
+    "react-dom/client": "https://esm.sh/react-dom@18/client",
+    "reactflow": "https://esm.sh/reactflow@11?external=react,react-dom"
+  }
+}
+</script>
+<link rel="stylesheet" href="https://esm.sh/reactflow@11/dist/style.css" />
+
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f5f5f4;
+    --panel-bg: #ffffff;
+    --border: #d6d3d1;
+    --text: #1c1917;
+    --muted: #78716c;
+    --accent: #2563eb;
+    --danger: #dc2626;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  #root { height: 100vh; display: flex; flex-direction: column; }
+
+  .toolbar {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    background: var(--panel-bg);
+    border-bottom: 1px solid var(--border);
+  }
+  .toolbar h1 {
+    font-size: 15px;
+    font-weight: 600;
+    margin: 0 12px 0 0;
+    white-space: nowrap;
+  }
+  .toolbar .spacer { flex: 1; }
+  .toolbar .status { font-size: 12px; color: var(--muted); margin-right: 8px; }
+
+  button {
+    font: inherit;
+    font-size: 13px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: #fafaf9;
+    color: var(--text);
+    cursor: pointer;
+  }
+  button:hover { background: #f0efed; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: white; }
+  button.primary:hover { background: #1d4ed8; }
+  button.danger { color: var(--danger); }
+
+  .main {
+    flex: 1 1 auto;
+    display: flex;
+    min-height: 0;
+  }
+  .canvas-wrap { flex: 1 1 auto; min-width: 0; position: relative; }
+  .sidebar {
+    flex: 0 0 340px;
+    border-left: 1px solid var(--border);
+    background: var(--panel-bg);
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
+  .sidebar section { padding: 12px 14px; border-bottom: 1px solid var(--border); }
+  .sidebar h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 8px; }
+  .sidebar label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 4px; }
+  .sidebar input[type="text"] {
+    width: 100%; font: inherit; font-size: 13px; padding: 5px 8px;
+    border: 1px solid var(--border); border-radius: 5px;
+  }
+  .sidebar .row { display: flex; align-items: center; gap: 6px; }
+  .hint { font-size: 12px; color: var(--muted); line-height: 1.5; }
+  .error { font-size: 12px; color: var(--danger); white-space: pre-wrap; margin-top: 6px; }
+
+  textarea#codeOut {
+    width: 100%;
+    height: 320px;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.5;
+    padding: 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    resize: vertical;
+    background: #0b1021;
+    color: #d7e0ff;
+  }
+
+  .legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); align-items: center; }
+  .legend .swatch { display: inline-block; width: 22px; height: 0; border-top: 2px solid var(--text); vertical-align: middle; margin-right: 4px; }
+  .legend .swatch.dashed { border-top-style: dashed; }
+</style>
+</head>
+<body>
+
+<div id="root"></div>
+
+<script type="module">
+  import React, { useState, useCallback, useEffect, useMemo, useRef } from "react";
+  import { createRoot } from "react-dom/client";
+  import ReactFlow, {
+    Background,
+    Controls,
+    MiniMap,
+    ReactFlowProvider,
+    useReactFlow,
+    addEdge,
+    applyNodeChanges,
+    applyEdgeChanges,
+    MarkerType,
+  } from "reactflow";
+
+  const e = React.createElement;
+
+  // LangGraph が予約している擬似ノード（開始/終了）。リネーム・削除は禁止する。
+  const START_ID = "__start__";
+  const END_ID = "__end__";
+  const PROTECTED_IDS = new Set([START_ID, END_ID]);
+
+  /** サーバーの /api/graph JSON → React Flow のノード配列に変換する。 */
+  function nodesFromApi(apiNodes) {
+    return apiNodes.map((n) => ({
+      id: n.id,
+      position: n.position || { x: 0, y: 0 },
+      data: { label: n.label || n.id },
+      type: n.id === START_ID ? "input" : n.id === END_ID ? "output" : "default",
+    }));
+  }
+
+  /** サーバーの /api/graph JSON → React Flow のエッジ配列に変換する。 */
+  function edgesFromApi(apiEdges) {
+    return apiEdges.map((edge) => ({
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      data: { conditional: !!edge.conditional, label: edge.label ?? null },
+    }));
+  }
+
+  /** 表示用に conditional フラグから見た目（破線 + ラベル）を組み立てる。 */
+  function decorate(edge) {
+    const conditional = !!(edge.data && edge.data.conditional);
+    const label = edge.data && edge.data.label;
+    return {
+      ...edge,
+      label: conditional ? (label || edge.target) : undefined,
+      style: conditional
+        ? { strokeDasharray: "6 4", stroke: "#78716c" }
+        : { stroke: "#44403c" },
+      labelBgStyle: { fill: "#f5f5f4", fillOpacity: 0.9 },
+      labelStyle: { fontSize: 11, fill: "#44403c" },
+      markerEnd: { type: MarkerType.ArrowClosed },
+    };
+  }
+
+  /** POST /api/export に渡す形へノード/エッジを戻す。 */
+  function toApiPayload(nodes, edges) {
+    return {
+      nodes: nodes.map((n) => ({
+        id: n.id,
+        label: (n.data && n.data.label) || n.id,
+        position: n.position,
+      })),
+      edges: edges.map((edge) => ({
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
+        conditional: !!(edge.data && edge.data.conditional),
+        label: (edge.data && edge.data.label) || null,
+      })),
+    };
+  }
+
+  let nextNodeSuffix = 1;
+
+  function FlowEditor() {
+    const wrapperRef = useRef(null);
+    const rf = useReactFlow();
+
+    const [nodes, setNodes] = useState([]);
+    const [edges, setEdges] = useState([]);
+    const [loadError, setLoadError] = useState(null);
+    const [genError, setGenError] = useState(null);
+    const [generatedCode, setGeneratedCode] = useState("");
+    const [selectedEdgeId, setSelectedEdgeId] = useState(null);
+    const [selectedNodeId, setSelectedNodeId] = useState(null);
+
+    // 初回ロード: 現行 harvest グラフを取得して描画する。
+    const loadGraph = useCallback(() => {
+      setLoadError(null);
+      fetch("/api/graph")
+        .then((res) => {
+          if (!res.ok) throw new Error(`GET /api/graph -> HTTP ${res.status}`);
+          return res.json();
+        })
+        .then((data) => {
+          setNodes(nodesFromApi(data.nodes || []));
+          setEdges(edgesFromApi(data.edges || []));
+        })
+        .catch((err) => setLoadError(String(err.message || err)));
+    }, []);
+
+    useEffect(() => {
+      loadGraph();
+    }, [loadGraph]);
+
+    const displayEdges = useMemo(() => edges.map(decorate), [edges]);
+
+    // --- ノード/エッジの変更（ドラッグ移動・選択・Deleteキーでの削除など） ---
+    const onNodesChange = useCallback((changes) => {
+      // __start__ / __end__ は削除させない。
+      const safe = changes.filter(
+        (c) => !(c.type === "remove" && PROTECTED_IDS.has(c.id))
+      );
+      setNodes((nds) => applyNodeChanges(safe, nds));
+    }, []);
+
+    const onEdgesChange = useCallback((changes) => {
+      setEdges((eds) => applyEdgeChanges(changes, eds));
+    }, []);
+
+    const onConnect = useCallback((params) => {
+      const id = `e_${params.source}__${params.target}_${Date.now()}`;
+      setEdges((eds) =>
+        addEdge({ ...params, id, data: { conditional: false, label: null } }, eds)
+      );
+    }, []);
+
+    // --- ノードの追加 ---
+    const addNodeAt = useCallback(
+      (name, position) => {
+        const trimmed = (name || "").trim();
+        if (!trimmed) return;
+        setNodes((nds) => {
+          if (nds.some((n) => n.id === trimmed)) {
+            window.alert(`ノード "${trimmed}" は既に存在します。`);
+            return nds;
+          }
+          return nds.concat({
+            id: trimmed,
+            position,
+            data: { label: trimmed },
+            type: "default",
+          });
+        });
+      },
+      []
+    );
+
+    const handleAddNodeButton = useCallback(() => {
+      const name = window.prompt("新規ノードの名前（グラフ上のノードid）を入力してください", `new_node_${nextNodeSuffix++}`);
+      if (name == null) return;
+      // ツールバー経由の追加は毎回少しずつ位置をずらして重ならないようにする。
+      const offset = (nodes.length % 8) * 40;
+      addNodeAt(name, { x: 120 + offset, y: 40 + offset });
+    }, [addNodeAt, nodes.length]);
+
+    // キャンバスのダブルクリックでその位置に新規ノードを追加する
+    // （既存ノードの上でのダブルクリックはリネーム用の onNodeDoubleClick に譲る）。
+    const handlePaneDoubleClick = useCallback(
+      (event) => {
+        if (event.target && event.target.closest && event.target.closest(".react-flow__node")) {
+          return;
+        }
+        const name = window.prompt("新規ノードの名前（グラフ上のノードid）を入力してください", "");
+        if (name == null) return;
+        let position = { x: 200, y: 200 };
+        if (rf) {
+          if (typeof rf.screenToFlowPosition === "function") {
+            position = rf.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+          } else if (typeof rf.project === "function" && wrapperRef.current) {
+            const bounds = wrapperRef.current.getBoundingClientRect();
+            position = rf.project({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
+          }
+        }
+        addNodeAt(name, position);
+      },
+      [rf, addNodeAt]
+    );
+
+    // ノードのダブルクリック = リネーム（id と参照元エッジを一括更新する）。
+    const onNodeDoubleClick = useCallback((_event, node) => {
+      if (PROTECTED_IDS.has(node.id)) {
+        window.alert("START / END ノードはリネームできません。");
+        return;
+      }
+      const newId = window.prompt("ノードの新しい名前（id）", node.id);
+      if (!newId || newId === node.id) return;
+      setNodes((nds) => {
+        if (nds.some((n) => n.id === newId)) {
+          window.alert(`ノード "${newId}" は既に存在します。`);
+          return nds;
+        }
+        return nds.map((n) =>
+          n.id === node.id ? { ...n, id: newId, data: { ...n.data, label: newId } } : n
+        );
+      });
+      setEdges((eds) =>
+        eds.map((edge) => ({
+          ...edge,
+          source: edge.source === node.id ? newId : edge.source,
+          target: edge.target === node.id ? newId : edge.target,
+        }))
+      );
+    }, []);
+
+    const onNodeClick = useCallback((_event, node) => {
+      setSelectedNodeId(node.id);
+      setSelectedEdgeId(null);
+    }, []);
+
+    const onEdgeClick = useCallback((_event, edge) => {
+      setSelectedEdgeId(edge.id);
+      setSelectedNodeId(null);
+    }, []);
+
+    const onPaneClick = useCallback(() => {
+      setSelectedEdgeId(null);
+      setSelectedNodeId(null);
+    }, []);
+
+    // --- 選択中エッジの編集: 条件分岐フラグ + ラベル ---
+    const selectedEdge = useMemo(
+      () => edges.find((edge) => edge.id === selectedEdgeId) || null,
+      [edges, selectedEdgeId]
+    );
+
+    const updateSelectedEdge = useCallback(
+      (patch) => {
+        setEdges((eds) =>
+          eds.map((edge) =>
+            edge.id === selectedEdgeId
+              ? { ...edge, data: { ...edge.data, ...patch } }
+              : edge
+          )
+        );
+      },
+      [selectedEdgeId]
+    );
+
+    const deleteSelectedEdge = useCallback(() => {
+      if (!selectedEdgeId) return;
+      setEdges((eds) => eds.filter((edge) => edge.id !== selectedEdgeId));
+      setSelectedEdgeId(null);
+    }, [selectedEdgeId]);
+
+    const selectedNode = useMemo(
+      () => nodes.find((n) => n.id === selectedNodeId) || null,
+      [nodes, selectedNodeId]
+    );
+
+    const deleteSelectedNode = useCallback(() => {
+      if (!selectedNodeId || PROTECTED_IDS.has(selectedNodeId)) return;
+      setNodes((nds) => nds.filter((n) => n.id !== selectedNodeId));
+      setEdges((eds) => eds.filter((edge) => edge.source !== selectedNodeId && edge.target !== selectedNodeId));
+      setSelectedNodeId(null);
+    }, [selectedNodeId]);
+
+    // --- コード生成 ---
+    const handleGenerate = useCallback(() => {
+      setGenError(null);
+      const payload = toApiPayload(nodes, edges);
+      fetch("/api/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      })
+        .then(async (res) => {
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(body.detail || `HTTP ${res.status}`);
+          return body;
+        })
+        .then((body) => setGeneratedCode(body.code || ""))
+        .catch((err) => setGenError(String(err.message || err)));
+    }, [nodes, edges]);
+
+    const handleCopy = useCallback(() => {
+      if (!generatedCode) return;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(generatedCode).catch(() => {
+          window.alert("クリップボードへのコピーに失敗しました。テキストエリアから手動でコピーしてください。");
+        });
+      }
+    }, [generatedCode]);
+
+    return e(
+      React.Fragment,
+      null,
+      e(
+        "div",
+        { className: "toolbar" },
+        e("h1", null, "Harvest Graph Editor"),
+        e("button", { onClick: handleAddNodeButton }, "＋ ノード追加"),
+        e("button", { onClick: loadGraph }, "再読込"),
+        e("div", { className: "spacer" }),
+        e(
+          "div",
+          { className: "legend" },
+          e(React.Fragment, null, e("span", { className: "swatch" }), "固定エッジ"),
+          e(React.Fragment, null, e("span", { className: "swatch dashed" }), "条件分岐エッジ")
+        ),
+        e("button", { className: "primary", onClick: handleGenerate }, "Pythonコードを生成")
+      ),
+      e(
+        "div",
+        { className: "main" },
+        e(
+          "div",
+          { className: "canvas-wrap", ref: wrapperRef, onDoubleClick: handlePaneDoubleClick },
+          e(
+            ReactFlow,
+            {
+              nodes: nodes,
+              edges: displayEdges,
+              onNodesChange: onNodesChange,
+              onEdgesChange: onEdgesChange,
+              onConnect: onConnect,
+              onNodeDoubleClick: onNodeDoubleClick,
+              onNodeClick: onNodeClick,
+              onEdgeClick: onEdgeClick,
+              onPaneClick: onPaneClick,
+              deleteKeyCode: ["Backspace", "Delete"],
+              fitView: true,
+            },
+            e(Background, { gap: 16 }),
+            e(Controls, null),
+            e(MiniMap, null)
+          )
+        ),
+        e(
+          "div",
+          { className: "sidebar" },
+          e(
+            "section",
+            null,
+            e("h2", null, "使い方"),
+            e(
+              "p",
+              { className: "hint" },
+              "ノードをドラッグで移動。キャンバスをダブルクリックで新規ノード追加、",
+              "ノードをダブルクリックでリネーム。ノード/エッジを選択してDeleteキーで削除。",
+              "ノードのハンドル(縁)からドラッグすると新規エッジを接続できます。"
+            ),
+            loadError ? e("div", { className: "error" }, "グラフの読み込みに失敗しました: " + loadError) : null
+          ),
+          selectedNode
+            ? e(
+                "section",
+                null,
+                e("h2", null, "選択中のノード"),
+                e("div", { className: "hint" }, "id: " + selectedNode.id),
+                !PROTECTED_IDS.has(selectedNode.id)
+                  ? e(
+                      "div",
+                      { className: "row", style: { marginTop: 8 } },
+                      e("button", { className: "danger", onClick: deleteSelectedNode }, "このノードを削除")
+                    )
+                  : e("div", { className: "hint" }, "START / END は削除・リネームできません。")
+              )
+            : null,
+          selectedEdge
+            ? e(
+                "section",
+                null,
+                e("h2", null, "選択中のエッジ（条件分岐マッピング編集）"),
+                e("div", { className: "hint" }, selectedEdge.source + " → " + selectedEdge.target),
+                e(
+                  "label",
+                  { className: "row" },
+                  e("input", {
+                    type: "checkbox",
+                    checked: !!(selectedEdge.data && selectedEdge.data.conditional),
+                    onChange: (ev) => updateSelectedEdge({ conditional: ev.target.checked }),
+                  }),
+                  " 条件分岐エッジにする（add_conditional_edges 経由）"
+                ),
+                e("label", null, "ラベル（ルーターがこの文字列を返したら遷移する）"),
+                e("input", {
+                  type: "text",
+                  value: (selectedEdge.data && selectedEdge.data.label) || "",
+                  placeholder: selectedEdge.target,
+                  onChange: (ev) => updateSelectedEdge({ label: ev.target.value }),
+                }),
+                e(
+                  "div",
+                  { className: "row", style: { marginTop: 8 } },
+                  e("button", { className: "danger", onClick: deleteSelectedEdge }, "このエッジを削除")
+                )
+              )
+            : null,
+          e(
+            "section",
+            null,
+            e("h2", null, "生成された Python コード"),
+            genError ? e("div", { className: "error" }, genError) : null,
+            e("textarea", { id: "codeOut", readOnly: true, value: generatedCode, placeholder: "「Pythonコードを生成」を押すとここに表示されます" }),
+            e(
+              "div",
+              { className: "row", style: { marginTop: 8 } },
+              e("button", { onClick: handleCopy, disabled: !generatedCode }, "コピー")
+            )
+          )
+        )
+      )
+    );
+  }
+
+  function App() {
+    return e(ReactFlowProvider, null, e(FlowEditor));
+  }
+
+  const root = createRoot(document.getElementById("root"));
+  root.render(e(App));
+</script>
+
+</body>
+</html>

@@ -55,6 +55,7 @@ from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.std_msgs.Bool import Bool
+from dimos.robot.unitree.g1.act.basket_deposit_bridge import BasketDepositBridge
 from dimos.robot.unitree.g1.act.g1_arm_sdk_connection import G1ArmSdkConnection
 from dimos.robot.unitree.g1.act.g1_gripper_connection import G1GripperConnection
 from dimos.robot.unitree.g1.act.ik_reach_bridge import IkReachBridge
@@ -115,6 +116,29 @@ _OPEN_Q = float(_OPEN_Q_RAW) if _OPEN_Q_RAW else None
 # to start (no rt/dex1/right/state) and tears the whole app down. Reach-only:
 # IkReachBridge still fires reach_done, it just has no consumer.
 _NO_GRIPPER = os.getenv("OKRA_NO_GRIPPER", "").strip() == "1"
+
+# Right-arm gravity feedforward during position tracking (same knobs/semantics as
+# unitree_g1_okra_ik_diffusion.py -- kept identical so OKRA_GRAVITY_* means the same
+# thing across every okra blueprint). Default OFF = unchanged behavior.
+_GRAVITY_FF = os.getenv("OKRA_GRAVITY_FF", "").strip() == "1"
+_GRAVITY_TAU_SCALE = float(os.getenv("OKRA_GRAVITY_TAU_SCALE", "1.0"))
+_GRAVITY_JOINTS = [int(v) for v in os.getenv("OKRA_GRAVITY_JOINTS", "0,1,2,3,4,5,6").split(",")]
+_GRAVITY_TAU_LIMIT_NM = float(os.getenv("OKRA_GRAVITY_TAU_LIMIT_NM", "12.0"))
+# Calibrated Dex1-1-only (550g) URDF -- see right_arm_gravity_model.py docstring and
+# f12c0dd37 (this branch): the bare g1.urdf only lumps a 170g dummy hand, so gravity
+# comp without this is under-compensating by the real Dex1-1 mass/CoM. GoPro/media-mod
+# payload (this rig has none -- no wrist camera in the IK-only blueprint) is out of
+# scope here.
+_GRAVITY_URDF = os.getenv("OKRA_GRAVITY_URDF", "").strip() or (
+    "dimos/robot/unitree/g1/g1_dex1_1_calibrated_550g.urdf"
+)
+
+# After the gripper reports closed (GripperGraspOnReach.grasp_done), drive the right
+# arm through the fixed abdominal-basket deposit (F-07, see basket_deposit_bridge.py)
+# and release. Default ON (matches this blueprint's job: reach -> grasp -> stow);
+# set 0 to stop after the grasp (e.g. while tuning close_q, or with no basket fitted).
+_BASKET_DEPOSIT = os.getenv("OKRA_BASKET_DEPOSIT", "1").strip() == "1"
+_BASKET_DEPOSIT_LIVE = os.getenv("OKRA_BASKET_DEPOSIT_LIVE", "").strip() == "1"
 
 # Dex1 DDS topic prefix. This rig's PHYSICALLY-RIGHT-mounted Dex1 enumerates
 # under the LEFT service (data cable in the left-hand port; only
@@ -201,6 +225,9 @@ _HANDOFF_MSG = (
     + f"| target Z offset = {_TARGET_Z_OFFSET:+.3f} m "
     f"| standoff = {_STANDOFF_M:.3f} m | cut point = {_CUT_BELOW_CENTROID_M:.3f} m below centroid "
     f"| kp_arm={_KP_ARM:.1f} kd_arm={_KD_ARM:.1f} "
+    f"| gravity_ff={_GRAVITY_FF} urdf={_GRAVITY_URDF!r} "
+    f"| basket_deposit={'ON' if (_BASKET_DEPOSIT and not _NO_GRIPPER) else 'OFF'}"
+    f"{' (LIVE)' if _BASKET_DEPOSIT_LIVE else ' (dry-run)'} "
     f"| CHEST ZED mount xyzrpy={_ZED_MOUNT} (ZED_MOUNT_XYZRPY, UNCALIBRATED tape+IMU value)"
 )
 if _LIVE and _GRIP_LIVE:
@@ -285,6 +312,11 @@ _MODULES = [
         kp_arm=_KP_ARM,
         kd_arm=_KD_ARM,
         enable_disconnect=True,
+        stiff_gravity_compensation_right=_GRAVITY_FF,
+        stiff_gravity_right_joint_indices=(_GRAVITY_JOINTS if _GRAVITY_FF else []),
+        stiff_gravity_tau_scale=_GRAVITY_TAU_SCALE,
+        stiff_gravity_tau_limit_nm=_GRAVITY_TAU_LIMIT_NM,
+        urdf_path=_GRAVITY_URDF,
     ),
 ]
 if not _NO_GRIPPER:
@@ -302,6 +334,7 @@ if not _NO_GRIPPER:
             # Same frame filter as the bridge, so a rejected click (wrong entity,
             # e.g. the click marker) can never desync the two confirm gates.
             expected_click_frame="/world/camera/pointcloud",
+            grasp_settle_s=float(os.getenv("OKRA_GRASP_SETTLE_S", "1.5")),
         ),
         G1GripperConnection.blueprint(
             network_interface=_NIC,
@@ -310,23 +343,36 @@ if not _NO_GRIPPER:
             kd=_GRIP_KD,
         ),
     ]
+    if _BASKET_DEPOSIT:
+        _MODULES += [
+            BasketDepositBridge.blueprint(
+                log_only=not (_LIVE and _GRIP_LIVE and _BASKET_DEPOSIT_LIVE),
+                gripper_offset_xyz=_TIP_OFFSET,
+                open_q=_OPEN_Q if _OPEN_Q is not None else 3.7,
+            ),
+        ]
 
-unitree_g1_okra_ik_only_grasp_zed = autoconnect(*_MODULES).transports(
-    {
-        # camera -> viewer (same contract as unitree-g1-ik-camera / -zed-ik-view)
-        ("pointcloud", PointCloud2): LCMTransport("/camera/pointcloud", PointCloud2),
-        ("color_image", Image): LCMTransport("/camera/color_image", Image),
-        ("camera_info", CameraInfo): LCMTransport("/camera/camera_info", CameraInfo),
-        # robot-side topics (identical to unitree_g1_okra_ik_only_grasp.py)
-        ("motor_states", JointState): LCMTransport("/g1/motor_states", JointState),
-        ("arm_target", JointState): LCMTransport("/g1/arm_target", JointState),
-        ("gripper_target", JointState): LCMTransport("/g1/gripper_target", JointState),
-        # measured Dex1 q -> GripperGraspOnReach's open-standardization check
-        ("right_gripper_state", JointState): LCMTransport("/g1/right_gripper_state", JointState),
-        ("reach_done", Bool): LCMTransport("/g1/reach_done", Bool),
-        ("okra_target", PointStamped): LCMTransport("/g1/okra_target", PointStamped),
-        ("disconnect", Bool): LCMTransport("/g1/arm_sdk_disconnect", Bool),
-    }
-)
+_TRANSPORTS = {
+    # camera -> viewer (same contract as unitree-g1-ik-camera / -zed-ik-view)
+    ("pointcloud", PointCloud2): LCMTransport("/camera/pointcloud", PointCloud2),
+    ("color_image", Image): LCMTransport("/camera/color_image", Image),
+    ("camera_info", CameraInfo): LCMTransport("/camera/camera_info", CameraInfo),
+    # robot-side topics (identical to unitree_g1_okra_ik_only_grasp.py)
+    ("motor_states", JointState): LCMTransport("/g1/motor_states", JointState),
+    ("arm_target", JointState): LCMTransport("/g1/arm_target", JointState),
+    ("gripper_target", JointState): LCMTransport("/g1/gripper_target", JointState),
+    # measured Dex1 q -> GripperGraspOnReach's open-standardization check
+    ("right_gripper_state", JointState): LCMTransport("/g1/right_gripper_state", JointState),
+    ("reach_done", Bool): LCMTransport("/g1/reach_done", Bool),
+    ("okra_target", PointStamped): LCMTransport("/g1/okra_target", PointStamped),
+    ("disconnect", Bool): LCMTransport("/g1/arm_sdk_disconnect", Bool),
+}
+if not _NO_GRIPPER:
+    # grasp_done: GripperGraspOnReach's close-settle timer -> BasketDepositBridge.
+    _TRANSPORTS[("grasp_done", Bool)] = LCMTransport("/g1/grasp_done", Bool)
+    if _BASKET_DEPOSIT:
+        _TRANSPORTS[("deposit_done", Bool)] = LCMTransport("/g1/deposit_done", Bool)
+
+unitree_g1_okra_ik_only_grasp_zed = autoconnect(*_MODULES).transports(_TRANSPORTS)
 
 __all__ = ["unitree_g1_okra_ik_only_grasp_zed"]

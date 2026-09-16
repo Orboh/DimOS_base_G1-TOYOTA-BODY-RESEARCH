@@ -141,7 +141,14 @@ class HarvestConfig:
     # geometry [m] (robot base frame)
     # Right-side reach volume: the arm can grasp only inside this box. Real values
     # (see class docstring) — NOT a placeholder.
-    reach: Box3D = field(default_factory=lambda: Box3D(-0.20, 0.75, 0.05, 0.65, -0.35, 0.85))
+    # x_max changed 0.75 -> 0.61 (2026-09-12, user feedback): mirrors
+    # ik_approach.py's ws_y lower bound (-0.61, was -0.75) via the x=-y_ik sign
+    # flip documented above. Empirically measured true max right-side reach is
+    # -0.675m (ik frame) / x=+0.675 here; 0.61 = 10% inside that margin so the
+    # box excludes the barely-reachable fringe (8.6%-24.7% success rate) near
+    # the old -0.75/+0.75 edge. Keep this in sync with ik_approach.py's ws_y —
+    # see that file's __init__ docstring/comment for the derivation.
+    reach: Box3D = field(default_factory=lambda: Box3D(-0.20, 0.61, 0.05, 0.65, -0.35, 0.85))
     # Camera field of view: what detection can SEE (wider than reach). STILL a placeholder
     # (never calibrated against the real camera) — but widened on y/z so it stays a proper
     # superset of the now-real `reach` box above (an okra must be visible before reachable).
@@ -155,6 +162,14 @@ class HarvestConfig:
     max_empty_advances: int = 2  # consecutive empty left-sweeps before done (§8 N)
     max_reposition_attempts: int = 3  # base moves toward one okra before skipping it
     max_revisits: int = 5  # times to go back for left-behind okra before giving up
+
+    # §6 HMI: for a node whose spoken announcement describes an upcoming physical
+    # move (grasp / base motion / basket swap), wait this long [s] after speaking
+    # before issuing the action, so the human hears "what" before "it happens"
+    # (the G1 speaker queues audio and returns immediately — without this wait the
+    # move can start before, or while, the phrase is still being synthesised).
+    # 0.0 (default) = no wait, unchanged behaviour (also keeps unit tests fast).
+    voice_lead_s: float = 0.0
 
 
 class HarvestState(TypedDict, total=False):

@@ -132,6 +132,10 @@ class DummyHarvestSkills:
         logger.info(f"{_DUMMY} detect_okra: {len(remaining)} okra (fake field)")
         return remaining
 
+    def last_detect_dropped(self) -> int:
+        """ダミー畑は 3D 化の失敗という概念を持たないので常に 0。"""
+        return 0
+
     def relative_move(self, lateral: float, forward: float = 0.0, yaw: float = 0.0) -> None:
         logger.info(f"{_DUMMY} relative_move(lat={lateral:.2f}, fwd={forward:.2f}) — no robot")
 

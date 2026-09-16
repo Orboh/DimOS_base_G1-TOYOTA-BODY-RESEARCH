@@ -153,20 +153,29 @@ def make_g1_playstream_announcer(
     """
     from unitree_sdk2py.g1.audio.g1_audio_client import AudioClient
 
-    if init_dds:
-        # Idempotent, process-wide DDS init (shared with arm_sdk / Dex1 / loco) so
-        # the speaker can coexist with other DDS modules without a double-init crash.
-        from dimos.robot.unitree.g1.act.dds_init import ensure_channel_factory
+    # ⚠️ cyclonedds の XTypes 型登録はプロセス内でスレッドセーフではない
+    # （dds_init.py の channel_lock docstring 参照）。G1ArmSdkConnection /
+    # G1GripperConnection は自身の Channel*.Init() を channel_lock で直列化
+    # 済みだが、この関数はそれを取らずに ensure_channel_factory + AudioClient
+    # .Init() を呼んでいたため、ModuleCoordinator が全モジュールの start() を
+    # 並列スレッドで実行する際に G1GripperConnection の初期化と競合し、
+    # 双方が "Failed to encode member identifier_complete_minimal" で落ちる
+    # 現象が実機LIVEで発生した（2026-09-08）。同じロックで直列化する。
+    from dimos.robot.unitree.g1.act.dds_init import channel_lock, ensure_channel_factory
 
-        if not network_interface:
-            raise ValueError("network_interface is required when init_dds=True")
-        ensure_channel_factory(network_interface)
-    client = AudioClient()
-    try:
-        client.SetTimeout(10.0)
-    except Exception:
-        pass
-    client.Init()
+    with channel_lock:
+        if init_dds:
+            # Idempotent, process-wide DDS init (shared with arm_sdk / Dex1 / loco) so
+            # the speaker can coexist with other DDS modules without a double-init crash.
+            if not network_interface:
+                raise ValueError("network_interface is required when init_dds=True")
+            ensure_channel_factory(network_interface)
+        client = AudioClient()
+        try:
+            client.SetTimeout(10.0)
+        except Exception:
+            pass
+        client.Init()
     return G1SpeakerAnnouncer(client, rate=rate, volume=volume)
 
 

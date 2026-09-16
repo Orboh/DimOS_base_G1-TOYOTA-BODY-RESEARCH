@@ -38,7 +38,7 @@ from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
-from dimos.robot.unitree.g1.act.dds_init import ensure_channel_factory
+from dimos.robot.unitree.g1.act.dds_init import channel_lock, ensure_channel_factory
 from dimos.robot.unitree.g1.effectors.high_level.commands import (
     ARM_API_ID,
     ARM_COMMANDS,
@@ -108,19 +108,29 @@ class G1HighLevelDdsSdk(Module, HighLevelG1Spec):
         # this module can share one process with other DDS modules (arm_sdk /
         # Dex1 / G1 speaker) without a double-init crash — the first start does
         # the real init, the rest are no-ops.
+        #
+        # ⚠️ cyclonedds の XTypes 型登録はプロセス内でスレッドセーフではない
+        # （dds_init.py の channel_lock docstring 参照）。以前は
+        # ensure_channel_factory/MotionSwitcherClient.Init()/LocoClient.Init() を
+        # channel_lock なしで呼んでいたため、G1ArmSdkConnection/G1GripperConnection
+        # の起動スレッドと並走すると型登録が競合し、稀に
+        # 'NoneType' object has no attribute 'SupportsBasic' で全体がクラッシュ
+        # していた（unitree_g1_okra_harvest_ik.py の同種コメント参照）。
+        # 同じロックで直列化する。
         logger.info(f"Initializing DDS on interface: {network_interface}")
-        ensure_channel_factory(network_interface)
+        with channel_lock:
+            ensure_channel_factory(network_interface)
 
-        # Motion switcher (required before LocoClient commands work)
-        self.motion_switcher = MotionSwitcherClient()
-        self.motion_switcher.SetTimeout(self.config.motion_switcher_timeout)
-        self.motion_switcher.Init()
-        logger.info("Motion switcher initialized")
+            # Motion switcher (required before LocoClient commands work)
+            self.motion_switcher = MotionSwitcherClient()
+            self.motion_switcher.SetTimeout(self.config.motion_switcher_timeout)
+            self.motion_switcher.Init()
+            logger.info("Motion switcher initialized")
 
-        # Locomotion client
-        self.loco_client = LocoClient()
-        self.loco_client.SetTimeout(self.config.loco_client_timeout)
-        self.loco_client.Init()
+            # Locomotion client
+            self.loco_client = LocoClient()
+            self.loco_client.SetTimeout(self.config.loco_client_timeout)
+            self.loco_client.Init()
 
         self.loco_client._RegistApi(_LOCO_API_IDS["GET_FSM_ID"], 0)
         self.loco_client._RegistApi(_LOCO_API_IDS["GET_FSM_MODE"], 0)

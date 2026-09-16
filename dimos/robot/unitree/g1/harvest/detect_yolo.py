@@ -228,8 +228,14 @@ class YoloOkraDetector:
         self._depth_getter = depth_getter
         self._ripeness_fn = ripeness_fn
         self._min_conf = min_confidence
+        # 直近の detect() で「YOLO は見つけたが 3D 化できず捨てた」件数。呼び出し側
+        # （graph の detect ノード）が「本当にオクラが無い」と区別するために読む。
+        # 両者とも detect() が [] を返すため、この値が無いと区別する手段が一切ない
+        # （2026-09-14: 音声も既定ログも同じで、実機で切り分け不能だった）。
+        self.last_dropped = 0
 
     def detect(self) -> list[Okra]:
+        self.last_dropped = 0
         frame = self._frame_getter()
         if frame is None:
             return []
@@ -252,11 +258,27 @@ class YoloOkraDetector:
             if pos is None:
                 # 3D 化に必要な情報（ZED の camera_info / 深度）が揃っていない。
                 # 推測値で腕を動かすより捨てる方が安全（make_zed_pixel_to_base 参照）。
+                self.last_dropped += 1
                 logger.debug("detect_okra: skipping %s — no 3D position available", name)
                 continue
             ripeness = float(self._ripeness_fn(det)) if self._ripeness_fn else 1.0
             track = getattr(det, "track_id", None)
-            okra_id = f"okra_{track}" if track is not None else f"okra_{name}_{idx}"
+            if track is not None and track != -1:
+                okra_id = f"okra_{track}"
+            elif track == -1:
+                # track_id=-1 は ultralytics がそのフレームで一件もトラックを
+                # 確立できなかった時の共通フォールバック値（Detection2DBBox/Seg.
+                # from_ultralytics_result 参照）で、同一フレーム内の複数の異なる
+                # 実に同じ -1 が振られうる。excluded_ids は文字列IDの一致でしか
+                # 判定しないため、track_id だけに頼ると「1個収穫→除外」の後、
+                # 別の実がまた -1 になると誤って同一個体とみなされ、二度と
+                # 狙われなくなる（2026-09-15 実機LIVEで okra_-1 の重複を確認）。
+                # 3D位置推定誤差は実測2mm程度と小さいため、1cm丸めの位置を疑似
+                # IDとして使う（距離しきい値によるあいまい判定はせず、丸め値の
+                # 完全一致のみで同一個体を判定する）。
+                okra_id = f"okra_pos_{round(pos['x'], 2)}_{round(pos['y'], 2)}_{round(pos['z'], 2)}"
+            else:
+                okra_id = f"okra_{name}_{idx}"
             out.append(
                 Okra(
                     id=okra_id,
@@ -265,6 +287,12 @@ class YoloOkraDetector:
                     ripeness=ripeness,
                     reachable=False,  # graph recomputes from cfg.reach.contains(pos_3d)
                 )
+            )
+        if self.last_dropped:
+            # WARNING で出す（旧 debug は DIMOS_LOG_LEVEL 既定 INFO では不可視だった）。
+            logger.warning(
+                f"detect_okra: {self.last_dropped} 件の検出を 3D 化できず破棄 "
+                f"(camera_info/深度の未受信か深度外れ値)。有効 {len(out)} 件"
             )
         return out
 
@@ -297,6 +325,7 @@ def make_yolo_detect_okra(
     *,
     model_name: str = "yolo11n.pt",
     detector: Any = None,
+    conf: float = 0.5,
     **kwargs: Any,
 ) -> Callable[[], list[Okra]]:
     """Build a ``detect_fn`` (the ``detect_okra`` injectable) backed by YOLO.
@@ -307,18 +336,36 @@ def make_yolo_detect_okra(
 
     The DimOS ``Yolo2DDetector`` (ultralytics) is imported lazily so this module
     stays importable without that dependency.
+
+    Args:
+        conf: YOLO 検出の信頼度しきい値。ultralytics 推論そのものの ``conf``
+            （検出結果に出てくるかどうかを左右する一段目、``Yolo2DDetector``）と、
+            検出後の二段目フィルタ ``YoloOkraDetector.min_confidence`` の両方に
+            同じ値を反映する（2026-09-15までは 0.5 が両者に別々にハードコード
+            されていた）。``kwargs`` で ``min_confidence`` を明示すればそちらが
+            優先される。``detector`` を自前で注入した場合、その detector 側の
+            conf 設定はここでは変更されない（呼び出し側の責任）。
     """
     if detector is None:
         from dimos.perception.detection.detectors.yolo import Yolo2DDetector
 
-        detector = Yolo2DDetector(model_name=model_name)
+        detector = Yolo2DDetector(model_name=model_name, conf=conf)
+    kwargs.setdefault("min_confidence", conf)
     yolo = YoloOkraDetector(
         detector=detector,
         frame_getter=frame_getter,
         target_classes=target_classes or {"banana"},
         **kwargs,
     )
-    return yolo.detect
+
+    def detect_fn() -> list[Okra]:
+        return yolo.detect()
+
+    # 呼び出し側（DimosHarvestSkills.last_detect_dropped）が「空の検出」の理由を
+    # 読めるように検出器そのものをぶら下げる。bound method には属性を付けられない
+    # ため、素の関数でラップしている。
+    detect_fn.detector = yolo  # type: ignore[attr-defined]
+    return detect_fn
 
 
 __all__ = [

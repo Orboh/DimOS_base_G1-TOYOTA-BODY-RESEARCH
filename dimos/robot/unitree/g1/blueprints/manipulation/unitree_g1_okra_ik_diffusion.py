@@ -83,15 +83,21 @@ _GRAVITY_FF = os.getenv("OKRA_GRAVITY_FF", "").strip() == "1"
 _GRAVITY_TAU_SCALE = float(os.getenv("OKRA_GRAVITY_TAU_SCALE", "1.0"))
 _GRAVITY_JOINTS = [int(v) for v in os.getenv("OKRA_GRAVITY_JOINTS", "0,1,2,3,4,5,6").split(",")]
 _GRAVITY_TAU_LIMIT_NM = float(os.getenv("OKRA_GRAVITY_TAU_LIMIT_NM", "12.0"))
-# End-effector payload the URDF does NOT model. It ends in a 0.170 kg `right_rubber_hand`
-# (G1's display hand), so this is the mass to ADD: (real payload) - 0.170.
-# 2026-08-25 hardware: Dex1-1 550 g + GoPro HERO9 158 g + attachments 100 g = 808 g
-#   -> 0.808 - 0.170 = 0.638 kg.
-_TIP_EXTRA_MASS_KG = float(os.getenv("OKRA_TIP_EXTRA_MASS_KG", "0.638"))
-# Payload CoM in the wrist-yaw frame [m] (0.0415 = hand mount face, 0.1845 = fingertip).
-_TIP_EXTRA_COM = [
-    float(v) for v in os.getenv("OKRA_TIP_EXTRA_COM_XYZ", "0.113,-0.003,0.0").split(",")
-]
+# Gravity model URDF for stiff_gravity_compensation_right (right_arm_gravity_model.py 参照)。
+# この経路は g1_arm_sdk_connection.py の tip_extra_mass_kg/tip_extra_com_xyz を一切
+# 参照しない(collection_mode専用のパラメータで、stiff_gravity_right とは独立実装)ため、
+# 旧 OKRA_TIP_EXTRA_MASS_KG=0.638(Dex1-1+GoPro+治具の推定加算)による補正はここでは
+# 何の効果も持たなかった(2026-09-06 発見、デッド設定として削除)。
+# 実機で Dex1-1 単体(550g, 公式スペック)を校正したURDFをそのまま渡すことで、
+# 少なくともDex1-1自体の質量・重心は正しく補正される
+# (right_arm_gravity_model.py のdocstring通り: 素のg1.urdfはダミーハンド170gの
+#  lumped質量のみで、重心も約3.7mmずれている)。
+# 既知の未解決分: GoPro+Media Mod+治具(実測 158g+100g=258g)はこのURDFにもまだ
+# 反映されていない — 加算する仕組みが right_arm_gravity_model.py 側に無いため、
+# 今回は見送り(必要になったら stiff_gravity_* 系に質量加算パラメータを追加する)。
+_GRAVITY_URDF = os.getenv("OKRA_GRAVITY_URDF", "").strip() or (
+    "dimos/robot/unitree/g1/g1_dex1_1_calibrated_550g.urdf"
+)
 # Pre-grasp standoff: stop the IK reach SHORT so the diffusion policy fine-adjusts the
 # last leg. Default 0.05 m (was 0.0 in the scripted-close blueprint). approach legs OFF.
 _STANDOFF_M = float(os.getenv("OKRA_STANDOFF_M", "0.05"))
@@ -202,14 +208,17 @@ if _LIVE:
         f"rt/arm_sdk on NIC {_NIC!r} at <= {_ARM_VEL_LIMIT} rad/s. IK reach -> standoff "
         f"{_STANDOFF_M} m -> UMI diffusion EE adjust ({'pos-only' if _UMI_POSITION_ONLY else '6-DOF'}, "
         f"ee_frame={_UMI_EE_FRAME}, "
-        f"server {_UMI_SERVER}). Gripper is your SEPARATE program (subscribe /g1/adjust_done). "
+        f"server {_UMI_SERVER}). gravity_ff={_GRAVITY_FF} urdf={_GRAVITY_URDF!r} "
+        "(camera/mount payload +258g not yet compensated). "
+        "Gripper is your SEPARATE program (subscribe /g1/adjust_done). "
         "Keep an e-stop in hand."
     )
 else:
     logger.info(
         f"unitree_g1_okra_ik_diffusion DRY-RUN (set IK_REACH_LIVE=1 to drive the arm). NIC={_NIC!r}. "
         f"Start the policy server first (umi env). standoff={_STANDOFF_M} m, "
-        f"UMI {'pos-only' if _UMI_POSITION_ONLY else '6-DOF'} @ {_UMI_CONTROL_HZ} Hz."
+        f"UMI {'pos-only' if _UMI_POSITION_ONLY else '6-DOF'} @ {_UMI_CONTROL_HZ} Hz. "
+        f"gravity_ff={_GRAVITY_FF} urdf={_GRAVITY_URDF!r}."
     )
 
 _MODULES = [
@@ -269,8 +278,7 @@ _MODULES = [
         stiff_gravity_right_joint_indices=(_GRAVITY_JOINTS if _GRAVITY_FF else []),
         stiff_gravity_tau_scale=_GRAVITY_TAU_SCALE,
         stiff_gravity_tau_limit_nm=_GRAVITY_TAU_LIMIT_NM,
-        tip_extra_mass_kg=_TIP_EXTRA_MASS_KG,
-        tip_extra_com_xyz=_TIP_EXTRA_COM,
+        urdf_path=_GRAVITY_URDF,
     ),
     UmiDiffusionBridge.blueprint(
         server_addr=_UMI_SERVER,

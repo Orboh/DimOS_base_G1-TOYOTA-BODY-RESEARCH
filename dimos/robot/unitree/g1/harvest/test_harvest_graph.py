@@ -29,6 +29,8 @@ to discover a fruit out of view.
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from dimos.robot.unitree.g1.harvest import announce
 from dimos.robot.unitree.g1.harvest.announce import RecordingAnnouncer
 from dimos.robot.unitree.g1.harvest.blackboard import HarvestConfig, initial_state
@@ -36,7 +38,7 @@ from dimos.robot.unitree.g1.harvest.graph import build_harvest_graph
 from dimos.robot.unitree.g1.harvest.skills import FieldOkra, MockHarvestSkills
 
 _RECURSION_LIMIT = 400
-_CFG = HarvestConfig()  # reach x[-0.20,0.75] y[0.05,0.65] z[-0.35,0.85]; centre (0.275, 0.35)
+_CFG = HarvestConfig()  # reach x[-0.20,0.61] y[0.05,0.65] z[-0.35,0.85]; centre (0.205, 0.35)
 
 
 def _run(skills: MockHarvestSkills, config: HarvestConfig | None = None) -> dict:
@@ -73,7 +75,7 @@ def test_in_reach_okra_is_picked_immediately() -> None:
 
 def test_too_far_okra_triggers_forward_then_pick() -> None:
     """An okra beyond the reach box (too far) → move FORWARD → pick."""
-    field = [FieldOkra("far", x=0.275, y=0.85, z=0.80, ripeness=0.9)]
+    field = [FieldOkra("far", x=_CFG.reach.x_center, y=0.85, z=0.80, ripeness=0.9)]
     skills = _mock(field)
     final = _run(skills)
 
@@ -86,7 +88,7 @@ def test_too_far_okra_triggers_forward_then_pick() -> None:
 
 def test_too_close_okra_triggers_backup_then_pick() -> None:
     """An okra closer than the reach box (ridge risk) → move BACK → pick."""
-    field = [FieldOkra("near", x=0.275, y=0.02, z=0.80, ripeness=0.9)]
+    field = [FieldOkra("near", x=_CFG.reach.x_center, y=0.02, z=0.80, ripeness=0.9)]
     skills = _mock(field)
     final = _run(skills)
 
@@ -220,7 +222,12 @@ def test_visits_multiple_stations() -> None:
     assert final["picks"] == 2  # one okra from each station
     assert skills.station_moves == [1]  # moved to station 1 exactly once
     assert final["station_id"] == 1
+    # Two-part announcement (§6 HMI): "this station is done" is true either way
+    # so it is said BEFORE the move; "moving to the next one" only once
+    # go_to_next_station() confirms one exists, so it is said after.
+    assert announce.station_done() in voice.said
     assert announce.next_station() in voice.said
+    assert voice.said.index(announce.station_done()) < voice.said.index(announce.next_station())
 
 
 def test_basket_full_swaps_then_continues() -> None:
@@ -248,3 +255,98 @@ def test_silent_by_default() -> None:
     final = _run(skills)  # no announcer passed
 
     assert final["picks"] == 1
+
+
+def test_voice_lead_s_waits_after_speaking_before_moving() -> None:
+    """voice_lead_s>0: the robot pauses after speaking, before it physically
+    moves — so an announcement is always heard before the action it describes
+    (§6 HMI; the real G1 speaker queues audio and returns immediately)."""
+    config = HarvestConfig(voice_lead_s=2.0)
+    field = [
+        FieldOkra("far", x=config.reach.x_center, y=0.85, z=0.80, ripeness=0.9)
+    ]  # too far -> reposition
+    skills = _mock(field)
+    voice = RecordingAnnouncer()
+    app = build_harvest_graph(skills, config, announcer=voice)
+    with patch("dimos.robot.unitree.g1.harvest.graph.time.sleep") as mock_sleep:
+        app.invoke(initial_state(), {"recursion_limit": _RECURSION_LIMIT})
+
+    assert announce.approaching("forward") in voice.said
+    assert mock_sleep.call_count >= 1  # reposition + grasp both wait
+    assert all(call.args[0] == 2.0 for call in mock_sleep.call_args_list)
+
+
+def test_voice_lead_s_defaults_to_no_wait() -> None:
+    """voice_lead_s defaults to 0.0 — existing behaviour/tests are unaffected."""
+    field = [FieldOkra("a", x=0.30, y=0.45, z=0.80, ripeness=0.9)]
+    skills = _mock(field)
+    voice = RecordingAnnouncer()
+    app = build_harvest_graph(skills, _CFG, announcer=voice)  # _CFG: voice_lead_s=0.0
+    with patch("dimos.robot.unitree.g1.harvest.graph.time.sleep") as mock_sleep:
+        app.invoke(initial_state(), {"recursion_limit": _RECURSION_LIMIT})
+
+    mock_sleep.assert_not_called()
+
+
+def test_advance_left_waits_only_on_its_one_announcement() -> None:
+    """searching() is announced once per dry spell (not every sweep step), so the
+    voice_lead_s wait should likewise fire only on that first sweep, not once per
+    subsequent sweep step."""
+    config = HarvestConfig(voice_lead_s=2.0, max_empty_advances=3)
+    skills = _mock([])  # empty field: sweeps up to the cap, then gives up on the station
+    voice = RecordingAnnouncer()
+    app = build_harvest_graph(skills, config, announcer=voice)
+    with patch("dimos.robot.unitree.g1.harvest.graph.time.sleep") as mock_sleep:
+        app.invoke(initial_state(), {"recursion_limit": _RECURSION_LIMIT})
+
+    assert len(skills.move_calls) == 3  # three advance_left sweeps (the cap)
+    assert voice.said.count(announce.searching()) == 1  # announced only on the first
+    # One wait for searching() (first sweep only) + one for station_done()
+    # (next_station, unconditional) — NOT one per sweep (that would be 3+).
+    assert mock_sleep.call_count == 2
+
+
+# 「オクラが無い」と「カメラ準備中」を音声で区別する（2026-09-14）。
+# 実機では音声だけが判断材料になる場面があるため、count==0 の理由を読み分けられる
+# ことをグラフ経由で担保する。
+
+
+class _EmptyDetectSkills(MockHarvestSkills):
+    """検出0件を返すが、3D化できず捨てた件数だけを差し替えられるスキル。"""
+
+    def __init__(self, dropped: int) -> None:
+        super().__init__(field=[])  # 空の畑
+        self._dropped = dropped
+
+    def detect_okra(self):  # type: ignore[no-untyped-def]
+        return []
+
+    def last_detect_dropped(self) -> int:
+        return self._dropped
+
+
+def test_voice_reports_detections_that_could_not_be_localized() -> None:
+    voice = RecordingAnnouncer()
+    app = build_harvest_graph(_EmptyDetectSkills(dropped=3), _CFG, announcer=voice)
+    app.invoke(initial_state())
+    assert announce.detect_result(0, 3) in voice.said
+    assert announce.detect_result(0) not in voice.said
+
+
+def test_voice_says_no_okra_when_nothing_was_dropped() -> None:
+    voice = RecordingAnnouncer()
+    app = build_harvest_graph(_EmptyDetectSkills(dropped=0), _CFG, announcer=voice)
+    app.invoke(initial_state())
+    assert announce.detect_result(0) in voice.said
+
+
+def test_detect_result_wording_is_distinct() -> None:
+    assert announce.detect_result(0, 0) == "オクラは見当たりません。"
+    assert announce.detect_result(0, 3) == "オクラを3個見つけましたが、位置が測れません。"
+    assert announce.detect_result(2, 3) == "オクラが2個見えます。"  # 有効があれば通常文言
+
+
+def test_detect_log_records_dropped_count() -> None:
+    app = build_harvest_graph(_EmptyDetectSkills(dropped=2), _CFG)
+    out = app.invoke(initial_state())
+    assert any("dropped 2" in line for line in out["log"])

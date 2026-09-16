@@ -148,6 +148,115 @@ def build_table_okra(
     return okra_paths
 
 
+# 立ち姿勢収穫用オクラ配置（机なし・torso 相対）。
+# build_table_okra は机上ピック(M2/M3)用の配置で、机高さ0.72m・オクラ高さ0.82mは
+# torso_link 絶対高さ(直立時 約0.80m)よりわずかに高いだけだが、胸カメラ(torso相対
+# z=0.248m・ほぼ水平)から見ると「体のすぐ下」にあり視野角(垂直約58.7°)の外に出る
+# （2026-09-12 実機画角検証で判明: 既定配置ではカメラに何も映らなかった）。
+# 本関数は「株に実ったオクラ」を模し、torso_link の実 world 変換を使って
+# torso 相対座標（IK の ws_x/ws_y/ws_z と同じ標準ROS torso frame）でオクラを直立
+# 配置する。z をカメラ高さ(torso相対 z≈0.248m)に近づけることで、カメラ視野の中心
+# 付近かつ IK reach box (ik_approach.py: ws_x=[0.05,0.65] ws_y=[-0.75,0.20]
+# ws_z=[-0.35,0.85]) の内側に収める。株(茎)のジオメトリ自体はスコープ外
+# （G1収穫設計書 SS-04 参照）— オクラ実体のみを world アンカーで直立させる。
+STANDING_X_OFF = 0.40  # torso前方 [m]（reach内、カメラからも近すぎない距離）
+STANDING_Z_OFF = 0.18  # torso相対高さ [m]（カメラ z=0.248m に近づけ画角内に収める）
+STANDING_LAT_MIN, STANDING_LAT_MAX = -0.25, -0.05  # 横(y) [m]（右腕reach内、右寄せ）
+
+
+def build_standing_okra(
+    stage,
+    torso_to_world,
+    *,
+    n_okra: int = 3,
+    x_off: float = STANDING_X_OFF,
+    z_off: float = STANDING_Z_OFF,
+    z_jitter: tuple[float, float] = (0.0, 0.0),
+    x_jitter: tuple[float, float] = (0.0, 0.0),
+    lat_min: float = STANDING_LAT_MIN,
+    lat_max: float = STANDING_LAT_MAX,
+    okra_usd: str = OKRA_USD,
+    seed: int | None = None,
+    index_offset: int = 0,
+) -> list[str]:
+    """torso_link 相対座標でオクラ N 本を直立配置する（机なし、world アンカー剛
+    FixedJoint, 破断力 OKRA_BREAK_FORCE）。``torso_to_world`` は
+    ``UsdGeom.XformCache(...).GetLocalToWorldTransform(torso_link prim)`` の
+    戻り値（G1 の直立姿勢に応じた実変換）。戻り値=オクラ prim パスのリスト。
+    ``world.reset()`` の前後どちらでも呼べる（torso_link の xform は物理と独立）。
+
+    ``z_jitter``: 各オクラの高さを ``z_off + uniform(z_jitter[0], z_jitter[1])`` で
+    ランダムにばらつかせる[m]（既定 (0,0)=バラつきなし）。株ごとの実高さの違いを
+    模した検証用（2026-09-12 要望: 既定高さから -5cm〜+15cm でばらつかせたい）。
+    reach box の z 範囲(ik_approach.py 既定 [-0.35, 0.85])を超えないよう呼び出し側
+    で調整すること。``seed`` を指定すると再現可能な配置になる。
+
+    ``x_jitter``: 各オクラの前後位置を ``x_off + uniform(x_jitter[0], x_jitter[1])``
+    でばらつかせる[m]（既定 (0,0)=バラつきなし＝全本同一距離）。既定のまま n_okra を
+    増やすと、横(y)幅が狭い設定（既定 lat_min/max は右腕reach内に絞った0.20m幅）と
+    相まって「全本が同じ奥行きの1枚の壁」のように詰まって見え、しかも胸カメラは
+    最短0.3m弱まで近いため、ロボット自身の胴体・頭に重なって見えるほど密集する
+    （2026-09-12 GUIスクリーンショットで実際に指摘・確認: 「オクラの量がG1の前
+    だけ多い」）。奥行きにもばらつきを与えて実際の畑の株のように前後に散らす。
+    reach box の x 範囲(ik_approach.py 既定 [0.05,0.65])を超えないよう呼び出し側で
+    調整すること。
+
+    ``index_offset``: prim パス ``/Okra_{index_offset+k}`` のオフセット。同一シーンに
+    複数回（例: 右側の近距離グループ＋左側の探索用グループ）呼んでも prim パスが
+    衝突しないようにするため（2026-09-12 要望: 右に既存配置＋左に10本・10m範囲を追加）。
+    """
+    from isaacsim.core.utils.stage import add_reference_to_stage
+    from pxr import Gf, UsdGeom, UsdPhysics
+
+    okra_paths: list[str] = []
+    if n_okra <= 0:
+        return okra_paths
+    lat_n = max(1, n_okra)
+    ys = np.linspace(lat_min, lat_max, lat_n) if lat_n > 1 else np.array([0.5 * (lat_min + lat_max)])
+    rng = np.random.default_rng(seed)
+    zs = z_off + rng.uniform(z_jitter[0], z_jitter[1], size=n_okra)
+    xs = x_off + rng.uniform(x_jitter[0], x_jitter[1], size=n_okra)
+    print(
+        f"[standing_okra] torso_to_world.Transform(0,0,0) world = "
+        f"{tuple(round(v, 3) for v in torso_to_world.Transform(Gf.Vec3d(0, 0, 0)))} "
+        f"z_jitter={z_jitter} x_jitter={x_jitter} index_offset={index_offset}",
+        flush=True,
+    )
+    for k in range(n_okra):
+        idx = k + index_offset
+        y_t = float(ys[k % lat_n])
+        z_k = float(zs[k])
+        x_k = float(xs[k])
+        p_world = torso_to_world.Transform(Gf.Vec3d(x_k, y_t, z_k))
+        print(
+            f"[standing_okra] Okra_{idx} torso_rel=({x_k:.3f},{y_t:.3f},{z_k:.3f}) "
+            f"-> world={tuple(round(v, 3) for v in p_world)}",
+            flush=True,
+        )
+        pth = f"/Okra_{idx}"
+        add_reference_to_stage(usd_path=okra_usd, prim_path=pth)
+        # 直立: 先端(+Y)を上(rotX+90°)→鉛直まわりに少し振る（build_table_okra と同じ規約）
+        qd = (
+            Gf.Rotation(Gf.Vec3d(1, 0, 0), 90.0)
+            * Gf.Rotation(Gf.Vec3d(0, 0, 1), float((idx * 37) % 360))
+        ).GetQuat()
+        qf = Gf.Quatf(qd.GetReal(), Gf.Vec3f(*qd.GetImaginary()))
+        op = UsdGeom.Xformable(stage.GetPrimAtPath(pth))
+        op.AddTranslateOp(UsdGeom.XformOp.PrecisionDouble).Set(p_world)
+        op.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(qd)
+        j = UsdPhysics.FixedJoint.Define(stage, f"/World/OkraJoints/joint_{idx}")
+        j.CreateBody1Rel().SetTargets([pth])
+        j.CreateLocalPos0Attr(Gf.Vec3f(float(p_world[0]), float(p_world[1]), float(p_world[2])))
+        j.CreateLocalRot0Attr(qf)
+        j.CreateLocalPos1Attr(Gf.Vec3f(0, 0, 0))
+        j.CreateLocalRot1Attr(Gf.Quatf(1, 0, 0, 0))
+        j.CreateBreakForceAttr(OKRA_BREAK_FORCE)
+        j.CreateBreakTorqueAttr(_FLT_MAX)
+        j.CreateCollisionEnabledAttr(False)
+        okra_paths.append(pth)
+    return okra_paths
+
+
 def add_ceiling_lights(
     stage,
     *,

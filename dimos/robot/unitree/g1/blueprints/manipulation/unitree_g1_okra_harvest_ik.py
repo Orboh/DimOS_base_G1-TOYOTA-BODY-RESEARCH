@@ -91,12 +91,14 @@ _modules = [
     G1GripperConnection.blueprint(network_interface=_NIC),
 ]
 if _WALK:
-    # ベース歩行（LocoClient）。OKRA_WALK=0 なら省略 — G1HighLevelDdsSdk の
-    # MotionSwitcherClient/LocoClient.Init() は dds_init.channel_lock を取らずに
-    # DDS 初期化するため、G1ArmSdkConnection/G1GripperConnection の起動スレッドと
-    # 並走すると cyclonedds の IDL 型登録が競合し、稀に
-    # 'NoneType' object has no attribute 'SupportsBasic' で全体がクラッシュする
-    # （dds_init.py の channel_lock コメント参照）。歩行不要な段階検証では外して回避。
+    # ベース歩行（LocoClient）。OKRA_WALK=0 なら省略。
+    # 2026-09-08 修正: G1HighLevelDdsSdk の MotionSwitcherClient/LocoClient.Init()
+    # が dds_init.channel_lock を取らずに DDS 初期化していたため、
+    # G1ArmSdkConnection/G1GripperConnection の起動スレッドと並走すると cyclonedds
+    # の IDL 型登録が競合し、稀に 'NoneType' object has no attribute 'SupportsBasic'
+    # で全体がクラッシュしていた（実機LIVEで再現、g1_speaker.py の同種バグと同根）。
+    # dds_sdk.py 側で channel_lock を取るよう修正済み（dds_init.py の
+    # channel_lock コメント参照）。歩行不要な段階検証では OKRA_WALK=0 で外せる。
     _modules.append(G1HighLevelDdsSdk.blueprint(network_interface=_NIC))
 if _USE_ACT_GRASP:
     # 右手首カメラ: ACT 入力（据え置き UVC/teleimager）。ACT 無効時（OKRA_ACT=0 /

@@ -58,7 +58,9 @@ logger = setup_logger()
 # velocity command. [m/s]
 # G1 LocoClient.Move(continuous_move=True) requires ≥ 0.3 m/s to actually trigger
 # locomotion — 0.15 m/s was below the hardware threshold and the robot stood still.
-_BASE_SPEED = 0.5
+# 0.5 m/s worked with margin; raised to 0.8 m/s per user request (2026-09-08,
+# overridable via HarvestModuleConfig.base_speed / OKRA_BASE_SPEED in the blueprint).
+_BASE_SPEED = 0.8
 _MIN_MOVE_M = 1e-3  # ignore sub-millimetre moves
 
 
@@ -97,6 +99,11 @@ class DimosHarvestSkills:
 
     def detect_okra(self) -> list[Okra]:
         return self._detect_fn()
+
+    def last_detect_dropped(self) -> int:
+        """``make_yolo_detect_okra`` がぶら下げた検出器から破棄件数を読む（無ければ 0）。"""
+        detector = getattr(self._detect_fn, "detector", None)
+        return int(getattr(detector, "last_dropped", 0) or 0)
 
     def grasp_okra(self, okra: Okra, force: float) -> None:
         self._grasp_fn(okra, force)
@@ -189,6 +196,8 @@ def build_live_harvest_skills(
     detect_fn: Callable[[], list[Okra]] | None = None,
     next_station_fn: Callable[[], bool] | None = None,
     yolo_model: str = "yolo11n.pt",
+    yolo_conf: float = 0.5,
+    base_speed: float = _BASE_SPEED,
 ) -> tuple[DimosHarvestSkills, Any]:
     """Assemble a :class:`DimosHarvestSkills` for the LIVE robot (first cut).
 
@@ -225,12 +234,14 @@ def build_live_harvest_skills(
             target_classes=target_classes or {"banana"},
             pixel_to_base=pixel_to_base,
             depth_getter=depth_getter,
+            min_confidence=yolo_conf,
         ).detect
     else:
         detect_fn = make_yolo_detect_okra(
             frame_getter,
             target_classes=target_classes,
             model_name=yolo_model,
+            conf=yolo_conf,
             pixel_to_base=pixel_to_base,
             depth_getter=depth_getter,
         )
@@ -271,7 +282,7 @@ def build_live_harvest_skills(
         verify_fn=verify_fn,
         next_station_fn=next_station_fn or _placeholder_next_station,
         swap_fn=_placeholder_swap,
-        base_speed=1000.0 if move_cmd is None else _BASE_SPEED,
+        base_speed=1000.0 if move_cmd is None else base_speed,
     )
     return skills, grasp
 
@@ -302,15 +313,18 @@ def make_g1_speaker_announcer(
     """
     from unitree_sdk2py.g1.audio.g1_audio_client import AudioClient
 
-    from dimos.robot.unitree.g1.act.dds_init import ensure_channel_factory
+    # channel_lock で直列化する理由は g1_speaker.py の同種修正コメント参照
+    # （cyclonedds の XTypes 型登録がプロセス内でスレッドセーフでないため）。
+    from dimos.robot.unitree.g1.act.dds_init import channel_lock, ensure_channel_factory
 
-    if init_dds:
-        # Idempotent, process-wide DDS init (shared with arm_sdk / Dex1 / loco) so
-        # the speaker can coexist with other DDS modules without a double-init crash.
-        ensure_channel_factory(network_interface)
-    client = AudioClient()
-    client.SetTimeout(10.0)
-    client.Init()
+    with channel_lock:
+        if init_dds:
+            # Idempotent, process-wide DDS init (shared with arm_sdk / Dex1 / loco) so
+            # the speaker can coexist with other DDS modules without a double-init crash.
+            ensure_channel_factory(network_interface)
+        client = AudioClient()
+        client.SetTimeout(10.0)
+        client.Init()
     if volume is not None:
         client.SetVolume(volume)
 
