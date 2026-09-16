@@ -139,6 +139,12 @@ class HarvestModuleConfig(ModuleConfig):
     # (adjust_done) を待つ最大秒数。人間の判断待ちなので長めに取る。
     model_grasp_wait_s: float = 300.0
     model_grasp_note: str = "model"
+    # LIVE + use_model_grasp: YOLOのオクラ検出を経由せず、起動直後（準備姿勢への
+    # 移動完了後）に1回だけ②モデル推論を自動開始する簡易テストモード。YOLOでは
+    # 検出できない対象（例: Fiducial Cube等、okra重み未対応のクラス）でモデル
+    # 単体の動作確認をしたい場合に使う（2026-09-16 追加）。複数個の連続収穫や
+    # 「本当にオクラがあるか」の判定は行わない — 1エピソードのみ実行して終了する。
+    model_grasp_auto_start: bool = False
     # LIVE + use_ik_grasp_sequence: 最初の把持ループ開始前にこの秒数だけ待つ。
     # 0（既定）= 待たない（後方互換）。
     # ⚠️ 2026-09-08 実機LIVEで判明: クリック駆動版(IkReachBridge)は人間が実際にクリック
@@ -344,6 +350,9 @@ class HarvestModule(Module):
         # _ik_solve が計算するたびに更新し、GraspSequence.post_reach_verify_fn
         # から参照する。
         self._last_ik_target_torso: list[float] | None = None
+        # grasp_module（GraspSequence等、start()で確定）。model_grasp_auto_start
+        # がLangGraphを介さず直接1エピソード呼ぶために保持する（2026-09-16追加）。
+        self._grasp_module: Any = None
 
     def _on_wrist(self, image: Image) -> None:
         with self._lock:
@@ -934,6 +943,7 @@ class HarvestModule(Module):
                 yolo_conf=self.config.yolo_conf,
                 base_speed=self.config.base_speed,
             )
+            self._grasp_module = grasp_module
             gripper_live_note = f"gripper_live={self.config.gripper_live}"
             mode = (
                 f"LIVE — {detect_note}; {depth_note}; {verify_note}; {move_note}; "
@@ -1115,6 +1125,9 @@ class HarvestModule(Module):
         )
 
     def _run(self) -> None:
+        if self.config.model_grasp_auto_start:
+            self._run_model_auto_start()
+            return
         try:
             final = self._app.invoke(
                 initial_state(), {"recursion_limit": self.config.recursion_limit}
@@ -1122,6 +1135,24 @@ class HarvestModule(Module):
             logger.info(f"HarvestModule: 収穫フロー完了 — picks={final.get('picks')}")
         except Exception:
             logger.exception("HarvestModule: 収穫フローでエラーが発生しました")
+
+    def _run_model_auto_start(self) -> None:
+        """model_grasp_auto_start: YOLO検出/LangGraphを介さず、起動直後に1回だけ
+        ②モデル推論(grasp_module.run_episode)を実行する簡易テストモード。
+        Fiducial Cube等、okra重みでは検出できない対象向けの最短動作確認用
+        （2026-09-16 追加）。"""
+        logger.warning(
+            "HarvestModule: model_grasp_auto_start=True — YOLO検出をスキップし、"
+            "起動直後に1回だけモデル推論(②)を自動開始します。"
+        )
+        if self._grasp_module is None:
+            logger.error("HarvestModule: grasp_module が未構築のため自動起動できません")
+            return
+        try:
+            ok = self._grasp_module.run_episode(okra=None, force=None)
+            logger.info(f"HarvestModule: モデル自動起動エピソード完了 ok={ok}")
+        except Exception:
+            logger.exception("HarvestModule: モデル自動起動エピソードでエラーが発生しました")
 
     @rpc
     def stop(self) -> None:

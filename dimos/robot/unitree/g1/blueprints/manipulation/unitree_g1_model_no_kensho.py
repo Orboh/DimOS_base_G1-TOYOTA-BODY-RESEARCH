@@ -127,6 +127,13 @@ _USE_BASE_MOVE = _LIVE and _MOVE_LIVE
 _BASE_SPEED = float(os.getenv("OKRA_BASE_SPEED", "0.8"))
 _MOVE_SOURCE = os.getenv("OKRA_MOVE_SOURCE", "real").strip().lower()
 
+# 既定ON: YOLOのオクラ検出を経由せず、準備姿勢への移動完了直後に1回だけ②モデル
+# 推論を自動開始する（Fiducial Cube等、okra重みでは検出できない対象を machine
+# の前に置いて検証する用途、2026-09-16 ユーザー要望）。実際にYOLOでオクラを
+# 検出させたい場合（本来のオクラ収穫用モデルに差し替えた場合等）は
+# OKRA_MODEL_AUTO_START=0 にすること。
+_MODEL_AUTO_START = os.getenv("OKRA_MODEL_AUTO_START", "1").strip() == "1"
+
 _USE_BASKET_DEPOSIT = os.getenv("OKRA_BASKET_DEPOSIT", "1").strip() == "1"
 _BASKET_ENTRY_Q7 = os.getenv("OKRA_BASKET_ENTRY_Q7", "")
 _BASKET_DROP_Q7 = os.getenv("OKRA_BASKET_DROP_Q7", "")
@@ -202,6 +209,7 @@ _MODULES = [
         use_model_grasp=True,
         model_grasp_wait_s=_MODEL_GRASP_WAIT_S,
         model_grasp_note=_MODEL_NAME,
+        model_grasp_auto_start=_MODEL_AUTO_START,
         cut_close_q=_CUT_CLOSE_Q,
         blade_max_q=_BLADE_MAX_Q,
         cut_settle_s=_CUT_SETTLE_S,
@@ -278,6 +286,7 @@ if _USE_BASE_MOVE:
 
 _approach_note = (
     f"camera_source={_CAMERA_SOURCE} yolo_conf={_YOLO_CONF} "
+    f"model_auto_start={_MODEL_AUTO_START} "
     f"model={_MODEL_NAME}@{_MODEL_SERVER_ADDR} ee_frame={_MODEL_EE_FRAME} "
     f"control_hz={_MODEL_CONTROL_HZ} converge={_MODEL_CONVERGE_EPS_M}m "
     f"max_duration={_MODEL_MAX_DURATION_S:.0f}s grasp_wait={_MODEL_GRASP_WAIT_S:.0f}s "
