@@ -219,6 +219,13 @@ class UmiDiffusionBridgeConfig(ModuleConfig):
     # convergence -> handoff (adjust_done)
     converge_pos_eps_m: float = 0.004  # commanded EE position step below which we count "settled"
     converge_hold_ticks: int = 8  # consecutive settled ticks -> fire adjust_done
+    # True: 収束判定による自動終了を無効化し、人間のcut_trigger（Enter）または
+    # max_duration_sのタイムアウトでのみ adjust_done を出す（既定False=従来通り）。
+    # settled/track等のログは引き続き出る（診断用途）ので、無効化しても収束の
+    # 傾向自体は見える（2026-09-16 model_no_kensho用に追加 — ユーザーがEnterを
+    # 押していないのに短時間で自動終了した実機事例を受け、「収束したように見えて
+    # 実際は途中」の懸念に対応）。
+    converge_disabled: bool = False
 
     # IK / arm model
     urdf_path: str = str(DEFAULT_URDF)
@@ -970,7 +977,9 @@ class UmiDiffusionBridge(Module):
                 q_warm = q_sol
 
                 # termination
-                if settled >= self.config.converge_hold_ticks:
+                # converge_disabled=True: 自動終了せず人間のcut_trigger/max_durationの
+                # みで終わらせる（settledのログ自体はそのまま出す — 収束の傾向は見える）。
+                if not self.config.converge_disabled and settled >= self.config.converge_hold_ticks:
                     logger.info(
                         f"UmiDiffusionBridge[{ep}]: converged ({settled} settled ticks, "
                         f"step<{self.config.converge_pos_eps_m * 1000:.0f}mm); firing adjust_done."

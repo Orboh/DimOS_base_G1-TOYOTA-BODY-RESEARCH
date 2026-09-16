@@ -49,10 +49,17 @@ UMI/roboharvestのTCPフレームはGoPro光学系（+z=前）、G1のgripper_ti
 ``ee_frame="camera"``（既定・本ファイルでも維持）がこの変換を担っており、
 外さないこと。
 
-Enterトリガー（人間による手動終了）: モデル推論ループは収束(converge)を
-自動検知した場合に加え、``oda/press_enter_to_cut.py``（別ターミナルで起動、
-Enterを押すとLCM経由で ``/g1/model_cut_trigger`` へ1回publish）でも終了できる。
-人間が「もう十分近い」と判断した瞬間の姿勢のまま③切断可否→④切断へ進む。
+Enterトリガー（人間による手動終了）: ``oda/press_enter_to_cut.py``（別ターミナル
+で起動、Enterを押すとLCM経由で ``/g1/model_cut_trigger`` へ1回publish）で
+モデル推論ループを終了できる。人間が「もう十分近い」と判断した瞬間の姿勢の
+まま③切断可否→④切断へ進む。
+既定（OKRA_MODEL_CONVERGE_DISABLED=1）では収束(converge)による自動終了を
+無効化してあり、Enterを押すか OKRA_MODEL_MAX_DURATION_S（既定300秒）に
+達するまでモデル推論を続ける。2026-09-16 実機LIVEで、Enterを押していない
+のに1秒強で「収束」判定され自動終了した事例があり、「本当に収束していたのか
+途中で止まっただけなのか」を区別できなかったため、既定を手動終了のみに変更
+した。収束の自動判定に戻すには OKRA_MODEL_CONVERGE_DISABLED=0 にする
+（settled/trackのログ自体は無効化時も出るので、収束の傾向は見える）。
 
 前提条件:
   - GoProがUSB(Media Mod経由のHDMIキャプチャ)で接続済み・umi_policy_server.py
@@ -165,7 +172,16 @@ _MODEL_SERVER_ADDR = os.getenv("OKRA_MODEL_SERVER_ADDR", "tcp://127.0.0.1:5599")
 _MODEL_CONTROL_HZ = float(os.getenv("UMI_CONTROL_HZ", "10.0"))
 _MODEL_N_EXEC = int(os.getenv("UMI_N_EXEC_PER_INFER", "2"))
 _MODEL_PREDICT_TIMEOUT_MS = int(os.getenv("UMI_PREDICT_TIMEOUT_MS", "300"))
-_MODEL_MAX_DURATION_S = float(os.getenv("OKRA_MODEL_MAX_DURATION_S", "60.0"))
+# 既定300s(model_grasp_wait_sと同じ長さ): converge_disabled=True（下記、既定ON）
+# では収束による自動終了がないため、max_duration_sが実質「Enterを押すまでの
+# 上限」になる。60sのままだと人間が判断する前に強制終了してしまう
+# （2026-09-16 実機LIVEで発覚 — Enterを押していないのに1秒強で「収束」判定
+# されて自動終了した事例を受け、収束判定自体を既定で無効化した）。
+_MODEL_MAX_DURATION_S = float(os.getenv("OKRA_MODEL_MAX_DURATION_S", "300.0"))
+# 既定ON: 収束(converge)による自動終了を無効化し、人間のcut_trigger(Enter)
+# またはmax_duration_sのタイムアウトでのみ②を終える。settled/trackのログは
+# 引き続き出るので、収束の傾向自体は見える。収束の自動判定に戻すなら0にする。
+_MODEL_CONVERGE_DISABLED = os.getenv("OKRA_MODEL_CONVERGE_DISABLED", "1").strip() == "1"
 # v1 既定: position-only（向きは現状維持）。6-DOFにするなら0にする。
 _MODEL_POSITION_ONLY = os.getenv("UMI_POSITION_ONLY", "1").strip() == "1"
 # ⚠️ "camera" が正しい変換（module docstring参照）。"tip" にすると2026-08-26と
@@ -297,6 +313,7 @@ _MODULES.append(
         tip_to_tcp_xyz=_MODEL_TIP_TO_TCP,
         converge_pos_eps_m=_MODEL_CONVERGE_EPS_M,
         converge_hold_ticks=_MODEL_CONVERGE_HOLD_TICKS,
+        converge_disabled=_MODEL_CONVERGE_DISABLED,
         require_camera_ok=_MODEL_REQUIRE_CAMERA_OK,
         urdf_path=_GRAVITY_URDF,
         log_only=not _LIVE,
@@ -323,6 +340,7 @@ _approach_note = (
     f"model_auto_start={_MODEL_AUTO_START} "
     f"model={_MODEL_NAME}@{_MODEL_SERVER_ADDR} ee_frame={_MODEL_EE_FRAME} "
     f"control_hz={_MODEL_CONTROL_HZ} converge={_MODEL_CONVERGE_EPS_M}m "
+    f"converge_disabled={_MODEL_CONVERGE_DISABLED} "
     f"max_duration={_MODEL_MAX_DURATION_S:.0f}s grasp_wait={_MODEL_GRASP_WAIT_S:.0f}s "
     f"pregrasp_pose_q7={_PREGRASP_POSE_Q7 or '(unset, falls back to torso)'} "
     f"pregrasp_pose_torso={_PREGRASP_POSE_TORSO_XYZ or 'OFF'} "
