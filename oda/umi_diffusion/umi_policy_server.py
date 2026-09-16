@@ -50,7 +50,20 @@ import time
 
 import numpy as np
 
-UMI_ROOT = os.path.expanduser("~/umi/universal_manipulation_interface")
+# UMI_ROOT環境変数で上書き可能（既定は元のオクラ用ckpt向けのUMI公式リポジトリ）。
+# ⚠️ 2026-09-16判明: 既定の universal_manipulation_interface（オリジナル）の
+# umi/real_world/real_inference_util.py には、shape_metaに "*_wrt_start" 等の
+# 派生low_dimキーがある観測空間（例: Kota0612/diffusion-policy-dex1-1-
+# fiducial-cube-20260902）で robot_prefix_map が空になり、robotN_eef_pos /
+# robotN_eef_rot_axis_angle が例外なくobs_dict_npから消えるバグがある
+# （エラーは離れた obs_encoder.forward() の KeyError('robot0_eef_pos') として
+# しか現れず、原因箇所が分かりにくい）。このモデルのREADMEが依存を明記する
+# Dex1-1hand_UMI（https://github.com/Orboh/Dex1-1hand_UMI）には既に修正が
+# 入っているため、Fiducial Cube等の新しいモデルを使うときは
+# UMI_ROOT=~/Desktop/Dex1-1hand_UMI を指定すること。元のオクラ用ckpt
+# （gripper_width以外に非eef low_dimキーが無い観測空間）はこのバグの条件に
+# 当たらないため既定のままで問題ない。
+UMI_ROOT = os.path.expanduser(os.environ.get("UMI_ROOT", "~/umi/universal_manipulation_interface"))
 
 # GoPro HERO9 -> Media Mod micro-HDMI -> Elgato HD60 X.  by-id, NOT /dev/videoN: the numbers get
 # reassigned on replug (ZED-M and the Elgato swapped 4<->6 on 2026-07-29, silently feeding ZED-M
