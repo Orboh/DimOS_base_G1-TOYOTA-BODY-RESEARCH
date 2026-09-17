@@ -1,0 +1,8 @@
+joint,urdf_lower_rad,urdf_upper_rad
+right_shoulder_pitch_joint,-3.0892,2.6704
+right_shoulder_roll_joint,-2.2515,1.5882
+right_shoulder_yaw_joint,-2.618,2.618
+right_elbow_joint,-1.0472,2.0944
+right_wrist_roll_joint,-1.972222,1.972222
+right_wrist_pitch_joint,-1.61443,1.61443
+right_wrist_yaw_joint,-1.61443,1.61443
