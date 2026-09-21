@@ -6,6 +6,9 @@
 
 **畑に立った人型ロボットが、支柱の間から実ったオクラを1本選び、刃を差し込んで切り落とす。**
 そのために必要なものだけを積んだリポジトリです。
+詳しい開発情報はnoteとxをチェック！
+https://note.com/lovely_camel67/n/n5650033a2d57?app_launch=false
+https://x.com/kotaueda999/status/2100484367424307541?s=20
 
 </div>
 
